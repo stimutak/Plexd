@@ -41,17 +41,25 @@
     function checkForStreamUrl(url) {
         try {
             const urlLower = url.toLowerCase();
+            // Check for HLS/DASH streams
             if (urlLower.includes('.m3u8') ||
                 urlLower.includes('.mpd') ||
                 urlLower.includes('/manifest') ||
-                urlLower.includes('playlist.m3u8') ||
                 urlLower.includes('/hls/') ||
-                urlLower.includes('master.m3u8')) {
+                urlLower.includes('/dash/')) {
 
-                // Make sure it's a full URL
                 const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
                 interceptedStreams.add(fullUrl);
                 console.log('[Plexd] Intercepted stream:', fullUrl);
+            }
+            // Check for direct video files
+            else if (urlLower.match(/\.(mp4|webm|m4v|mov|avi|mkv|flv|wmv|ts)(\?|$)/)) {
+                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+                // Skip small files (likely thumbnails) and ads
+                if (!urlLower.includes('thumb') && !urlLower.includes('preview') && !urlLower.includes('/ad')) {
+                    interceptedStreams.add(fullUrl);
+                    console.log('[Plexd] Intercepted video:', fullUrl);
+                }
             }
         } catch (e) {
             // Ignore URL parsing errors

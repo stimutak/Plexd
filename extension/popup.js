@@ -150,18 +150,24 @@
         }
 
         try {
-            // Find existing Plexd tab
+            // Find existing Plexd tab by matching the configured URL
             const tabs = await chrome.tabs.query({});
-            let plexdTab = tabs.find(t => t.url && t.url.includes('plexd'));
+            const plexdOrigin = new URL(plexdUrl).origin;
+            let plexdTab = tabs.find(t => t.url && t.url.startsWith(plexdOrigin));
 
             if (plexdTab) {
-                // Send to existing tab
-                await chrome.tabs.sendMessage(plexdTab.id, {
-                    action: 'addStreams',
-                    streams: selectedList.map(v => ({
-                        url: v.url,
-                        title: v.title
-                    }))
+                // Inject script to add streams without reloading
+                const streams = selectedList.map(v => ({ url: v.url, title: v.title }));
+                await chrome.scripting.executeScript({
+                    target: { tabId: plexdTab.id },
+                    func: (streamsToAdd) => {
+                        streamsToAdd.forEach(stream => {
+                            if (window.PlexdApp && window.PlexdApp.addStream) {
+                                window.PlexdApp.addStream(stream.url);
+                            }
+                        });
+                    },
+                    args: [streams]
                 });
                 await chrome.tabs.update(plexdTab.id, { active: true });
             } else {

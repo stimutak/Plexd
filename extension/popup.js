@@ -243,6 +243,10 @@
             const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join(',');
             const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
 
+            console.log('[Plexd Popup] Sending streams:', selectedList.map(v => v.url));
+            console.log('[Plexd Popup] Encoded:', streamUrls);
+            console.log('[Plexd Popup] Target URL:', targetUrl);
+
             // Find existing Plexd tab or create new one
             const tabs = await chrome.tabs.query({});
             const plexdOrigin = new URL(plexdUrl).origin;

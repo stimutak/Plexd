@@ -87,13 +87,22 @@ const PlexdApp = (function() {
         const params = new URLSearchParams(window.location.search);
         const streamsParam = params.get('streams');
 
+        console.log('[Plexd] URL params:', window.location.search);
+        console.log('[Plexd] streams param:', streamsParam);
+
         if (streamsParam) {
             const urls = streamsParam.split(',').map(s => decodeURIComponent(s.trim()));
+            console.log('[Plexd] Parsed URLs:', urls);
+
+            let addedCount = 0;
             urls.forEach(url => {
+                console.log('[Plexd] Checking URL:', url, 'valid:', isValidUrl(url));
                 if (url && isValidUrl(url)) {
                     addStream(url);
+                    addedCount++;
                 }
             });
+            console.log('[Plexd] Added', addedCount, 'streams');
 
             // Clear URL params after loading (cleaner URL)
             if (urls.length > 0 && window.history.replaceState) {

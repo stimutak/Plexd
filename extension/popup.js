@@ -241,30 +241,11 @@
         }
 
         try {
+            // Send selected streams - Plexd will accumulate them in localStorage
             const newUrls = selectedList.map(v => v.url);
-            console.log('[Plexd Popup] New URLs to add:', newUrls);
+            console.log('[Plexd Popup] Sending:', newUrls);
 
-            // Get existing accumulated streams and add new ones
-            const stored = await chrome.storage.local.get(['plexd_all_streams']);
-            console.log('[Plexd Popup] Stored data:', stored);
-            const existingStreams = stored.plexd_all_streams || [];
-            console.log('[Plexd Popup] Existing streams:', existingStreams.length, existingStreams);
-
-            // Add new streams (avoid duplicates)
-            const allStreams = [...existingStreams];
-            newUrls.forEach(url => {
-                if (!allStreams.includes(url)) {
-                    allStreams.push(url);
-                }
-            });
-            console.log('[Plexd Popup] Combined streams:', allStreams.length, allStreams);
-
-            // Save back to storage
-            await chrome.storage.local.set({ plexd_all_streams: allStreams });
-            console.log('[Plexd Popup] Saved to storage');
-
-            // Build URL with ALL streams
-            const streamUrls = allStreams.map(url => encodeURIComponent(url)).join('|||');
+            const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
             const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
 
             // Find existing Plexd tab or create new one

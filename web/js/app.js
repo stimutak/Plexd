@@ -80,41 +80,63 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Load streams from URL parameters
-     * Supports: ?streams=url1|||url2|||url3
+     * Load streams from URL parameters and localStorage
+     * New streams from URL are ADDED to existing streams in localStorage
      */
     function loadStreamsFromUrl() {
+        // Load existing streams from localStorage first
+        const savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
+        console.log('[Plexd] Saved streams:', savedStreams.length);
+
+        // Load saved streams
+        savedStreams.forEach(url => {
+            if (url && isValidUrl(url)) {
+                addStreamSilent(url);
+            }
+        });
+
+        // Check for new streams in URL params
         const params = new URLSearchParams(window.location.search);
         const streamsParam = params.get('streams');
 
-        console.log('[Plexd] URL search:', window.location.search);
-        console.log('[Plexd] streams param:', streamsParam);
-
         if (streamsParam) {
-            // Split by ||| separator (URLs can contain commas, so we use a unique separator)
             const urls = streamsParam.split('|||').map(s => decodeURIComponent(s.trim()));
-            console.log('[Plexd] Parsed URLs:', urls);
+            console.log('[Plexd] New streams from URL:', urls);
 
             let addedCount = 0;
             urls.forEach(url => {
-                console.log('[Plexd] Checking URL:', url, 'valid:', isValidUrl(url));
-                if (url && isValidUrl(url)) {
+                if (url && isValidUrl(url) && !savedStreams.includes(url)) {
                     addStream(url);
+                    savedStreams.push(url);
                     addedCount++;
                 }
             });
 
+            // Save updated list
+            localStorage.setItem('plexd_streams', JSON.stringify(savedStreams));
+
             if (addedCount > 0) {
-                showMessage(`Loaded ${addedCount} stream(s) from extension`, 'success');
-            } else {
-                showMessage('No valid streams in URL', 'error');
+                showMessage(`Added ${addedCount} new stream(s)`, 'success');
             }
 
-            // Clear URL params after loading (cleaner URL)
+            // Clear URL params
             if (window.history.replaceState) {
                 window.history.replaceState({}, '', window.location.pathname);
             }
         }
+    }
+
+    /**
+     * Add stream without showing message (for loading saved streams)
+     */
+    function addStreamSilent(url) {
+        const stream = PlexdStream.createStream(url, {
+            autoplay: true,
+            muted: true
+        });
+        containerEl.appendChild(stream.wrapper);
+        updateStreamCount();
+        updateLayout();
     }
 
     /**

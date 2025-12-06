@@ -2,11 +2,61 @@
  * Plexd Extension - Content Script
  *
  * Runs on every page to detect video elements and their sources.
+ * Intercepts network requests to find HLS/DASH stream URLs.
  * Responds to requests from the popup to list available videos.
  */
 
 (function() {
     'use strict';
+
+    // Store intercepted stream URLs
+    const interceptedStreams = new Set();
+
+    /**
+     * Intercept fetch to capture .m3u8 and video URLs
+     */
+    const originalFetch = window.fetch;
+    window.fetch = async function(...args) {
+        const url = args[0]?.url || args[0];
+        if (typeof url === 'string') {
+            checkForStreamUrl(url);
+        }
+        return originalFetch.apply(this, args);
+    };
+
+    /**
+     * Intercept XMLHttpRequest to capture stream URLs
+     */
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+        if (typeof url === 'string') {
+            checkForStreamUrl(url);
+        }
+        return originalXHROpen.call(this, method, url, ...rest);
+    };
+
+    /**
+     * Check if URL is a stream and save it
+     */
+    function checkForStreamUrl(url) {
+        try {
+            const urlLower = url.toLowerCase();
+            if (urlLower.includes('.m3u8') ||
+                urlLower.includes('.mpd') ||
+                urlLower.includes('/manifest') ||
+                urlLower.includes('playlist.m3u8') ||
+                urlLower.includes('/hls/') ||
+                urlLower.includes('master.m3u8')) {
+
+                // Make sure it's a full URL
+                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+                interceptedStreams.add(fullUrl);
+                console.log('[Plexd] Intercepted stream:', fullUrl);
+            }
+        } catch (e) {
+            // Ignore URL parsing errors
+        }
+    }
 
     /**
      * Find all video sources on the current page
@@ -15,6 +65,19 @@
     function findVideoSources() {
         const sources = [];
         const seen = new Set();
+
+        // 0. First, add intercepted stream URLs (highest priority - these actually work!)
+        interceptedStreams.forEach(url => {
+            if (!seen.has(url)) {
+                seen.add(url);
+                sources.push({
+                    type: 'stream',
+                    url: url,
+                    title: document.title + ' (HLS Stream)',
+                    intercepted: true
+                });
+            }
+        });
 
         // 1. Find <video> elements with src attribute
         document.querySelectorAll('video[src]').forEach(video => {

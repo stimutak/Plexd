@@ -250,8 +250,27 @@
 
             // Find existing Plexd tab or create new one
             const tabs = await chrome.tabs.query({});
-            const plexdOrigin = new URL(plexdUrl).origin;
-            let plexdTab = tabs.find(t => t.url && t.url.startsWith(plexdOrigin));
+            const plexdUrlObj = new URL(plexdUrl);
+
+            // Try to find Plexd tab - match by port since localhost/127.0.0.1/[::] are equivalent
+            let plexdTab = tabs.find(t => {
+                if (!t.url) return false;
+                try {
+                    const tabUrl = new URL(t.url);
+                    // Match if same port and path starts the same (handles localhost vs 127.0.0.1)
+                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
+                                                   host.startsWith('192.168.') || host.startsWith('10.');
+                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                        return tabUrl.port === plexdUrlObj.port;
+                    }
+                    return t.url.startsWith(plexdUrlObj.origin);
+                } catch {
+                    return false;
+                }
+            });
+
+            console.log('[Plexd Popup] Looking for Plexd at:', plexdUrl);
+            console.log('[Plexd Popup] Found tab:', plexdTab ? plexdTab.url : 'none');
 
             if (plexdTab) {
                 // Plexd is already open - inject streams without reloading

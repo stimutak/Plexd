@@ -175,11 +175,13 @@ body {
 /* Stream Controls Overlay */
 .plexd-controls {
     position: absolute;
-    top: 0;
+    bottom: 0;
+    left: 0;
     right: 0;
     display: flex;
-    gap: 4px;
-    padding: 8px;
+    flex-direction: column;
+    padding: 12px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
     opacity: 0;
     transition: opacity 0.2s;
 }
@@ -219,19 +221,25 @@ body {
 .plexd-seek-container {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
 }
 
 .plexd-seek-bar {
     flex: 1;
-    height: 6px;
+    height: 8px;
     -webkit-appearance: none;
     appearance: none;
     background: rgba(255, 255, 255, 0.3);
-    border-radius: 3px;
+    border-radius: 4px;
     cursor: pointer;
+    outline: none;
+}
+
+.plexd-seek-bar::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 4px;
 }
 
 .plexd-seek-bar::-webkit-slider-thumb {

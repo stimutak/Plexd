@@ -213,6 +213,42 @@
             padding: 24px;
             color: #888;
         }
+
+        .auto-queue-section {
+            padding: 10px 12px;
+            border-top: 1px solid #333;
+            background: #1a1a1a;
+        }
+
+        .toggle-label {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .toggle-label input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            margin-top: 2px;
+            accent-color: #6366f1;
+            cursor: pointer;
+        }
+
+        .toggle-text {
+            font-size: 11px;
+            color: #aaa;
+            line-height: 1.4;
+        }
+
+        .btn-queue {
+            background: #166534;
+            color: #4ade80;
+        }
+
+        .btn-queue:hover {
+            background: #15803d;
+        }
     </style>
 </head>
 <body>
@@ -232,9 +268,16 @@
         <input type="url" id="plexdUrl" placeholder="http://localhost:8080 or file path">
     </div>
 
+    <div class="auto-queue-section">
+        <label class="toggle-label">
+            <input type="checkbox" id="autoQueueToggle">
+            <span class="toggle-text">Auto-Queue: Add detected videos to queue automatically</span>
+        </label>
+    </div>
+
     <div class="actions">
         <button class="btn btn-secondary" id="openPlexdBtn">Open Plexd</button>
-        <button class="btn btn-secondary" id="clearBtn" title="Clear all accumulated streams">Clear</button>
+        <button class="btn btn-queue" id="queueBtn" title="Add to queue instead of playing" disabled>Queue</button>
         <button class="btn btn-primary" id="sendBtn" disabled>Send Selected</button>
     </div>
 

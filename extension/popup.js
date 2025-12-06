@@ -11,13 +11,16 @@
     const contentEl = document.getElementById('content');
     const statusEl = document.getElementById('status');
     const sendBtn = document.getElementById('sendBtn');
+    const queueBtn = document.getElementById('queueBtn');
     const openPlexdBtn = document.getElementById('openPlexdBtn');
     const clearBtn = document.getElementById('clearBtn');
     const plexdUrlInput = document.getElementById('plexdUrl');
+    const autoQueueToggle = document.getElementById('autoQueueToggle');
 
     // State
     let videos = [];
     let selectedVideos = new Set();
+    let autoQueueEnabled = false;
 
     // Default Plexd URL - can be file:// or http://
     const DEFAULT_PLEXD_URL = '';
@@ -27,8 +30,8 @@
      */
     async function init() {
         try {
-            // Load saved Plexd URL
-            const stored = await chrome.storage.local.get(['plexdUrl']);
+            // Load saved settings
+            const stored = await chrome.storage.local.get(['plexdUrl', 'autoQueue']);
             if (plexdUrlInput) {
                 plexdUrlInput.value = stored.plexdUrl || DEFAULT_PLEXD_URL;
 
@@ -38,8 +41,20 @@
                 });
             }
 
+            // Load auto-queue state
+            autoQueueEnabled = stored.autoQueue || false;
+            if (autoQueueToggle) {
+                autoQueueToggle.checked = autoQueueEnabled;
+                autoQueueToggle.addEventListener('change', () => {
+                    autoQueueEnabled = autoQueueToggle.checked;
+                    chrome.storage.local.set({ autoQueue: autoQueueEnabled });
+                    showStatus(autoQueueEnabled ? 'Auto-queue enabled' : 'Auto-queue disabled');
+                });
+            }
+
             // Button handlers
             if (sendBtn) sendBtn.addEventListener('click', sendToPlexd);
+            if (queueBtn) queueBtn.addEventListener('click', queueSelected);
             if (openPlexdBtn) openPlexdBtn.addEventListener('click', openPlexd);
             if (clearBtn) clearBtn.addEventListener('click', clearAllStreams);
 
@@ -222,6 +237,10 @@
         const count = selectedVideos.size;
         sendBtn.disabled = count === 0;
         sendBtn.textContent = count > 0 ? `Send ${count} Video${count > 1 ? 's' : ''}` : 'Send Selected';
+        if (queueBtn) {
+            queueBtn.disabled = count === 0;
+            queueBtn.textContent = count > 0 ? `Queue ${count}` : 'Queue';
+        }
     }
 
     /**
@@ -287,6 +306,70 @@
         } catch (err) {
             console.error('Send error:', err);
             showStatus('Failed to send. Is Plexd open?', true);
+        }
+    }
+
+    /**
+     * Queue selected videos (add to Plexd queue instead of playing)
+     */
+    async function queueSelected() {
+        if (selectedVideos.size === 0) return;
+
+        const selectedList = Array.from(selectedVideos).map(i => videos[i]);
+
+        // Get Plexd URL
+        const plexdUrl = plexdUrlInput.value;
+
+        if (!plexdUrl) {
+            showStatus('Please set Plexd URL first', true);
+            return;
+        }
+
+        try {
+            // Send selected streams to queue
+            const newUrls = selectedList.map(v => v.url);
+            console.log('[Plexd Popup] Queueing:', newUrls);
+
+            const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
+            const targetUrl = `${plexdUrl}?queue=${streamUrls}`;
+
+            // Find existing Plexd tab or create new one
+            const tabs = await chrome.tabs.query({});
+            const plexdUrlObj = new URL(plexdUrl);
+
+            let plexdTab = tabs.find(t => {
+                if (!t.url) return false;
+                try {
+                    const tabUrl = new URL(t.url);
+                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
+                                                   host.startsWith('192.168.') || host.startsWith('10.');
+                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                        return tabUrl.port === plexdUrlObj.port;
+                    }
+                    return t.url.startsWith(plexdUrlObj.origin);
+                } catch {
+                    return false;
+                }
+            });
+
+            if (plexdTab) {
+                await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+            } else {
+                await chrome.tabs.create({ url: targetUrl });
+            }
+
+            showStatus(`Queued ${selectedList.length} video(s)`);
+
+            // Clear selection
+            selectedVideos.clear();
+            document.querySelectorAll('.video-item.selected').forEach(el => {
+                el.classList.remove('selected');
+            });
+            updateSendButton();
+
+        } catch (err) {
+            console.error('Queue error:', err);
+            showStatus('Failed to queue. Is Plexd open?', true);
         }
     }
 

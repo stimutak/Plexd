@@ -108,6 +108,7 @@ const PlexdApp = (function() {
         // Check for new streams in URL params
         const params = new URLSearchParams(window.location.search);
         const streamsParam = params.get('streams');
+        const queueParam = params.get('queue');
 
         if (streamsParam) {
             const urls = streamsParam.split('|||').map(s => decodeURIComponent(s.trim()));
@@ -128,11 +129,36 @@ const PlexdApp = (function() {
             if (addedCount > 0) {
                 showMessage(`Added ${addedCount} new stream(s)`, 'success');
             }
+        }
 
-            // Clear URL params
-            if (window.history.replaceState) {
-                window.history.replaceState({}, '', window.location.pathname);
+        // Handle queue parameter - add to queue instead of playing
+        if (queueParam) {
+            const urls = queueParam.split('|||').map(s => decodeURIComponent(s.trim()));
+            console.log('[Plexd] Queueing from URL:', urls);
+
+            let queuedCount = 0;
+            urls.forEach(url => {
+                if (url && isValidUrl(url) && !streamQueue.includes(url)) {
+                    streamQueue.push(url);
+                    queuedCount++;
+                }
+            });
+
+            if (queuedCount > 0) {
+                saveQueue();
+                updateQueueUI();
+                showMessage(`Queued ${queuedCount} video(s)`, 'success');
+                // Open queue panel to show the newly added items
+                const queuePanel = document.getElementById('queue-panel');
+                if (queuePanel && !queuePanel.classList.contains('plexd-panel-open')) {
+                    queuePanel.classList.add('plexd-panel-open');
+                }
             }
+        }
+
+        // Clear URL params
+        if ((streamsParam || queueParam) && window.history.replaceState) {
+            window.history.replaceState({}, '', window.location.pathname);
         }
     }
 
@@ -489,6 +515,40 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Extract unique domains from stream URLs
+     * Returns domains that might require login (excludes common CDN domains)
+     */
+    function extractLoginDomains(urls) {
+        const cdnPatterns = [
+            /cdn\./i, /static\./i, /assets\./i, /media\./i,
+            /cloudfront\.net/i, /akamaihd\.net/i, /cloudflare/i,
+            /googleapis\.com/i, /gstatic\.com/i, /jsdelivr/i,
+            /unpkg\.com/i, /commondatastorage/i
+        ];
+
+        const domains = new Set();
+        urls.forEach(url => {
+            try {
+                const parsed = new URL(url);
+                const hostname = parsed.hostname;
+                // Skip CDN-like domains
+                const isCDN = cdnPatterns.some(pattern => pattern.test(hostname));
+                if (!isCDN) {
+                    // Get the main domain (e.g., "example.com" from "stream.example.com")
+                    const parts = hostname.split('.');
+                    const mainDomain = parts.length > 2
+                        ? parts.slice(-2).join('.')
+                        : hostname;
+                    domains.add(mainDomain);
+                }
+            } catch (e) {
+                // Invalid URL, skip
+            }
+        });
+        return Array.from(domains);
+    }
+
+    /**
      * Save current stream combination with a name
      */
     function saveStreamCombination() {
@@ -501,13 +561,22 @@ const PlexdApp = (function() {
         const name = prompt('Enter a name for this stream combination:');
         if (!name) return;
 
+        const urls = streams.map(s => s.url);
+        const loginDomains = extractLoginDomains(urls);
+
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         combinations[name] = {
-            urls: streams.map(s => s.url),
+            urls: urls,
+            loginDomains: loginDomains,
             savedAt: Date.now()
         };
         localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
-        showMessage(`Saved combination: ${name}`, 'success');
+
+        if (loginDomains.length > 0) {
+            showMessage(`Saved: ${name} (login domains: ${loginDomains.join(', ')})`, 'success');
+        } else {
+            showMessage(`Saved combination: ${name}`, 'success');
+        }
         updateCombinationsList();
     }
 
@@ -523,6 +592,21 @@ const PlexdApp = (function() {
             return;
         }
 
+        // Check if there are login domains
+        const loginDomains = combo.loginDomains || [];
+        if (loginDomains.length > 0) {
+            showLoginDomainsModal(name, loginDomains, () => {
+                loadCombinationStreams(name, combo);
+            });
+        } else {
+            loadCombinationStreams(name, combo);
+        }
+    }
+
+    /**
+     * Actually load the combination streams
+     */
+    function loadCombinationStreams(name, combo) {
         // Clear current streams
         const currentStreams = PlexdStream.getAllStreams();
         currentStreams.forEach(s => PlexdStream.removeStream(s.id));
@@ -539,6 +623,70 @@ const PlexdApp = (function() {
 
         showMessage(`Loaded: ${name} (${combo.urls.length} streams)`, 'success');
         updateStreamCount();
+    }
+
+    /**
+     * Show modal with login domains before loading combination
+     */
+    function showLoginDomainsModal(name, domains, onContinue) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('login-domains-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'login-domains-modal';
+        modal.className = 'plexd-modal-overlay';
+        modal.innerHTML = `
+            <div class="plexd-modal">
+                <h3>Login Required?</h3>
+                <p>This combination uses streams from the following sites. You may need to be logged in for them to play:</p>
+                <div class="plexd-domain-list">
+                    ${domains.map(domain => `
+                        <div class="plexd-domain-item">
+                            <span>${escapeHtml(domain)}</span>
+                            <button onclick="window.open('https://${escapeAttr(domain)}', '_blank')" class="plexd-button-small">
+                                Open
+                            </button>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="plexd-modal-hint">
+                    Open these sites to login, then click "Load Streams" to continue.
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="modal-cancel" class="plexd-button plexd-button-secondary">Cancel</button>
+                    <button id="modal-continue" class="plexd-button plexd-button-primary">Load Streams</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // Add event listeners
+        document.getElementById('modal-cancel').addEventListener('click', () => {
+            modal.remove();
+        });
+
+        document.getElementById('modal-continue').addEventListener('click', () => {
+            modal.remove();
+            onContinue();
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
     }
 
     /**
@@ -578,10 +726,12 @@ const PlexdApp = (function() {
 
         listEl.innerHTML = names.map(name => {
             const combo = combinations[name];
+            const loginCount = (combo.loginDomains || []).length;
+            const loginHint = loginCount > 0 ? ` · ${loginCount} login site${loginCount > 1 ? 's' : ''}` : '';
             return `
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
-                    <span class="plexd-combo-count">${combo.urls.length} streams</span>
+                    <span class="plexd-combo-count">${combo.urls.length} streams${loginHint}</span>
                     <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
                     <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
                 </div>

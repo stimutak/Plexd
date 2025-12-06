@@ -81,13 +81,13 @@ const PlexdApp = (function() {
 
     /**
      * Load streams from URL parameters
-     * Supports: ?streams=url1,url2,url3
+     * Supports: ?streams=url1|||url2|||url3
      */
     function loadStreamsFromUrl() {
         const params = new URLSearchParams(window.location.search);
         const streamsParam = params.get('streams');
 
-        console.log('[Plexd] URL params:', window.location.search);
+        console.log('[Plexd] URL search:', window.location.search);
         console.log('[Plexd] streams param:', streamsParam);
 
         if (streamsParam) {
@@ -103,10 +103,15 @@ const PlexdApp = (function() {
                     addedCount++;
                 }
             });
-            console.log('[Plexd] Added', addedCount, 'streams');
+
+            if (addedCount > 0) {
+                showMessage(`Loaded ${addedCount} stream(s) from extension`, 'success');
+            } else {
+                showMessage('No valid streams in URL', 'error');
+            }
 
             // Clear URL params after loading (cleaner URL)
-            if (urls.length > 0 && window.history.replaceState) {
+            if (window.history.replaceState) {
                 window.history.replaceState({}, '', window.location.pathname);
             }
         }

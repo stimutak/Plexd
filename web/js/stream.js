@@ -15,6 +15,15 @@ const PlexdStream = (function() {
     // Default aspect ratio until video metadata loads
     const DEFAULT_ASPECT_RATIO = 16 / 9;
 
+    // Currently selected stream for keyboard navigation
+    let selectedStreamId = null;
+
+    // Audio focus mode - when true, unmuting one mutes all others
+    let audioFocusMode = true;
+
+    // Show stream info overlay
+    let showInfoOverlay = false;
+
     /**
      * Create a new stream from a URL
      * @param {string} url - Video stream URL
@@ -41,9 +50,17 @@ const PlexdStream = (function() {
         // Create controls overlay
         const controls = createControlsOverlay(id);
 
+        // Create info overlay
+        const infoOverlay = createInfoOverlay(url);
+
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
+        wrapper.appendChild(infoOverlay);
+
+        // Make draggable
+        wrapper.draggable = true;
+        wrapper.dataset.streamId = id;
 
         // Stream state
         const stream = {
@@ -52,6 +69,7 @@ const PlexdStream = (function() {
             wrapper,
             video,
             controls,
+            infoOverlay,
             hls: null, // HLS.js instance if used
             aspectRatio: DEFAULT_ASPECT_RATIO,
             state: 'loading', // loading, playing, paused, error
@@ -112,18 +130,44 @@ const PlexdStream = (function() {
         const muteBtn = document.createElement('button');
         muteBtn.className = 'plexd-btn plexd-mute-btn';
         muteBtn.innerHTML = '&#128263;'; // Speaker icon
-        muteBtn.title = 'Toggle audio';
-        muteBtn.onclick = () => toggleMute(streamId);
+        muteBtn.title = 'Toggle audio (audio focus: unmute one mutes others)';
+        muteBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleMute(streamId);
+        };
+
+        // PiP button
+        const pipBtn = document.createElement('button');
+        pipBtn.className = 'plexd-btn plexd-pip-btn';
+        pipBtn.innerHTML = '&#x1F5D7;'; // Window icon
+        pipBtn.title = 'Picture-in-Picture';
+        pipBtn.onclick = (e) => {
+            e.stopPropagation();
+            togglePiP(streamId);
+        };
 
         // Fullscreen button (click = browser-fill, double-click = true fullscreen)
         const fullscreenBtn = document.createElement('button');
         fullscreenBtn.className = 'plexd-btn plexd-fullscreen-btn';
         fullscreenBtn.innerHTML = '&#x26F6;'; // Fullscreen icon
         fullscreenBtn.title = 'Click: fill window | Double-click: true fullscreen';
-        fullscreenBtn.onclick = () => toggleFullscreen(streamId);
+        fullscreenBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleFullscreen(streamId);
+        };
         fullscreenBtn.ondblclick = (e) => {
             e.stopPropagation();
             toggleTrueFullscreen(streamId);
+        };
+
+        // Info toggle button
+        const infoBtn = document.createElement('button');
+        infoBtn.className = 'plexd-btn plexd-info-btn';
+        infoBtn.innerHTML = 'ⓘ';
+        infoBtn.title = 'Toggle stream info';
+        infoBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleStreamInfo(streamId);
         };
 
         // Remove button
@@ -131,13 +175,113 @@ const PlexdStream = (function() {
         removeBtn.className = 'plexd-btn plexd-remove-btn';
         removeBtn.innerHTML = '&times;';
         removeBtn.title = 'Remove stream';
-        removeBtn.onclick = () => removeStream(streamId);
+        removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            removeStream(streamId);
+        };
 
         controls.appendChild(muteBtn);
+        controls.appendChild(pipBtn);
         controls.appendChild(fullscreenBtn);
+        controls.appendChild(infoBtn);
         controls.appendChild(removeBtn);
 
         return controls;
+    }
+
+    /**
+     * Create info overlay for a stream
+     */
+    function createInfoOverlay(url) {
+        const overlay = document.createElement('div');
+        overlay.className = 'plexd-info-overlay';
+        overlay.style.display = 'none';
+
+        const urlDisplay = url.length > 60 ? url.substring(0, 57) + '...' : url;
+        overlay.innerHTML = `
+            <div class="plexd-info-url">${escapeHtml(urlDisplay)}</div>
+            <div class="plexd-info-stats">
+                <span class="plexd-info-resolution">Loading...</span>
+                <span class="plexd-info-state">⏳</span>
+            </div>
+        `;
+        return overlay;
+    }
+
+    /**
+     * Escape HTML for safe display
+     */
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    /**
+     * Toggle PiP for a stream
+     */
+    async function togglePiP(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        try {
+            if (document.pictureInPictureElement === stream.video) {
+                await document.exitPictureInPicture();
+            } else if (document.pictureInPictureEnabled) {
+                await stream.video.requestPictureInPicture();
+            }
+        } catch (err) {
+            console.log('PiP error:', err);
+        }
+    }
+
+    /**
+     * Toggle stream info overlay for a single stream
+     */
+    function toggleStreamInfo(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream || !stream.infoOverlay) return;
+
+        const isVisible = stream.infoOverlay.style.display !== 'none';
+        stream.infoOverlay.style.display = isVisible ? 'none' : 'flex';
+    }
+
+    /**
+     * Toggle all stream info overlays
+     */
+    function toggleAllStreamInfo() {
+        showInfoOverlay = !showInfoOverlay;
+        streams.forEach(stream => {
+            if (stream.infoOverlay) {
+                stream.infoOverlay.style.display = showInfoOverlay ? 'flex' : 'none';
+            }
+        });
+        return showInfoOverlay;
+    }
+
+    /**
+     * Update stream info overlay with current stats
+     */
+    function updateStreamInfo(stream) {
+        if (!stream.infoOverlay) return;
+
+        const resEl = stream.infoOverlay.querySelector('.plexd-info-resolution');
+        const stateEl = stream.infoOverlay.querySelector('.plexd-info-state');
+
+        if (resEl && stream.video.videoWidth) {
+            resEl.textContent = `${stream.video.videoWidth}×${stream.video.videoHeight}`;
+        }
+
+        if (stateEl) {
+            const stateIcons = {
+                loading: '⏳',
+                buffering: '⏳',
+                playing: '▶️',
+                paused: '⏸️',
+                error: '❌'
+            };
+            stateEl.textContent = stateIcons[stream.state] || '❓';
+        }
     }
 
     // Track which stream is fullscreen
@@ -214,9 +358,44 @@ const PlexdStream = (function() {
     function setupVideoEvents(stream) {
         const { video, wrapper } = stream;
 
+        // Click to select stream
+        wrapper.addEventListener('click', () => {
+            selectStream(stream.id);
+        });
+
         // Double-click to toggle fullscreen
         wrapper.addEventListener('dblclick', () => {
             toggleFullscreen(stream.id);
+        });
+
+        // Drag and drop handlers
+        wrapper.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', stream.id);
+            e.dataTransfer.effectAllowed = 'move';
+            wrapper.classList.add('plexd-dragging');
+        });
+
+        wrapper.addEventListener('dragend', () => {
+            wrapper.classList.remove('plexd-dragging');
+        });
+
+        wrapper.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            wrapper.classList.add('plexd-drag-over');
+        });
+
+        wrapper.addEventListener('dragleave', () => {
+            wrapper.classList.remove('plexd-drag-over');
+        });
+
+        wrapper.addEventListener('drop', (e) => {
+            e.preventDefault();
+            wrapper.classList.remove('plexd-drag-over');
+            const draggedId = e.dataTransfer.getData('text/plain');
+            if (draggedId && draggedId !== stream.id) {
+                reorderStreams(draggedId, stream.id);
+            }
         });
 
         // Get aspect ratio when metadata loads
@@ -225,16 +404,19 @@ const PlexdStream = (function() {
                 stream.aspectRatio = video.videoWidth / video.videoHeight;
             }
             stream.state = 'playing';
+            updateStreamInfo(stream);
             triggerLayoutUpdate();
         });
 
         // Handle play/pause
         video.addEventListener('play', () => {
             stream.state = 'playing';
+            updateStreamInfo(stream);
         });
 
         video.addEventListener('pause', () => {
             stream.state = 'paused';
+            updateStreamInfo(stream);
         });
 
         // Handle errors
@@ -242,6 +424,7 @@ const PlexdStream = (function() {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
             console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
+            updateStreamInfo(stream);
 
             // Show error visually
             const errorOverlay = document.createElement('div');
@@ -253,11 +436,37 @@ const PlexdStream = (function() {
         // Handle stalled/waiting
         video.addEventListener('waiting', () => {
             stream.state = 'buffering';
+            updateStreamInfo(stream);
         });
 
         video.addEventListener('playing', () => {
             stream.state = 'playing';
+            updateStreamInfo(stream);
         });
+    }
+
+    /**
+     * Reorder streams by moving one before another
+     */
+    function reorderStreams(draggedId, targetId) {
+        const streamArray = Array.from(streams.entries());
+        const draggedIndex = streamArray.findIndex(([id]) => id === draggedId);
+        const targetIndex = streamArray.findIndex(([id]) => id === targetId);
+
+        if (draggedIndex === -1 || targetIndex === -1) return;
+
+        // Remove dragged item
+        const [draggedEntry] = streamArray.splice(draggedIndex, 1);
+
+        // Insert at target position
+        streamArray.splice(targetIndex, 0, draggedEntry);
+
+        // Rebuild the map in new order
+        streams.clear();
+        streamArray.forEach(([id, stream]) => streams.set(id, stream));
+
+        // Trigger layout update
+        triggerLayoutUpdate();
     }
 
     /**
@@ -311,19 +520,111 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Toggle mute for a stream
+     * Toggle mute for a stream (with audio focus support)
      */
     function toggleMute(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
-        stream.video.muted = !stream.video.muted;
+        const willUnmute = stream.video.muted;
 
-        // Update button icon
+        // Audio focus mode: unmuting one stream mutes all others
+        if (willUnmute && audioFocusMode) {
+            streams.forEach((s, id) => {
+                if (id !== streamId && !s.video.muted) {
+                    s.video.muted = true;
+                    updateMuteButton(s);
+                }
+            });
+        }
+
+        stream.video.muted = !willUnmute;
+        updateMuteButton(stream);
+    }
+
+    /**
+     * Update mute button icon
+     */
+    function updateMuteButton(stream) {
         const muteBtn = stream.controls.querySelector('.plexd-mute-btn');
         if (muteBtn) {
             muteBtn.innerHTML = stream.video.muted ? '&#128263;' : '&#128266;';
         }
+    }
+
+    /**
+     * Toggle audio focus mode
+     */
+    function toggleAudioFocus() {
+        audioFocusMode = !audioFocusMode;
+        return audioFocusMode;
+    }
+
+    /**
+     * Get audio focus mode state
+     */
+    function getAudioFocusMode() {
+        return audioFocusMode;
+    }
+
+    /**
+     * Select a stream for keyboard navigation
+     */
+    function selectStream(streamId) {
+        // Deselect previous
+        if (selectedStreamId) {
+            const prevStream = streams.get(selectedStreamId);
+            if (prevStream) {
+                prevStream.wrapper.classList.remove('plexd-selected');
+            }
+        }
+
+        // Select new
+        selectedStreamId = streamId;
+        if (streamId) {
+            const stream = streams.get(streamId);
+            if (stream) {
+                stream.wrapper.classList.add('plexd-selected');
+            }
+        }
+    }
+
+    /**
+     * Get selected stream
+     */
+    function getSelectedStream() {
+        return selectedStreamId ? streams.get(selectedStreamId) : null;
+    }
+
+    /**
+     * Select next stream in grid order
+     */
+    function selectNextStream(direction = 'right') {
+        const streamList = Array.from(streams.keys());
+        if (streamList.length === 0) return;
+
+        if (!selectedStreamId) {
+            selectStream(streamList[0]);
+            return;
+        }
+
+        const currentIndex = streamList.indexOf(selectedStreamId);
+        let newIndex;
+
+        switch (direction) {
+            case 'right':
+            case 'down':
+                newIndex = (currentIndex + 1) % streamList.length;
+                break;
+            case 'left':
+            case 'up':
+                newIndex = (currentIndex - 1 + streamList.length) % streamList.length;
+                break;
+            default:
+                return;
+        }
+
+        selectStream(streamList[newIndex]);
     }
 
     /**
@@ -420,7 +721,16 @@ const PlexdStream = (function() {
         playAll,
         muteAll,
         getVideoElements,
-        setLayoutUpdateCallback
+        setLayoutUpdateCallback,
+        // New features
+        togglePiP,
+        toggleAudioFocus,
+        getAudioFocusMode,
+        toggleAllStreamInfo,
+        selectStream,
+        getSelectedStream,
+        selectNextStream,
+        reorderStreams
     };
 })();
 

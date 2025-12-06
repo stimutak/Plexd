@@ -154,6 +154,12 @@ const PlexdApp = (function() {
             clearAllBtn.addEventListener('click', clearAllStreams);
         }
 
+        // Save combination button
+        const saveComboBtn = document.getElementById('save-combo-btn');
+        if (saveComboBtn) {
+            saveComboBtn.addEventListener('click', saveStreamCombination);
+        }
+
         // Enter key in input
         if (inputEl) {
             inputEl.addEventListener('keypress', (e) => {
@@ -166,16 +172,10 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // ESC to exit fullscreen, F for true fullscreen
+        // F key for true fullscreen on fullscreen stream
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
 
-            if (e.key === 'Escape') {
-                const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
-                if (fullscreenStream) {
-                    PlexdStream.toggleFullscreen(fullscreenStream.id);
-                }
-            }
             if (e.key === 'f' || e.key === 'F') {
                 const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
                 if (fullscreenStream) {
@@ -318,17 +318,91 @@ const PlexdApp = (function() {
         // Ignore if typing in input
         if (e.target.tagName === 'INPUT') return;
 
+        const selected = PlexdStream.getSelectedStream();
+
         switch (e.key) {
             case ' ':
                 e.preventDefault();
-                togglePlayPause();
+                if (selected) {
+                    // Toggle selected stream
+                    if (selected.video.paused) {
+                        selected.video.play().catch(() => {});
+                    } else {
+                        selected.video.pause();
+                    }
+                } else {
+                    togglePlayPause();
+                }
                 break;
             case 'm':
             case 'M':
-                PlexdStream.muteAll();
-                showMessage('All streams muted', 'info');
+                if (selected) {
+                    PlexdStream.toggleMute(selected.id);
+                } else {
+                    PlexdStream.muteAll();
+                    showMessage('All streams muted', 'info');
+                }
+                break;
+            case 'a':
+            case 'A':
+                const audioFocus = PlexdStream.toggleAudioFocus();
+                showMessage(`Audio focus: ${audioFocus ? 'ON' : 'OFF'}`, 'info');
+                break;
+            case 'i':
+            case 'I':
+                const showInfo = PlexdStream.toggleAllStreamInfo();
+                showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
+                break;
+            case 'p':
+            case 'P':
+                if (selected) {
+                    PlexdStream.togglePiP(selected.id);
+                }
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                PlexdStream.selectNextStream('right');
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                PlexdStream.selectNextStream('left');
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                PlexdStream.selectNextStream('up');
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                PlexdStream.selectNextStream('down');
+                break;
+            case 'Enter':
+                if (selected) {
+                    PlexdStream.toggleFullscreen(selected.id);
+                }
+                break;
+            case 'Delete':
+            case 'Backspace':
+                if (selected) {
+                    PlexdStream.removeStream(selected.id);
+                    updateStreamCount();
+                    saveCurrentStreams();
+                }
+                break;
+            case 's':
+            case 'S':
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    saveStreamCombination();
+                }
                 break;
             case 'Escape':
+                // Exit fullscreen or deselect
+                const fullscreenStream = PlexdStream.getFullscreenStream();
+                if (fullscreenStream) {
+                    PlexdStream.toggleFullscreen(fullscreenStream.id);
+                } else {
+                    PlexdStream.selectStream(null);
+                }
                 if (inputEl) inputEl.blur();
                 break;
         }
@@ -395,6 +469,132 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Save current streams to localStorage
+     */
+    function saveCurrentStreams() {
+        const streams = PlexdStream.getAllStreams();
+        const urls = streams.map(s => s.url);
+        localStorage.setItem('plexd_streams', JSON.stringify(urls));
+    }
+
+    /**
+     * Save current stream combination with a name
+     */
+    function saveStreamCombination() {
+        const streams = PlexdStream.getAllStreams();
+        if (streams.length === 0) {
+            showMessage('No streams to save', 'error');
+            return;
+        }
+
+        const name = prompt('Enter a name for this stream combination:');
+        if (!name) return;
+
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        combinations[name] = {
+            urls: streams.map(s => s.url),
+            savedAt: Date.now()
+        };
+        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+        showMessage(`Saved combination: ${name}`, 'success');
+        updateCombinationsList();
+    }
+
+    /**
+     * Load a saved stream combination
+     */
+    function loadStreamCombination(name) {
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        const combo = combinations[name];
+
+        if (!combo) {
+            showMessage(`Combination "${name}" not found`, 'error');
+            return;
+        }
+
+        // Clear current streams
+        const currentStreams = PlexdStream.getAllStreams();
+        currentStreams.forEach(s => PlexdStream.removeStream(s.id));
+
+        // Load saved streams
+        combo.urls.forEach(url => {
+            if (url && isValidUrl(url)) {
+                addStreamSilent(url);
+            }
+        });
+
+        // Save to current streams
+        localStorage.setItem('plexd_streams', JSON.stringify(combo.urls));
+
+        showMessage(`Loaded: ${name} (${combo.urls.length} streams)`, 'success');
+        updateStreamCount();
+    }
+
+    /**
+     * Delete a saved combination
+     */
+    function deleteStreamCombination(name) {
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        if (combinations[name]) {
+            delete combinations[name];
+            localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+            showMessage(`Deleted: ${name}`, 'info');
+            updateCombinationsList();
+        }
+    }
+
+    /**
+     * Get all saved combinations
+     */
+    function getSavedCombinations() {
+        return JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+    }
+
+    /**
+     * Update combinations list in UI (if present)
+     */
+    function updateCombinationsList() {
+        const listEl = document.getElementById('combinations-list');
+        if (!listEl) return;
+
+        const combinations = getSavedCombinations();
+        const names = Object.keys(combinations);
+
+        if (names.length === 0) {
+            listEl.innerHTML = '<div class="plexd-combo-empty">No saved combinations</div>';
+            return;
+        }
+
+        listEl.innerHTML = names.map(name => {
+            const combo = combinations[name];
+            return `
+                <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
+                    <span class="plexd-combo-name">${escapeHtml(name)}</span>
+                    <span class="plexd-combo-count">${combo.urls.length} streams</span>
+                    <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
+                    <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
+                </div>
+            `;
+        }).join('');
+    }
+
+    /**
+     * Escape HTML for safe display
+     */
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    /**
+     * Escape for attribute
+     */
+    function escapeAttr(text) {
+        return text.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    /**
      * Debounce helper
      */
     function debounce(func, wait) {
@@ -410,7 +610,12 @@ const PlexdApp = (function() {
         init,
         addStream,
         updateLayout,
-        showMessage
+        showMessage,
+        saveCurrentStreams,
+        saveCombination: saveStreamCombination,
+        loadCombination: loadStreamCombination,
+        deleteCombination: deleteStreamCombination,
+        getSavedCombinations
     };
 })();
 

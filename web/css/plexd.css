@@ -390,3 +390,157 @@ body {
     height: 40px;
     font-size: 18px;
 }
+
+/* ========================================
+   Stream Selection
+   ======================================== */
+
+.plexd-stream.plexd-selected {
+    outline: 3px solid #6366f1;
+    outline-offset: -3px;
+    z-index: 10;
+}
+
+.plexd-stream.plexd-selected::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(99, 102, 241, 0.1);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* ========================================
+   Drag and Drop
+   ======================================== */
+
+.plexd-stream.plexd-dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+}
+
+.plexd-stream.plexd-drag-over {
+    outline: 3px dashed #4ade80;
+    outline-offset: -3px;
+}
+
+/* ========================================
+   Stream Info Overlay
+   ======================================== */
+
+.plexd-info-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 12px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+    color: #fff;
+    font-size: 12px;
+    z-index: 5;
+}
+
+.plexd-info-url {
+    font-family: monospace;
+    font-size: 10px;
+    color: #aaa;
+    word-break: break-all;
+}
+
+.plexd-info-stats {
+    display: flex;
+    gap: 12px;
+}
+
+.plexd-info-resolution {
+    font-weight: 600;
+    color: #4ade80;
+}
+
+.plexd-info-state {
+    font-size: 14px;
+}
+
+/* ========================================
+   Stream Combinations
+   ======================================== */
+
+.plexd-combo-section {
+    padding: 8px;
+    background: #1a1a1a;
+    border-top: 1px solid #333;
+}
+
+.plexd-combo-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.plexd-combo-title {
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.plexd-combo-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: #252525;
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+
+.plexd-combo-name {
+    flex: 1;
+    font-size: 13px;
+    color: #fff;
+}
+
+.plexd-combo-count {
+    font-size: 11px;
+    color: #666;
+}
+
+.plexd-combo-load,
+.plexd-combo-delete {
+    padding: 4px 8px;
+    font-size: 11px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.plexd-combo-load {
+    background: #6366f1;
+    color: #fff;
+}
+
+.plexd-combo-load:hover {
+    background: #5558e3;
+}
+
+.plexd-combo-delete {
+    background: transparent;
+    color: #666;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.plexd-combo-delete:hover {
+    color: #ef4444;
+}
+
+.plexd-combo-empty {
+    font-size: 12px;
+    color: #666;
+    text-align: center;
+    padding: 8px;
+}

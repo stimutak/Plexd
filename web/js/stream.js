@@ -1048,7 +1048,9 @@ const PlexdStream = (function() {
         getSelectedStream,
         selectNextStream,
         setGridCols,
-        reorderStreams
+        reorderStreams,
+        seekRelative,
+        seekTo
     };
 })();
 

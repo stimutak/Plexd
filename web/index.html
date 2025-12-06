@@ -45,6 +45,9 @@
                 <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save stream combination (Ctrl+S)">
                     Save
                 </button>
+                <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Load saved combinations">
+                    Load
+                </button>
                 <button onclick="PlexdStream.popoutAllStreams()" class="plexd-button plexd-button-secondary" title="Pop out all streams to separate windows">
                     Pop Out All
                 </button>
@@ -82,6 +85,19 @@
             </div>
         </aside>
 
+        <!-- Saved Combinations Panel -->
+        <aside id="saved-panel" class="plexd-panel">
+            <div class="plexd-panel-header">
+                <h3>Saved Sets</h3>
+                <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
+                </div>
+            </div>
+            <div id="combinations-list" class="plexd-panel-content">
+                <div class="plexd-panel-empty">No saved combinations</div>
+            </div>
+        </aside>
+
         <!-- Video Grid Container -->
         <main id="plexd-container">
             <!-- Streams are added here dynamically -->
@@ -89,8 +105,8 @@
 
         <!-- Keyboard Shortcuts Hint -->
         <div class="plexd-shortcuts">
-            <kbd>Arrows</kbd> Select &nbsp;
-            <kbd>Enter</kbd> Fullscreen &nbsp;
+            <kbd>Arrows</kbd> Select / Seek (fullscreen) &nbsp;
+            <kbd>Z</kbd>/<kbd>Enter</kbd> Fullscreen &nbsp;
             <kbd>Space</kbd> Play/Pause &nbsp;
             <kbd>M</kbd> Mute &nbsp;
             <kbd>P</kbd> PiP &nbsp;

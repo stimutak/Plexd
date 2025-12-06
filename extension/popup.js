@@ -12,6 +12,7 @@
     const statusEl = document.getElementById('status');
     const sendBtn = document.getElementById('sendBtn');
     const openPlexdBtn = document.getElementById('openPlexdBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const plexdUrlInput = document.getElementById('plexdUrl');
 
     // State
@@ -40,6 +41,7 @@
             // Button handlers
             if (sendBtn) sendBtn.addEventListener('click', sendToPlexd);
             if (openPlexdBtn) openPlexdBtn.addEventListener('click', openPlexd);
+            if (clearBtn) clearBtn.addEventListener('click', clearAllStreams);
 
             // Scan current tab for videos
             await scanForVideos();
@@ -239,25 +241,37 @@
         }
 
         try {
-            // Always use URL params - most reliable method
-            // Use ||| as separator since URLs can contain commas
-            const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join('|||');
-            const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
+            const newUrls = selectedList.map(v => v.url);
+            console.log('[Plexd Popup] Sending streams:', newUrls);
 
-            console.log('[Plexd Popup] Sending streams:', selectedList.map(v => v.url));
-            console.log('[Plexd Popup] Encoded:', streamUrls);
-            console.log('[Plexd Popup] Target URL:', targetUrl);
+            // Get existing accumulated streams and add new ones
+            const stored = await chrome.storage.local.get(['plexd_all_streams']);
+            const existingStreams = stored.plexd_all_streams || [];
+
+            // Add new streams (avoid duplicates)
+            const allStreams = [...existingStreams];
+            newUrls.forEach(url => {
+                if (!allStreams.includes(url)) {
+                    allStreams.push(url);
+                }
+            });
+
+            // Save back to storage
+            await chrome.storage.local.set({ plexd_all_streams: allStreams });
+            console.log('[Plexd Popup] Total streams now:', allStreams.length);
+
+            // Build URL with ALL streams
+            const streamUrls = allStreams.map(url => encodeURIComponent(url)).join('|||');
+            const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
 
             // Find existing Plexd tab or create new one
             const tabs = await chrome.tabs.query({});
             const plexdUrlObj = new URL(plexdUrl);
 
-            // Try to find Plexd tab - match by port since localhost/127.0.0.1/[::] are equivalent
             let plexdTab = tabs.find(t => {
                 if (!t.url) return false;
                 try {
                     const tabUrl = new URL(t.url);
-                    // Match if same port and path starts the same (handles localhost vs 127.0.0.1)
                     const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
                                                    host.startsWith('192.168.') || host.startsWith('10.');
                     if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
@@ -269,15 +283,11 @@
                 }
             });
 
-            console.log('[Plexd Popup] Looking for Plexd at:', plexdUrl);
             console.log('[Plexd Popup] Found tab:', plexdTab ? plexdTab.url : 'none');
 
-            // Always use URL params - simpler and more reliable
             if (plexdTab) {
-                console.log('[Plexd Popup] Updating existing tab with URL:', targetUrl);
                 await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
             } else {
-                console.log('[Plexd Popup] Creating new tab with URL:', targetUrl);
                 await chrome.tabs.create({ url: targetUrl });
             }
 
@@ -308,6 +318,14 @@
         }
 
         await chrome.tabs.create({ url: plexdUrl });
+    }
+
+    /**
+     * Clear all accumulated streams
+     */
+    async function clearAllStreams() {
+        await chrome.storage.local.remove(['plexd_all_streams']);
+        showStatus('Cleared all streams');
     }
 
     /**

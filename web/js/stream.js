@@ -61,9 +61,10 @@ const PlexdStream = (function() {
         wrapper.appendChild(controls);
         wrapper.appendChild(infoOverlay);
 
-        // Make draggable
+        // Make draggable and focusable (for keyboard in fullscreen)
         wrapper.draggable = true;
         wrapper.dataset.streamId = id;
+        wrapper.tabIndex = 0; // Makes it focusable
 
         // Stream state
         const stream = {
@@ -549,7 +550,10 @@ const PlexdStream = (function() {
                 toggleFullscreen(streamId);
             }
             // Then request true fullscreen
-            stream.wrapper.requestFullscreen().catch(err => {
+            stream.wrapper.requestFullscreen().then(() => {
+                // Focus the wrapper so it receives keyboard events
+                stream.wrapper.focus();
+            }).catch(err => {
                 console.log('Fullscreen request failed:', err);
             });
         }
@@ -559,14 +563,25 @@ const PlexdStream = (function() {
      * Check if any stream is fullscreen
      */
     function isAnyFullscreen() {
-        return fullscreenStreamId !== null;
+        return fullscreenStreamId !== null || document.fullscreenElement !== null;
     }
 
     /**
-     * Get fullscreen stream if any
+     * Get fullscreen stream if any (checks both CSS fullscreen and true fullscreen)
      */
     function getFullscreenStream() {
-        return fullscreenStreamId ? streams.get(fullscreenStreamId) : null;
+        // First check our tracked fullscreen
+        if (fullscreenStreamId) {
+            return streams.get(fullscreenStreamId);
+        }
+        // Also check true browser fullscreen element
+        if (document.fullscreenElement) {
+            const streamId = document.fullscreenElement.dataset?.streamId || document.fullscreenElement.id;
+            if (streamId && streams.has(streamId)) {
+                return streams.get(streamId);
+            }
+        }
+        return null;
     }
 
     /**
@@ -609,6 +624,57 @@ const PlexdStream = (function() {
         // Double-click to toggle fullscreen
         wrapper.addEventListener('dblclick', () => {
             toggleFullscreen(stream.id);
+        });
+
+        // Keyboard handling on wrapper (for fullscreen mode)
+        wrapper.addEventListener('keydown', (e) => {
+            // Only handle when this element or fullscreen is active
+            if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
+                return;
+            }
+
+            switch (e.key) {
+                case 'ArrowRight':
+                    e.preventDefault();
+                    seekRelative(stream.id, 10);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    seekRelative(stream.id, -10);
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    seekRelative(stream.id, 60);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    seekRelative(stream.id, -60);
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    if (video.paused) {
+                        video.play().catch(() => {});
+                    } else {
+                        video.pause();
+                    }
+                    break;
+                case 'z':
+                case 'Z':
+                case 'Escape':
+                    e.preventDefault();
+                    toggleFullscreen(stream.id);
+                    break;
+                case 'f':
+                case 'F':
+                    e.preventDefault();
+                    toggleTrueFullscreen(stream.id);
+                    break;
+                case 'm':
+                case 'M':
+                    e.preventDefault();
+                    toggleMute(stream.id);
+                    break;
+            }
         });
 
         // Drag and drop handlers

@@ -86,11 +86,20 @@ const PlexdStream = (function() {
         if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
             const hls = new Hls({
                 enableWorker: true,
-                lowLatencyMode: true
+                lowLatencyMode: true,
+                // Auto quality selection with preference for higher quality
+                autoStartLoad: true,
+                startLevel: -1, // Auto select
+                capLevelToPlayerSize: false // Don't cap to player size - use max quality
             });
             hls.loadSource(url);
             hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                // Select highest quality level
+                if (data.levels && data.levels.length > 0) {
+                    const maxLevel = data.levels.length - 1;
+                    hls.currentLevel = maxLevel;
+                }
                 video.play().catch(() => {});
             });
             hls.on(Hls.Events.ERROR, (event, data) => {
@@ -129,6 +138,39 @@ const PlexdStream = (function() {
         const controls = document.createElement('div');
         controls.className = 'plexd-controls';
 
+        // Seek bar container
+        const seekContainer = document.createElement('div');
+        seekContainer.className = 'plexd-seek-container';
+
+        const seekBar = document.createElement('input');
+        seekBar.type = 'range';
+        seekBar.className = 'plexd-seek-bar';
+        seekBar.min = '0';
+        seekBar.max = '100';
+        seekBar.value = '0';
+        seekBar.title = 'Seek';
+
+        const timeDisplay = document.createElement('span');
+        timeDisplay.className = 'plexd-time-display';
+        timeDisplay.textContent = '0:00 / 0:00';
+
+        seekContainer.appendChild(seekBar);
+        seekContainer.appendChild(timeDisplay);
+
+        // Button row
+        const buttonRow = document.createElement('div');
+        buttonRow.className = 'plexd-btn-row';
+
+        // Skip backward button
+        const skipBackBtn = document.createElement('button');
+        skipBackBtn.className = 'plexd-btn plexd-skip-btn';
+        skipBackBtn.innerHTML = '⏪';
+        skipBackBtn.title = 'Skip back 10s';
+        skipBackBtn.onclick = (e) => {
+            e.stopPropagation();
+            seekRelative(streamId, -10);
+        };
+
         // Mute/unmute button
         const muteBtn = document.createElement('button');
         muteBtn.className = 'plexd-btn plexd-mute-btn';
@@ -137,6 +179,16 @@ const PlexdStream = (function() {
         muteBtn.onclick = (e) => {
             e.stopPropagation();
             toggleMute(streamId);
+        };
+
+        // Skip forward button
+        const skipFwdBtn = document.createElement('button');
+        skipFwdBtn.className = 'plexd-btn plexd-skip-btn';
+        skipFwdBtn.innerHTML = '⏩';
+        skipFwdBtn.title = 'Skip forward 10s';
+        skipFwdBtn.onclick = (e) => {
+            e.stopPropagation();
+            seekRelative(streamId, 10);
         };
 
         // PiP button
@@ -183,13 +235,60 @@ const PlexdStream = (function() {
             removeStream(streamId);
         };
 
-        controls.appendChild(muteBtn);
-        controls.appendChild(pipBtn);
-        controls.appendChild(fullscreenBtn);
-        controls.appendChild(infoBtn);
-        controls.appendChild(removeBtn);
+        buttonRow.appendChild(skipBackBtn);
+        buttonRow.appendChild(muteBtn);
+        buttonRow.appendChild(skipFwdBtn);
+        buttonRow.appendChild(pipBtn);
+        buttonRow.appendChild(fullscreenBtn);
+        buttonRow.appendChild(infoBtn);
+        buttonRow.appendChild(removeBtn);
+
+        controls.appendChild(seekContainer);
+        controls.appendChild(buttonRow);
 
         return controls;
+    }
+
+    /**
+     * Seek relative to current position
+     */
+    function seekRelative(streamId, seconds) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const video = stream.video;
+        if (video.duration && isFinite(video.duration)) {
+            video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds));
+        }
+    }
+
+    /**
+     * Seek to absolute position (0-1)
+     */
+    function seekTo(streamId, position) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const video = stream.video;
+        if (video.duration && isFinite(video.duration)) {
+            video.currentTime = video.duration * position;
+        }
+    }
+
+    /**
+     * Format time in seconds to M:SS or H:MM:SS
+     */
+    function formatTime(seconds) {
+        if (!isFinite(seconds) || seconds < 0) return '0:00';
+
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+
+        if (h > 0) {
+            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+        return `${m}:${s.toString().padStart(2, '0')}`;
     }
 
     /**
@@ -359,7 +458,33 @@ const PlexdStream = (function() {
      * Set up video element event listeners
      */
     function setupVideoEvents(stream) {
-        const { video, wrapper } = stream;
+        const { video, wrapper, controls } = stream;
+
+        // Seek bar and time display
+        const seekBar = controls.querySelector('.plexd-seek-bar');
+        const timeDisplay = controls.querySelector('.plexd-time-display');
+
+        if (seekBar) {
+            seekBar.addEventListener('input', (e) => {
+                e.stopPropagation();
+                const position = parseFloat(e.target.value) / 100;
+                seekTo(stream.id, position);
+            });
+
+            seekBar.addEventListener('click', (e) => e.stopPropagation());
+            seekBar.addEventListener('mousedown', (e) => e.stopPropagation());
+        }
+
+        // Update seek bar and time display during playback
+        video.addEventListener('timeupdate', () => {
+            if (seekBar && video.duration && isFinite(video.duration)) {
+                const progress = (video.currentTime / video.duration) * 100;
+                seekBar.value = progress;
+            }
+            if (timeDisplay && video.duration && isFinite(video.duration)) {
+                timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+            }
+        });
 
         // Click to select stream
         wrapper.addEventListener('click', () => {
@@ -604,7 +729,33 @@ const PlexdStream = (function() {
      */
     function setGridCols(cols) {
         gridCols = cols || 1;
-        console.log('[Plexd] Grid cols set to:', gridCols);
+    }
+
+    /**
+     * Compute grid columns from actual DOM positions
+     */
+    function computeGridCols() {
+        const streamList = Array.from(streams.values());
+        if (streamList.length <= 1) return 1;
+
+        // Get Y positions of first few streams
+        const positions = streamList.slice(0, Math.min(8, streamList.length)).map(s => {
+            const rect = s.wrapper.getBoundingClientRect();
+            return { y: Math.round(rect.top), x: Math.round(rect.left) };
+        });
+
+        // Count how many streams share the same Y as the first one (same row)
+        const firstRowY = positions[0].y;
+        let cols = 0;
+        for (const pos of positions) {
+            if (Math.abs(pos.y - firstRowY) < 10) {
+                cols++;
+            } else {
+                break;
+            }
+        }
+
+        return Math.max(1, cols);
     }
 
     /**
@@ -621,8 +772,9 @@ const PlexdStream = (function() {
         }
 
         const currentIndex = streamList.indexOf(selectedStreamId);
-        const cols = gridCols;
-        console.log('[Plexd] Navigate:', direction, 'from index', currentIndex, 'cols=', cols);
+
+        // Compute cols from actual layout
+        const cols = computeGridCols();
         const rows = Math.ceil(count / cols);
         const currentRow = Math.floor(currentIndex / cols);
         const currentCol = currentIndex % cols;
@@ -632,24 +784,26 @@ const PlexdStream = (function() {
 
         switch (direction) {
             case 'right':
-                newCol = (currentCol + 1) % cols;
-                // Wrap to next row if at end
-                if (newCol === 0) {
+                newCol = currentCol + 1;
+                if (newCol >= cols) {
+                    newCol = 0;
                     newRow = (currentRow + 1) % rows;
                 }
                 break;
             case 'left':
-                newCol = (currentCol - 1 + cols) % cols;
-                // Wrap to previous row if at start
-                if (newCol === cols - 1) {
+                newCol = currentCol - 1;
+                if (newCol < 0) {
+                    newCol = cols - 1;
                     newRow = (currentRow - 1 + rows) % rows;
                 }
                 break;
             case 'down':
-                newRow = (currentRow + 1) % rows;
+                newRow = currentRow + 1;
+                if (newRow >= rows) newRow = 0;
                 break;
             case 'up':
-                newRow = (currentRow - 1 + rows) % rows;
+                newRow = currentRow - 1;
+                if (newRow < 0) newRow = rows - 1;
                 break;
             default:
                 return;
@@ -660,13 +814,12 @@ const PlexdStream = (function() {
         // Handle edge case: last row may have fewer items
         if (newIndex >= count) {
             if (direction === 'down') {
-                // Wrap to first row, same column
                 newIndex = newCol;
-            } else if (direction === 'right') {
-                // Wrap to first item of next row or first item
-                newIndex = 0;
+            } else if (direction === 'up') {
+                // Go to last item in that column
+                const lastRowStart = Math.floor((count - 1) / cols) * cols;
+                newIndex = Math.min(lastRowStart + newCol, count - 1);
             } else {
-                // Fallback to last item
                 newIndex = count - 1;
             }
         }

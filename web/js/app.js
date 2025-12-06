@@ -14,6 +14,10 @@ const PlexdApp = (function() {
     let addButtonEl = null;
     let streamCountEl = null;
 
+    // Queue and History
+    const streamQueue = [];
+    const streamHistory = [];
+
     /**
      * Initialize the application
      */
@@ -40,6 +44,12 @@ const PlexdApp = (function() {
 
         // Listen for extension messages
         setupExtensionListener();
+
+        // Load queue and history
+        loadQueue();
+        loadHistory();
+        updateQueueUI();
+        updateHistoryUI();
 
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
@@ -228,9 +238,6 @@ const PlexdApp = (function() {
      * Add a stream to the display
      */
     function addStream(url) {
-        console.log('[Plexd] addStream called with:', url);
-        console.log('[Plexd] Current stream count:', PlexdStream.getStreamCount());
-
         const stream = PlexdStream.createStream(url, {
             autoplay: true,
             muted: true
@@ -240,8 +247,9 @@ const PlexdApp = (function() {
         updateStreamCount();
         updateLayout();
 
-        console.log('[Plexd] New stream count:', PlexdStream.getStreamCount());
-        console.log('[Plexd] All streams:', PlexdStream.getAllStreams().map(s => s.id));
+        // Add to history
+        addToHistory(url);
+
         showMessage(`Added stream: ${truncateUrl(url)}`, 'success');
     }
 
@@ -608,6 +616,209 @@ const PlexdApp = (function() {
         };
     }
 
+    // ========================================
+    // Queue Management
+    // ========================================
+
+    /**
+     * Add stream URL to queue
+     */
+    function addToQueue(url) {
+        if (!url || !isValidUrl(url)) return;
+        if (!streamQueue.includes(url)) {
+            streamQueue.push(url);
+            saveQueue();
+            updateQueueUI();
+            showMessage('Added to queue', 'info');
+        }
+    }
+
+    /**
+     * Remove from queue by index
+     */
+    function removeFromQueue(index) {
+        if (index >= 0 && index < streamQueue.length) {
+            streamQueue.splice(index, 1);
+            saveQueue();
+            updateQueueUI();
+        }
+    }
+
+    /**
+     * Play next from queue
+     */
+    function playFromQueue() {
+        if (streamQueue.length > 0) {
+            const url = streamQueue.shift();
+            saveQueue();
+            updateQueueUI();
+            addStream(url);
+        }
+    }
+
+    /**
+     * Play all from queue
+     */
+    function playAllFromQueue() {
+        while (streamQueue.length > 0) {
+            const url = streamQueue.shift();
+            addStreamSilent(url);
+        }
+        saveQueue();
+        updateQueueUI();
+        updateLayout();
+        showMessage('Playing all queued streams', 'success');
+    }
+
+    /**
+     * Save queue to localStorage
+     */
+    function saveQueue() {
+        localStorage.setItem('plexd_queue', JSON.stringify(streamQueue));
+    }
+
+    /**
+     * Load queue from localStorage
+     */
+    function loadQueue() {
+        const saved = localStorage.getItem('plexd_queue');
+        if (saved) {
+            const urls = JSON.parse(saved);
+            streamQueue.length = 0;
+            streamQueue.push(...urls);
+        }
+    }
+
+    /**
+     * Update queue UI
+     */
+    function updateQueueUI() {
+        const queueList = document.getElementById('queue-list');
+        const queueCount = document.getElementById('queue-count');
+
+        if (queueCount) {
+            queueCount.textContent = streamQueue.length;
+        }
+
+        if (queueList) {
+            if (streamQueue.length === 0) {
+                queueList.innerHTML = '<div class="plexd-panel-empty">Queue is empty</div>';
+            } else {
+                queueList.innerHTML = streamQueue.map((url, i) => `
+                    <div class="plexd-queue-item">
+                        <span class="plexd-queue-url">${escapeHtml(truncateUrl(url, 40))}</span>
+                        <button onclick="PlexdApp.removeFromQueue(${i})" title="Remove">×</button>
+                    </div>
+                `).join('');
+            }
+        }
+    }
+
+    // ========================================
+    // History Management
+    // ========================================
+
+    /**
+     * Add to history
+     */
+    function addToHistory(url) {
+        if (!url) return;
+
+        // Remove if already exists (move to top)
+        const existingIndex = streamHistory.findIndex(h => h.url === url);
+        if (existingIndex >= 0) {
+            streamHistory.splice(existingIndex, 1);
+        }
+
+        // Add to beginning
+        streamHistory.unshift({
+            url,
+            timestamp: Date.now()
+        });
+
+        // Keep only last 50
+        if (streamHistory.length > 50) {
+            streamHistory.pop();
+        }
+
+        saveHistory();
+        updateHistoryUI();
+    }
+
+    /**
+     * Clear history
+     */
+    function clearHistory() {
+        streamHistory.length = 0;
+        saveHistory();
+        updateHistoryUI();
+        showMessage('History cleared', 'info');
+    }
+
+    /**
+     * Save history to localStorage
+     */
+    function saveHistory() {
+        localStorage.setItem('plexd_history', JSON.stringify(streamHistory));
+    }
+
+    /**
+     * Load history from localStorage
+     */
+    function loadHistory() {
+        const saved = localStorage.getItem('plexd_history');
+        if (saved) {
+            const items = JSON.parse(saved);
+            streamHistory.length = 0;
+            streamHistory.push(...items);
+        }
+    }
+
+    /**
+     * Update history UI
+     */
+    function updateHistoryUI() {
+        const historyList = document.getElementById('history-list');
+
+        if (historyList) {
+            if (streamHistory.length === 0) {
+                historyList.innerHTML = '<div class="plexd-panel-empty">No history yet</div>';
+            } else {
+                historyList.innerHTML = streamHistory.slice(0, 20).map(item => {
+                    const ago = formatTimeAgo(item.timestamp);
+                    return `
+                        <div class="plexd-history-item" onclick="PlexdApp.addStream('${escapeAttr(item.url)}')">
+                            <span class="plexd-history-url">${escapeHtml(truncateUrl(item.url, 35))}</span>
+                            <span class="plexd-history-time">${ago}</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+    }
+
+    /**
+     * Format timestamp as "X ago"
+     */
+    function formatTimeAgo(timestamp) {
+        const seconds = Math.floor((Date.now() - timestamp) / 1000);
+
+        if (seconds < 60) return 'just now';
+        if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+        if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+        return Math.floor(seconds / 86400) + 'd ago';
+    }
+
+    /**
+     * Toggle panel visibility
+     */
+    function togglePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (panel) {
+            panel.classList.toggle('plexd-panel-open');
+        }
+    }
+
     // Public API
     return {
         init,
@@ -618,7 +829,15 @@ const PlexdApp = (function() {
         saveCombination: saveStreamCombination,
         loadCombination: loadStreamCombination,
         deleteCombination: deleteStreamCombination,
-        getSavedCombinations
+        getSavedCombinations,
+        // Queue
+        addToQueue,
+        removeFromQueue,
+        playFromQueue,
+        playAllFromQueue,
+        // History
+        clearHistory,
+        togglePanel
     };
 })();
 

@@ -36,6 +36,12 @@
                     <span>Streams:</span>
                     <span id="stream-count" class="plexd-stat-value">0</span>
                 </div>
+                <button onclick="PlexdApp.togglePanel('queue-panel')" class="plexd-button plexd-button-secondary" title="Queue">
+                    Queue <span id="queue-count" class="plexd-badge">0</span>
+                </button>
+                <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">
+                    History
+                </button>
                 <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save stream combination (Ctrl+S)">
                     Save
                 </button>
@@ -44,6 +50,34 @@
                 </button>
             </div>
         </header>
+
+        <!-- Queue Panel -->
+        <aside id="queue-panel" class="plexd-panel">
+            <div class="plexd-panel-header">
+                <h3>Queue</h3>
+                <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.playAllFromQueue()" class="plexd-button-small" title="Play all">Play All</button>
+                    <button onclick="PlexdApp.togglePanel('queue-panel')" class="plexd-panel-close">&times;</button>
+                </div>
+            </div>
+            <div id="queue-list" class="plexd-panel-content">
+                <div class="plexd-panel-empty">Queue is empty</div>
+            </div>
+        </aside>
+
+        <!-- History Panel -->
+        <aside id="history-panel" class="plexd-panel">
+            <div class="plexd-panel-header">
+                <h3>History</h3>
+                <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.clearHistory()" class="plexd-button-small" title="Clear">Clear</button>
+                    <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-panel-close">&times;</button>
+                </div>
+            </div>
+            <div id="history-list" class="plexd-panel-content">
+                <div class="plexd-panel-empty">No history yet</div>
+            </div>
+        </aside>
 
         <!-- Video Grid Container -->
         <main id="plexd-container">

@@ -793,6 +793,102 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Export all saved combinations as a JSON file
+     * On iOS, this triggers the share sheet for easy AirDrop
+     */
+    function exportCombinations() {
+        const combinations = getSavedCombinations();
+        const names = Object.keys(combinations);
+
+        if (names.length === 0) {
+            showMessage('No saved combinations to export', 'error');
+            return;
+        }
+
+        const exportData = {
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            combinations: combinations
+        };
+
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `plexd-saves-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showMessage(`Exported ${names.length} combination(s)`, 'success');
+    }
+
+    /**
+     * Import combinations from a JSON file
+     */
+    function importCombinations() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+
+        input.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+
+                    // Validate structure
+                    if (!data.combinations || typeof data.combinations !== 'object') {
+                        showMessage('Invalid file format', 'error');
+                        return;
+                    }
+
+                    // Merge with existing combinations
+                    const existing = getSavedCombinations();
+                    let imported = 0;
+                    let skipped = 0;
+
+                    Object.keys(data.combinations).forEach(name => {
+                        const combo = data.combinations[name];
+                        if (combo.urls && Array.isArray(combo.urls)) {
+                            if (existing[name]) {
+                                // Rename if exists
+                                const newName = name + ' (imported)';
+                                existing[newName] = combo;
+                                imported++;
+                            } else {
+                                existing[name] = combo;
+                                imported++;
+                            }
+                        } else {
+                            skipped++;
+                        }
+                    });
+
+                    localStorage.setItem('plexd_combinations', JSON.stringify(existing));
+                    updateCombinationsList();
+
+                    let msg = `Imported ${imported} combination(s)`;
+                    if (skipped > 0) msg += `, ${skipped} skipped`;
+                    showMessage(msg, 'success');
+
+                } catch (err) {
+                    console.error('Import error:', err);
+                    showMessage('Failed to parse file', 'error');
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        input.click();
+    }
+
+    /**
      * Update combinations list in UI (if present)
      */
     function updateCombinationsList() {
@@ -1063,6 +1159,8 @@ const PlexdApp = (function() {
         loadCombination: loadStreamCombination,
         deleteCombination: deleteStreamCombination,
         getSavedCombinations,
+        exportCombinations,
+        importCombinations,
         // Queue
         addToQueue,
         removeFromQueue,

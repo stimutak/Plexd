@@ -201,6 +201,16 @@ const PlexdStream = (function() {
             togglePiP(streamId);
         };
 
+        // Pop-out button (new window)
+        const popoutBtn = document.createElement('button');
+        popoutBtn.className = 'plexd-btn plexd-popout-btn';
+        popoutBtn.innerHTML = '&#x2197;'; // Arrow pointing out
+        popoutBtn.title = 'Open in new window';
+        popoutBtn.onclick = (e) => {
+            e.stopPropagation();
+            popoutStream(streamId);
+        };
+
         // Fullscreen button (click = browser-fill, double-click = true fullscreen)
         const fullscreenBtn = document.createElement('button');
         fullscreenBtn.className = 'plexd-btn plexd-fullscreen-btn';
@@ -239,6 +249,7 @@ const PlexdStream = (function() {
         buttonRow.appendChild(muteBtn);
         buttonRow.appendChild(skipFwdBtn);
         buttonRow.appendChild(pipBtn);
+        buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
         buttonRow.appendChild(infoBtn);
         buttonRow.appendChild(removeBtn);
@@ -335,6 +346,110 @@ const PlexdStream = (function() {
         } catch (err) {
             console.log('PiP error:', err);
         }
+    }
+
+    // Track pop-out windows for intelligent placement
+    let popoutWindows = [];
+    let popoutCounter = 0;
+
+    /**
+     * Pop out stream to new window with intelligent placement
+     */
+    function popoutStream(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const url = stream.url;
+        const currentTime = stream.video.currentTime || 0;
+
+        // Clean up closed windows from tracking
+        popoutWindows = popoutWindows.filter(w => w && !w.closed);
+
+        // Calculate intelligent placement
+        const screenW = window.screen.availWidth;
+        const screenH = window.screen.availHeight;
+        const windowW = 640;
+        const windowH = 360;
+        const padding = 10;
+
+        // Calculate how many windows fit in a row/column
+        const cols = Math.floor(screenW / (windowW + padding));
+        const rows = Math.floor(screenH / (windowH + padding));
+        const maxWindows = cols * rows;
+
+        // Position based on count (tile pattern)
+        const index = popoutCounter % maxWindows;
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+
+        const left = col * (windowW + padding) + padding;
+        const top = row * (windowH + padding) + padding;
+
+        popoutCounter++;
+
+        // Create minimal HTML for the popup
+        const popupHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Plexd - Stream ${popoutCounter}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay controls></video>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script>
+        const video = document.getElementById('video');
+        const url = ${JSON.stringify(url)};
+        const startTime = ${currentTime};
+
+        if (url.includes('.m3u8') && Hls.isSupported()) {
+            const hls = new Hls({ capLevelToPlayerSize: false });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+                if (data.levels && data.levels.length > 0) {
+                    hls.currentLevel = data.levels.length - 1;
+                }
+                video.currentTime = startTime;
+                video.play();
+            });
+        } else {
+            video.src = url;
+            video.addEventListener('loadedmetadata', () => {
+                video.currentTime = startTime;
+            });
+        }
+    </script>
+</body>
+</html>`;
+
+        // Open popup window with calculated position
+        const popup = window.open('', '_blank',
+            `width=${windowW},height=${windowH},left=${left},top=${top},resizable=yes`);
+
+        if (popup) {
+            popup.document.write(popupHtml);
+            popup.document.close();
+            popoutWindows.push(popup);
+        }
+    }
+
+    /**
+     * Pop out all streams to individual windows (tiled)
+     */
+    function popoutAllStreams() {
+        popoutCounter = 0; // Reset counter for clean tiling
+        popoutWindows.forEach(w => { if (w && !w.closed) w.close(); });
+        popoutWindows = [];
+
+        streams.forEach((stream) => {
+            popoutStream(stream.id);
+        });
     }
 
     /**
@@ -924,6 +1039,8 @@ const PlexdStream = (function() {
         setLayoutUpdateCallback,
         // New features
         togglePiP,
+        popoutStream,
+        popoutAllStreams,
         toggleAudioFocus,
         getAudioFocusMode,
         toggleAllStreamInfo,

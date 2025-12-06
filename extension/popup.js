@@ -240,7 +240,8 @@
 
         try {
             // Always use URL params - most reliable method
-            const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join(',');
+            // Use ||| as separator since URLs can contain commas
+            const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join('|||');
             const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
 
             console.log('[Plexd Popup] Sending streams:', selectedList.map(v => v.url));

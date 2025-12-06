@@ -91,7 +91,8 @@ const PlexdApp = (function() {
         console.log('[Plexd] streams param:', streamsParam);
 
         if (streamsParam) {
-            const urls = streamsParam.split(',').map(s => decodeURIComponent(s.trim()));
+            // Split by ||| separator (URLs can contain commas, so we use a unique separator)
+            const urls = streamsParam.split('|||').map(s => decodeURIComponent(s.trim()));
             console.log('[Plexd] Parsed URLs:', urls);
 
             let addedCount = 0;

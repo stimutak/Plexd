@@ -36,7 +36,7 @@ const PlexdStream = (function() {
         video.muted = options.muted !== false; // Muted by default for autoplay
         video.loop = options.loop || false;
         video.playsInline = true; // Required for iOS
-        video.crossOrigin = 'anonymous';
+        // Don't set crossOrigin - it causes CORS preflight which many video servers reject
 
         // Create controls overlay
         const controls = createControlsOverlay(id);
@@ -156,7 +156,13 @@ const PlexdStream = (function() {
         video.addEventListener('error', (e) => {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
-            console.error(`Stream ${stream.id} error:`, stream.error);
+            console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
+
+            // Show error visually
+            const errorOverlay = document.createElement('div');
+            errorOverlay.className = 'plexd-error-overlay';
+            errorOverlay.innerHTML = `<div class="plexd-error-msg">⚠️ ${stream.error}</div>`;
+            stream.wrapper.appendChild(errorOverlay);
         });
 
         // Handle stalled/waiting

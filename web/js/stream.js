@@ -24,6 +24,9 @@ const PlexdStream = (function() {
     // Show stream info overlay
     let showInfoOverlay = false;
 
+    // Current grid layout for navigation
+    let gridCols = 1;
+
     /**
      * Create a new stream from a URL
      * @param {string} url - Video stream URL
@@ -597,11 +600,19 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Select next stream in grid order
+     * Set grid columns for navigation
+     */
+    function setGridCols(cols) {
+        gridCols = cols || 1;
+    }
+
+    /**
+     * Select next stream in grid order (respects visual grid layout)
      */
     function selectNextStream(direction = 'right') {
         const streamList = Array.from(streams.keys());
-        if (streamList.length === 0) return;
+        const count = streamList.length;
+        if (count === 0) return;
 
         if (!selectedStreamId) {
             selectStream(streamList[0]);
@@ -609,19 +620,53 @@ const PlexdStream = (function() {
         }
 
         const currentIndex = streamList.indexOf(selectedStreamId);
-        let newIndex;
+        const cols = gridCols;
+        const rows = Math.ceil(count / cols);
+        const currentRow = Math.floor(currentIndex / cols);
+        const currentCol = currentIndex % cols;
+
+        let newRow = currentRow;
+        let newCol = currentCol;
 
         switch (direction) {
             case 'right':
-            case 'down':
-                newIndex = (currentIndex + 1) % streamList.length;
+                newCol = (currentCol + 1) % cols;
+                // Wrap to next row if at end
+                if (newCol === 0) {
+                    newRow = (currentRow + 1) % rows;
+                }
                 break;
             case 'left':
+                newCol = (currentCol - 1 + cols) % cols;
+                // Wrap to previous row if at start
+                if (newCol === cols - 1) {
+                    newRow = (currentRow - 1 + rows) % rows;
+                }
+                break;
+            case 'down':
+                newRow = (currentRow + 1) % rows;
+                break;
             case 'up':
-                newIndex = (currentIndex - 1 + streamList.length) % streamList.length;
+                newRow = (currentRow - 1 + rows) % rows;
                 break;
             default:
                 return;
+        }
+
+        let newIndex = newRow * cols + newCol;
+
+        // Handle edge case: last row may have fewer items
+        if (newIndex >= count) {
+            if (direction === 'down') {
+                // Wrap to first row, same column
+                newIndex = newCol;
+            } else if (direction === 'right') {
+                // Wrap to first item of next row or first item
+                newIndex = 0;
+            } else {
+                // Fallback to last item
+                newIndex = count - 1;
+            }
         }
 
         selectStream(streamList[newIndex]);
@@ -730,6 +775,7 @@ const PlexdStream = (function() {
         selectStream,
         getSelectedStream,
         selectNextStream,
+        setGridCols,
         reorderStreams
     };
 })();

@@ -267,6 +267,9 @@ const PlexdApp = (function() {
         const layout = PlexdGrid.calculateLayout(container, streams);
         PlexdGrid.applyLayout(containerEl, layout, PlexdStream.getVideoElements());
 
+        // Update grid columns for keyboard navigation
+        PlexdStream.setGridCols(layout.cols);
+
         // Update efficiency display if element exists
         const efficiencyEl = document.getElementById('layout-efficiency');
         if (efficiencyEl) {

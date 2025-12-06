@@ -230,7 +230,7 @@
 
         const selectedList = Array.from(selectedVideos).map(i => videos[i]);
 
-        // Get Plexd tab or open new one
+        // Get Plexd URL
         const plexdUrl = plexdUrlInput.value;
 
         if (!plexdUrl) {
@@ -239,30 +239,20 @@
         }
 
         try {
-            // Find existing Plexd tab by matching the configured URL
+            // Always use URL params - most reliable method
+            const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join(',');
+            const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
+
+            // Find existing Plexd tab or create new one
             const tabs = await chrome.tabs.query({});
             const plexdOrigin = new URL(plexdUrl).origin;
             let plexdTab = tabs.find(t => t.url && t.url.startsWith(plexdOrigin));
 
             if (plexdTab) {
-                // Inject script to add streams without reloading
-                const streams = selectedList.map(v => ({ url: v.url, title: v.title }));
-                await chrome.scripting.executeScript({
-                    target: { tabId: plexdTab.id },
-                    func: (streamsToAdd) => {
-                        streamsToAdd.forEach(stream => {
-                            if (window.PlexdApp && window.PlexdApp.addStream) {
-                                window.PlexdApp.addStream(stream.url);
-                            }
-                        });
-                    },
-                    args: [streams]
-                });
-                await chrome.tabs.update(plexdTab.id, { active: true });
+                // Update existing tab with new URL (will reload and add streams)
+                await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
             } else {
-                // Open Plexd with streams as URL params
-                const streamUrls = selectedList.map(v => encodeURIComponent(v.url)).join(',');
-                const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
+                // Open new Plexd tab
                 await chrome.tabs.create({ url: targetUrl });
             }
 

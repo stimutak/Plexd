@@ -115,6 +115,13 @@ const PlexdStream = (function() {
         muteBtn.title = 'Toggle audio';
         muteBtn.onclick = () => toggleMute(streamId);
 
+        // Fullscreen button
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'plexd-btn plexd-fullscreen-btn';
+        fullscreenBtn.innerHTML = '&#x26F6;'; // Fullscreen icon
+        fullscreenBtn.title = 'Toggle fullscreen';
+        fullscreenBtn.onclick = () => toggleFullscreen(streamId);
+
         // Remove button
         const removeBtn = document.createElement('button');
         removeBtn.className = 'plexd-btn plexd-remove-btn';
@@ -123,16 +130,65 @@ const PlexdStream = (function() {
         removeBtn.onclick = () => removeStream(streamId);
 
         controls.appendChild(muteBtn);
+        controls.appendChild(fullscreenBtn);
         controls.appendChild(removeBtn);
 
         return controls;
+    }
+
+    // Track which stream is fullscreen
+    let fullscreenStreamId = null;
+
+    /**
+     * Toggle fullscreen for a stream
+     */
+    function toggleFullscreen(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        if (fullscreenStreamId === streamId) {
+            // Exit fullscreen
+            stream.wrapper.classList.remove('plexd-fullscreen');
+            fullscreenStreamId = null;
+        } else {
+            // Exit any existing fullscreen first
+            if (fullscreenStreamId) {
+                const prevStream = streams.get(fullscreenStreamId);
+                if (prevStream) {
+                    prevStream.wrapper.classList.remove('plexd-fullscreen');
+                }
+            }
+            // Enter fullscreen
+            stream.wrapper.classList.add('plexd-fullscreen');
+            fullscreenStreamId = streamId;
+        }
+        triggerLayoutUpdate();
+    }
+
+    /**
+     * Check if any stream is fullscreen
+     */
+    function isAnyFullscreen() {
+        return fullscreenStreamId !== null;
+    }
+
+    /**
+     * Get fullscreen stream if any
+     */
+    function getFullscreenStream() {
+        return fullscreenStreamId ? streams.get(fullscreenStreamId) : null;
     }
 
     /**
      * Set up video element event listeners
      */
     function setupVideoEvents(stream) {
-        const { video } = stream;
+        const { video, wrapper } = stream;
+
+        // Double-click to toggle fullscreen
+        wrapper.addEventListener('dblclick', () => {
+            toggleFullscreen(stream.id);
+        });
 
         // Get aspect ratio when metadata loads
         video.addEventListener('loadedmetadata', () => {
@@ -327,6 +383,9 @@ const PlexdStream = (function() {
         getAllStreams,
         getStreamCount,
         toggleMute,
+        toggleFullscreen,
+        isAnyFullscreen,
+        getFullscreenStream,
         pauseAll,
         playAll,
         muteAll,

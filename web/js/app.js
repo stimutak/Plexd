@@ -148,6 +148,12 @@ const PlexdApp = (function() {
             addButtonEl.addEventListener('click', handleAddStream);
         }
 
+        // Clear all button
+        const clearAllBtn = document.getElementById('clear-all-btn');
+        if (clearAllBtn) {
+            clearAllBtn.addEventListener('click', clearAllStreams);
+        }
+
         // Enter key in input
         if (inputEl) {
             inputEl.addEventListener('keypress', (e) => {
@@ -159,6 +165,33 @@ const PlexdApp = (function() {
 
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
+
+        // ESC to exit fullscreen
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
+                if (fullscreenStream) {
+                    PlexdStream.toggleFullscreen(fullscreenStream.id);
+                }
+            }
+        });
+    }
+
+    /**
+     * Clear all streams and localStorage
+     */
+    function clearAllStreams() {
+        // Remove all streams from display
+        const streams = PlexdStream.getAllStreams();
+        streams.forEach(stream => {
+            PlexdStream.removeStream(stream.id);
+        });
+
+        // Clear localStorage
+        localStorage.removeItem('plexd_streams');
+
+        updateStreamCount();
+        showMessage('All streams cleared', 'info');
     }
 
     /**

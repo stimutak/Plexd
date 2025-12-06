@@ -25,21 +25,30 @@
      * Initialize popup
      */
     async function init() {
-        // Load saved Plexd URL
-        const stored = await chrome.storage.local.get(['plexdUrl']);
-        plexdUrlInput.value = stored.plexdUrl || DEFAULT_PLEXD_URL;
+        try {
+            // Load saved Plexd URL
+            const stored = await chrome.storage.local.get(['plexdUrl']);
+            if (plexdUrlInput) {
+                plexdUrlInput.value = stored.plexdUrl || DEFAULT_PLEXD_URL;
 
-        // Save URL when changed
-        plexdUrlInput.addEventListener('change', () => {
-            chrome.storage.local.set({ plexdUrl: plexdUrlInput.value });
-        });
+                // Save URL when changed
+                plexdUrlInput.addEventListener('change', () => {
+                    chrome.storage.local.set({ plexdUrl: plexdUrlInput.value });
+                });
+            }
 
-        // Scan current tab for videos
-        await scanForVideos();
+            // Button handlers
+            if (sendBtn) sendBtn.addEventListener('click', sendToPlexd);
+            if (openPlexdBtn) openPlexdBtn.addEventListener('click', openPlexd);
 
-        // Button handlers
-        sendBtn.addEventListener('click', sendToPlexd);
-        openPlexdBtn.addEventListener('click', openPlexd);
+            // Scan current tab for videos
+            await scanForVideos();
+        } catch (err) {
+            console.error('Popup init error:', err);
+            if (contentEl) {
+                contentEl.innerHTML = '<div class="empty-state"><h3>Error</h3><p>' + err.message + '</p></div>';
+            }
+        }
     }
 
     /**

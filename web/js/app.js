@@ -45,11 +45,12 @@ const PlexdApp = (function() {
         // Listen for extension messages
         setupExtensionListener();
 
-        // Load queue and history
+        // Load queue, history, and saved combinations
         loadQueue();
         loadHistory();
         updateQueueUI();
         updateHistoryUI();
+        updateCombinationsList();
 
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
@@ -356,6 +357,7 @@ const PlexdApp = (function() {
         if (e.target.tagName === 'INPUT') return;
 
         const selected = PlexdStream.getSelectedStream();
+        const fullscreenStream = PlexdStream.getFullscreenStream();
 
         switch (e.key) {
             case ' ':
@@ -398,23 +400,51 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                PlexdStream.selectNextStream('right');
+                if (fullscreenStream) {
+                    // In fullscreen: seek forward 10 seconds
+                    PlexdStream.seekRelative(fullscreenStream.id, 10);
+                } else {
+                    PlexdStream.selectNextStream('right');
+                }
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
-                PlexdStream.selectNextStream('left');
+                if (fullscreenStream) {
+                    // In fullscreen: seek backward 10 seconds
+                    PlexdStream.seekRelative(fullscreenStream.id, -10);
+                } else {
+                    PlexdStream.selectNextStream('left');
+                }
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                PlexdStream.selectNextStream('up');
+                if (fullscreenStream) {
+                    // In fullscreen: seek forward 60 seconds
+                    PlexdStream.seekRelative(fullscreenStream.id, 60);
+                } else {
+                    PlexdStream.selectNextStream('up');
+                }
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                PlexdStream.selectNextStream('down');
+                if (fullscreenStream) {
+                    // In fullscreen: seek backward 60 seconds
+                    PlexdStream.seekRelative(fullscreenStream.id, -60);
+                } else {
+                    PlexdStream.selectNextStream('down');
+                }
                 break;
             case 'Enter':
+            case 'z':
+            case 'Z':
+                // Enter or Z for fullscreen (Z is left-hand friendly)
                 if (selected) {
                     PlexdStream.toggleFullscreen(selected.id);
+                } else {
+                    // If no selection but there's a fullscreen stream, exit it
+                    if (fullscreenStream) {
+                        PlexdStream.toggleFullscreen(fullscreenStream.id);
+                    }
                 }
                 break;
             case 'Delete':
@@ -434,7 +464,6 @@ const PlexdApp = (function() {
                 break;
             case 'Escape':
                 // Exit fullscreen or deselect
-                const fullscreenStream = PlexdStream.getFullscreenStream();
                 if (fullscreenStream) {
                     PlexdStream.toggleFullscreen(fullscreenStream.id);
                 } else {
@@ -505,12 +534,27 @@ const PlexdApp = (function() {
         return url.substring(0, maxLength - 3) + '...';
     }
 
+    // Minimum duration (seconds) for a stream to be saved
+    const MIN_STREAM_DURATION = 30;
+
     /**
-     * Save current streams to localStorage
+     * Check if a stream should be saved (has sufficient duration)
+     */
+    function shouldSaveStream(stream) {
+        const duration = stream.video && stream.video.duration;
+        // Save if duration is unknown (not loaded yet) or meets minimum
+        if (!duration || !isFinite(duration)) return true;
+        return duration >= MIN_STREAM_DURATION;
+    }
+
+    /**
+     * Save current streams to localStorage (excludes short videos)
      */
     function saveCurrentStreams() {
         const streams = PlexdStream.getAllStreams();
-        const urls = streams.map(s => s.url);
+        const urls = streams
+            .filter(s => shouldSaveStream(s))
+            .map(s => s.url);
         localStorage.setItem('plexd_streams', JSON.stringify(urls));
     }
 
@@ -558,10 +602,17 @@ const PlexdApp = (function() {
             return;
         }
 
+        // Filter out short videos
+        const validStreams = streams.filter(s => shouldSaveStream(s));
+        if (validStreams.length === 0) {
+            showMessage('No valid streams to save (all too short)', 'error');
+            return;
+        }
+
         const name = prompt('Enter a name for this stream combination:');
         if (!name) return;
 
-        const urls = streams.map(s => s.url);
+        const urls = validStreams.map(s => s.url);
         const loginDomains = extractLoginDomains(urls);
 
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
@@ -572,11 +623,15 @@ const PlexdApp = (function() {
         };
         localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
 
-        if (loginDomains.length > 0) {
-            showMessage(`Saved: ${name} (login domains: ${loginDomains.join(', ')})`, 'success');
-        } else {
-            showMessage(`Saved combination: ${name}`, 'success');
+        const skipped = streams.length - validStreams.length;
+        let msg = `Saved: ${name} (${urls.length} streams)`;
+        if (skipped > 0) {
+            msg += ` - ${skipped} short video(s) excluded`;
         }
+        if (loginDomains.length > 0) {
+            msg += ` | Login: ${loginDomains.join(', ')}`;
+        }
+        showMessage(msg, 'success');
         updateCombinationsList();
     }
 

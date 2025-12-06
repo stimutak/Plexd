@@ -51,6 +51,7 @@ const PlexdApp = (function() {
         updateQueueUI();
         updateHistoryUI();
         updateCombinationsList();
+        loadShortcutsPreference();
 
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
@@ -471,6 +472,33 @@ const PlexdApp = (function() {
                 }
                 if (inputEl) inputEl.blur();
                 break;
+            case '?':
+                // Toggle keyboard shortcuts visibility
+                toggleShortcutsOverlay();
+                break;
+        }
+    }
+
+    /**
+     * Toggle keyboard shortcuts overlay visibility
+     */
+    function toggleShortcutsOverlay() {
+        const shortcuts = document.querySelector('.plexd-shortcuts');
+        if (shortcuts) {
+            const isHidden = shortcuts.style.display === 'none';
+            shortcuts.style.display = isHidden ? '' : 'none';
+            localStorage.setItem('plexd_shortcuts_hidden', isHidden ? 'false' : 'true');
+        }
+    }
+
+    /**
+     * Load shortcuts visibility preference
+     */
+    function loadShortcutsPreference() {
+        const shortcuts = document.querySelector('.plexd-shortcuts');
+        const hidden = localStorage.getItem('plexd_shortcuts_hidden') === 'true';
+        if (shortcuts && hidden) {
+            shortcuts.style.display = 'none';
         }
     }
 

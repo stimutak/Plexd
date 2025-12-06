@@ -115,12 +115,16 @@ const PlexdStream = (function() {
         muteBtn.title = 'Toggle audio';
         muteBtn.onclick = () => toggleMute(streamId);
 
-        // Fullscreen button
+        // Fullscreen button (click = browser-fill, double-click = true fullscreen)
         const fullscreenBtn = document.createElement('button');
         fullscreenBtn.className = 'plexd-btn plexd-fullscreen-btn';
         fullscreenBtn.innerHTML = '&#x26F6;'; // Fullscreen icon
-        fullscreenBtn.title = 'Toggle fullscreen';
+        fullscreenBtn.title = 'Click: fill window | Double-click: true fullscreen';
         fullscreenBtn.onclick = () => toggleFullscreen(streamId);
+        fullscreenBtn.ondblclick = (e) => {
+            e.stopPropagation();
+            toggleTrueFullscreen(streamId);
+        };
 
         // Remove button
         const removeBtn = document.createElement('button');
@@ -140,7 +144,7 @@ const PlexdStream = (function() {
     let fullscreenStreamId = null;
 
     /**
-     * Toggle fullscreen for a stream
+     * Toggle fullscreen for a stream (browser-fill mode)
      */
     function toggleFullscreen(streamId) {
         const stream = streams.get(streamId);
@@ -150,6 +154,10 @@ const PlexdStream = (function() {
             // Exit fullscreen
             stream.wrapper.classList.remove('plexd-fullscreen');
             fullscreenStreamId = null;
+            // Also exit true fullscreen if active
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            }
         } else {
             // Exit any existing fullscreen first
             if (fullscreenStreamId) {
@@ -163,6 +171,27 @@ const PlexdStream = (function() {
             fullscreenStreamId = streamId;
         }
         triggerLayoutUpdate();
+    }
+
+    /**
+     * Toggle true fullscreen (hides browser chrome)
+     */
+    function toggleTrueFullscreen(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        } else {
+            // First ensure browser-fill mode is active
+            if (fullscreenStreamId !== streamId) {
+                toggleFullscreen(streamId);
+            }
+            // Then request true fullscreen
+            stream.wrapper.requestFullscreen().catch(err => {
+                console.log('Fullscreen request failed:', err);
+            });
+        }
     }
 
     /**
@@ -384,6 +413,7 @@ const PlexdStream = (function() {
         getStreamCount,
         toggleMute,
         toggleFullscreen,
+        toggleTrueFullscreen,
         isAnyFullscreen,
         getFullscreenStream,
         pauseAll,

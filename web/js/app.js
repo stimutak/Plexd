@@ -166,12 +166,20 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // ESC to exit fullscreen
+        // ESC to exit fullscreen, F for true fullscreen
         document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+
             if (e.key === 'Escape') {
                 const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
                 if (fullscreenStream) {
                     PlexdStream.toggleFullscreen(fullscreenStream.id);
+                }
+            }
+            if (e.key === 'f' || e.key === 'F') {
+                const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
+                if (fullscreenStream) {
+                    PlexdStream.toggleTrueFullscreen(fullscreenStream.id);
                 }
             }
         });

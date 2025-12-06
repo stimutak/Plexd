@@ -604,6 +604,7 @@ const PlexdStream = (function() {
      */
     function setGridCols(cols) {
         gridCols = cols || 1;
+        console.log('[Plexd] Grid cols set to:', gridCols);
     }
 
     /**
@@ -621,6 +622,7 @@ const PlexdStream = (function() {
 
         const currentIndex = streamList.indexOf(selectedStreamId);
         const cols = gridCols;
+        console.log('[Plexd] Navigate:', direction, 'from index', currentIndex, 'cols=', cols);
         const rows = Math.ceil(count / cols);
         const currentRow = Math.floor(currentIndex / cols);
         const currentCol = currentIndex % cols;

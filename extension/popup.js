@@ -82,32 +82,77 @@
      * Render the video list
      */
     function renderVideoList(pageTitle) {
-        contentEl.innerHTML = `
-            <div class="section-title">Videos on: ${escapeHtml(pageTitle || 'this page')}</div>
-            <ul class="video-list" id="videoList"></ul>
+        // Separate intercepted streams from other videos
+        const intercepted = [];
+        const other = [];
+        videos.forEach((video, index) => {
+            if (video.intercepted || video.type === 'stream') {
+                intercepted.push({ video, index });
+            } else {
+                other.push({ video, index });
+            }
+        });
+
+        let html = '';
+
+        // Show intercepted streams first (these are the good ones!)
+        if (intercepted.length > 0) {
+            html += `<div class="section-title" style="color: #4ade80;">&#9733; Captured Streams (Best)</div>
+                     <ul class="video-list" id="streamList"></ul>`;
+        }
+
+        // Show other detected videos
+        if (other.length > 0) {
+            html += `<div class="section-title" style="margin-top: 12px;">Other Videos on Page</div>
+                     <ul class="video-list" id="otherList"></ul>`;
+        }
+
+        if (intercepted.length === 0 && other.length === 0) {
+            html = '<div class="empty-state"><h3>No Videos</h3><p>Play a video on this page first</p></div>';
+        }
+
+        contentEl.innerHTML = html;
+
+        // Render intercepted streams
+        if (intercepted.length > 0) {
+            const streamList = document.getElementById('streamList');
+            intercepted.forEach(({ video, index }) => {
+                const li = createVideoItem(video, index, true);
+                streamList.appendChild(li);
+            });
+        }
+
+        // Render other videos
+        if (other.length > 0) {
+            const otherList = document.getElementById('otherList');
+            other.forEach(({ video, index }) => {
+                const li = createVideoItem(video, index, false);
+                otherList.appendChild(li);
+            });
+        }
+    }
+
+    /**
+     * Create a video list item
+     */
+    function createVideoItem(video, index, isStream) {
+        const li = document.createElement('li');
+        li.className = 'video-item' + (isStream ? ' stream-item' : '');
+        li.dataset.index = index;
+
+        const typeLabel = getTypeLabel(video);
+        const urlShort = shortenUrl(video.url);
+
+        li.innerHTML = `
+            <div class="video-title">${escapeHtml(video.title || 'Untitled')}</div>
+            <div class="video-meta">
+                <span class="video-type" style="${isStream ? 'background: #166534; color: #4ade80;' : ''}">${typeLabel}</span>
+                <span>${urlShort}</span>
+            </div>
         `;
 
-        const listEl = document.getElementById('videoList');
-
-        videos.forEach((video, index) => {
-            const li = document.createElement('li');
-            li.className = 'video-item';
-            li.dataset.index = index;
-
-            const typeLabel = getTypeLabel(video);
-            const urlShort = shortenUrl(video.url);
-
-            li.innerHTML = `
-                <div class="video-title">${escapeHtml(video.title || 'Untitled')}</div>
-                <div class="video-meta">
-                    <span class="video-type">${typeLabel}</span>
-                    <span>${urlShort}</span>
-                </div>
-            `;
-
-            li.addEventListener('click', () => toggleSelection(index, li));
-            listEl.appendChild(li);
-        });
+        li.addEventListener('click', () => toggleSelection(index, li));
+        return li;
     }
 
     /**

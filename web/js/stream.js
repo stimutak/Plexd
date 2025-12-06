@@ -41,9 +41,6 @@ const PlexdStream = (function() {
         // Create controls overlay
         const controls = createControlsOverlay(id);
 
-        // Set source
-        video.src = url;
-
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
@@ -55,6 +52,7 @@ const PlexdStream = (function() {
             wrapper,
             video,
             controls,
+            hls: null, // HLS.js instance if used
             aspectRatio: DEFAULT_ASPECT_RATIO,
             state: 'loading', // loading, playing, paused, error
             error: null
@@ -63,10 +61,44 @@ const PlexdStream = (function() {
         // Set up event listeners
         setupVideoEvents(stream);
 
+        // Set source - use HLS.js for .m3u8 streams
+        if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
+            const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: true
+            });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                video.play().catch(() => {});
+            });
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                console.error('HLS error:', data);
+                if (data.fatal) {
+                    stream.state = 'error';
+                    stream.error = 'HLS stream error: ' + data.type;
+                }
+            });
+            stream.hls = hls;
+        } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari has native HLS support
+            video.src = url;
+        } else {
+            // Regular video file
+            video.src = url;
+        }
+
         // Register stream
         streams.set(id, stream);
 
         return stream;
+    }
+
+    /**
+     * Check if URL is an HLS stream
+     */
+    function isHlsUrl(url) {
+        return url.toLowerCase().includes('.m3u8');
     }
 
     /**
@@ -163,6 +195,12 @@ const PlexdStream = (function() {
     function removeStream(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return false;
+
+        // Clean up HLS instance if present
+        if (stream.hls) {
+            stream.hls.destroy();
+            stream.hls = null;
+        }
 
         // Clean up video
         stream.video.pause();

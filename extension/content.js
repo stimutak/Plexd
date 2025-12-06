@@ -249,16 +249,30 @@
         return true; // Keep channel open for async response
     });
 
-    // Also store detected videos for the background script
-    const videos = findVideoSources();
-    if (videos.length > 0) {
-        chrome.runtime.sendMessage({
-            action: 'videosDetected',
-            count: videos.length,
-            pageUrl: window.location.href
-        }).catch(() => {
-            // Extension context may not be available
-        });
+    /**
+     * Notify background script about detected videos (after DOM ready)
+     */
+    function notifyVideosDetected() {
+        const videos = findVideoSources();
+        if (videos.length > 0) {
+            chrome.runtime.sendMessage({
+                action: 'videosDetected',
+                count: videos.length,
+                pageUrl: window.location.href
+            }).catch(() => {
+                // Extension context may not be available
+            });
+        }
     }
+
+    // Wait for DOM to be ready before scanning for video elements
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', notifyVideosDetected);
+    } else {
+        notifyVideosDetected();
+    }
+
+    // Also re-scan after a delay to catch dynamically loaded videos
+    setTimeout(notifyVideosDetected, 2000);
 
 })();

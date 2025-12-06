@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <title>Plexd - Multiplex Video Streams</title>
+
+    <link rel="stylesheet" href="css/plexd.css">
+</head>
+<body>
+    <div class="plexd-app">
+        <!-- Header / Toolbar -->
+        <header class="plexd-header">
+            <div class="plexd-logo">Plex<span>d</span></div>
+
+            <div class="plexd-input-group">
+                <input
+                    type="url"
+                    id="stream-url-input"
+                    class="plexd-input"
+                    placeholder="Enter video stream URL (e.g., https://example.com/video.mp4)"
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+                <button id="add-stream-btn" class="plexd-button plexd-button-primary">
+                    Add Stream
+                </button>
+            </div>
+
+            <div class="plexd-stats">
+                <div class="plexd-stat">
+                    <span>Streams:</span>
+                    <span id="stream-count" class="plexd-stat-value">0</span>
+                </div>
+                <div class="plexd-stat">
+                    <span>Efficiency:</span>
+                    <span id="layout-efficiency" class="plexd-stat-value">-</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Video Grid Container -->
+        <main id="plexd-container">
+            <!-- Streams are added here dynamically -->
+        </main>
+
+        <!-- Keyboard Shortcuts Hint -->
+        <div class="plexd-shortcuts">
+            <kbd>Space</kbd> Play/Pause All &nbsp;
+            <kbd>M</kbd> Mute All
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/grid.js"></script>
+    <script src="js/stream.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

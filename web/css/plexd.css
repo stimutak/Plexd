@@ -1,0 +1,335 @@
+/**
+ * Plexd Styles
+ * Single CSS file for the entire application
+ */
+
+/* ========================================
+   Reset & Base
+   ======================================== */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    line-height: 1.5;
+}
+
+/* ========================================
+   Layout
+   ======================================== */
+
+.plexd-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* ========================================
+   Header / Toolbar
+   ======================================== */
+
+.plexd-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.plexd-logo {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.5px;
+}
+
+.plexd-logo span {
+    color: #6366f1;
+}
+
+/* URL Input */
+.plexd-input-group {
+    display: flex;
+    flex: 1;
+    max-width: 600px;
+    gap: 8px;
+}
+
+.plexd-input {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #0a0a0a;
+    color: #fff;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.plexd-input:focus {
+    border-color: #6366f1;
+}
+
+.plexd-input::placeholder {
+    color: #666;
+}
+
+/* Buttons */
+.plexd-button {
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.plexd-button-primary {
+    background: #6366f1;
+    color: #fff;
+}
+
+.plexd-button-primary:hover {
+    background: #5558e3;
+}
+
+.plexd-button-primary:active {
+    background: #4749d4;
+}
+
+/* Stats */
+.plexd-stats {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-left: auto;
+    font-size: 13px;
+    color: #888;
+}
+
+.plexd-stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.plexd-stat-value {
+    font-weight: 600;
+    color: #fff;
+}
+
+/* ========================================
+   Grid Container
+   ======================================== */
+
+#plexd-container {
+    flex: 1;
+    position: relative;
+    background: #000;
+    overflow: hidden;
+}
+
+/* ========================================
+   Stream Elements
+   ======================================== */
+
+.plexd-stream {
+    position: absolute;
+    background: #111;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.plexd-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+}
+
+/* Stream Controls Overlay */
+.plexd-controls {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: flex;
+    gap: 4px;
+    padding: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.plexd-stream:hover .plexd-controls {
+    opacity: 1;
+}
+
+.plexd-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.plexd-btn:hover {
+    background: rgba(99, 102, 241, 0.8);
+}
+
+.plexd-remove-btn {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* ========================================
+   Empty State
+   ======================================== */
+
+.plexd-empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #666;
+}
+
+.plexd-empty-state h2 {
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+    color: #888;
+}
+
+.plexd-empty-state p {
+    font-size: 1rem;
+}
+
+/* ========================================
+   Message Toast
+   ======================================== */
+
+.plexd-message {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    z-index: 1000;
+    transition: opacity 0.3s;
+    pointer-events: none;
+}
+
+.plexd-message-info {
+    background: rgba(99, 102, 241, 0.9);
+    color: #fff;
+}
+
+.plexd-message-success {
+    background: rgba(34, 197, 94, 0.9);
+    color: #fff;
+}
+
+.plexd-message-error {
+    background: rgba(239, 68, 68, 0.9);
+    color: #fff;
+}
+
+/* ========================================
+   Responsive
+   ======================================== */
+
+@media (max-width: 768px) {
+    .plexd-header {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .plexd-input-group {
+        order: 3;
+        width: 100%;
+        max-width: none;
+    }
+
+    .plexd-stats {
+        margin-left: 0;
+    }
+}
+
+/* Touch-friendly adjustments for iPad */
+@media (pointer: coarse) {
+    .plexd-controls {
+        opacity: 1;
+    }
+
+    .plexd-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+
+    .plexd-input,
+    .plexd-button {
+        padding: 12px 16px;
+        font-size: 16px;
+    }
+}
+
+/* ========================================
+   Keyboard Hints (shown on focus)
+   ======================================== */
+
+.plexd-shortcuts {
+    display: none;
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 16px;
+    background: rgba(26, 26, 26, 0.95);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #888;
+}
+
+.plexd-shortcuts kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    background: #333;
+    border-radius: 3px;
+    font-family: monospace;
+    color: #fff;
+}
+
+/* Show on desktop when not in input */
+@media (pointer: fine) {
+    body:not(:focus-within) .plexd-shortcuts,
+    body:focus-within:not(:has(input:focus)) .plexd-shortcuts {
+        display: block;
+    }
+}

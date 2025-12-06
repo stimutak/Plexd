@@ -24,10 +24,25 @@ Plexd enables simultaneous playback of multiple video streams in a single applic
 
 ### Supported Stream Types
 
-- Direct video URLs (MP4, WebM, etc.)
+**Works:**
+- Direct video file URLs (MP4, WebM, OGG)
 - HLS streams (.m3u8)
-- DASH streams (.mpd) - with appropriate browser support
-- Any URL that returns video content playable by HTML5 video element
+- DASH streams (.mpd) - with browser support
+- Public video URLs without authentication
+
+**Does NOT work (currently):**
+- Webpage URLs (YouTube, Vimeo, etc.) - these are HTML pages, not video files
+- DRM-protected streams (Netflix, Hulu, Disney+, etc.)
+- Login-required video URLs (authentication doesn't transfer)
+
+### Future: Embed Mode
+
+For sites where you're logged in, an **iframe embed mode** could display the webpage itself (with its video player) rather than extracting the video. This would work for:
+- Logged-in streaming sites (if they allow iframe embedding)
+- News sites with video
+- Any page you can view in your browser
+
+*Note: Many sites block iframe embedding (X-Frame-Options). A browser extension or native app would be needed to bypass this.*
 
 ## Architecture
 

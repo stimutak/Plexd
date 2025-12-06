@@ -58,67 +58,63 @@
         try {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-            if (!tab || !tab.id) {
+            if (!tab || !tab.id || !tab.url) {
                 showEmpty('No active tab');
                 return;
             }
 
-            let results = null;
+            // Get intercepted streams from chrome.storage
+            const tabUrl = new URL(tab.url);
+            const pageKey = 'streams_' + tabUrl.hostname + tabUrl.pathname;
+            const stored = await chrome.storage.local.get([pageKey]);
+            const storedData = stored[pageKey];
 
-            // Try sending message to content script first
-            try {
-                results = await Promise.race([
-                    chrome.tabs.sendMessage(tab.id, { action: 'getVideos' }),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
-                ]);
-            } catch (msgErr) {
-                console.log('Message failed, trying executeScript:', msgErr);
+            let interceptedVideos = [];
+            if (storedData && storedData.streams && storedData.streams.length > 0) {
+                interceptedVideos = storedData.streams.map(url => ({
+                    type: 'stream',
+                    url: url,
+                    title: storedData.title + ' (Captured)',
+                    intercepted: true
+                }));
             }
 
-            // Fallback: directly execute script to get videos
-            if (!results || !results.videos) {
+            // Also try to get DOM video elements via executeScript
+            let domVideos = [];
+            try {
                 const scriptResults = await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
                     func: () => {
-                        // Get intercepted streams from content script's global (if available)
                         const sources = [];
                         const seen = new Set();
-
-                        // Find video elements
                         document.querySelectorAll('video').forEach(video => {
-                            // Check src
                             if (video.src && !video.src.startsWith('blob:') && !seen.has(video.src)) {
                                 seen.add(video.src);
                                 sources.push({ type: 'video', url: video.src, title: document.title });
                             }
-                            // Check currentSrc
                             if (video.currentSrc && !video.currentSrc.startsWith('blob:') && !seen.has(video.currentSrc)) {
                                 seen.add(video.currentSrc);
                                 sources.push({ type: 'currentSrc', url: video.currentSrc, title: document.title });
                             }
-                            // Check source elements
-                            video.querySelectorAll('source[src]').forEach(source => {
-                                if (source.src && !source.src.startsWith('blob:') && !seen.has(source.src)) {
-                                    seen.add(source.src);
-                                    sources.push({ type: 'source', url: source.src, title: document.title });
-                                }
-                            });
                         });
-
-                        return { videos: sources, pageTitle: document.title };
+                        return sources;
                     }
                 });
-
                 if (scriptResults && scriptResults[0] && scriptResults[0].result) {
-                    results = scriptResults[0].result;
+                    domVideos = scriptResults[0].result;
                 }
+            } catch (e) {
+                console.log('executeScript failed:', e);
             }
 
-            if (results && results.videos && results.videos.length > 0) {
-                videos = results.videos;
-                renderVideoList(results.pageTitle);
+            // Combine: intercepted streams first, then DOM videos
+            const allVideos = [...interceptedVideos, ...domVideos];
+
+            if (allVideos.length > 0) {
+                videos = allVideos;
+                renderVideoList(storedData?.title || tab.title);
             } else {
-                showEmpty('No videos found on this page');
+                showEmpty('No videos found. Play a video first, then reopen this popup.');
             }
         } catch (err) {
             console.error('Scan error:', err);

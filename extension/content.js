@@ -41,29 +41,56 @@
     function checkForStreamUrl(url) {
         try {
             const urlLower = url.toLowerCase();
+            let isStream = false;
+
             // Check for HLS/DASH streams
             if (urlLower.includes('.m3u8') ||
                 urlLower.includes('.mpd') ||
                 urlLower.includes('/manifest') ||
                 urlLower.includes('/hls/') ||
                 urlLower.includes('/dash/')) {
-
-                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                interceptedStreams.add(fullUrl);
-                console.log('[Plexd] Intercepted stream:', fullUrl);
+                isStream = true;
             }
             // Check for direct video files
             else if (urlLower.match(/\.(mp4|webm|m4v|mov|avi|mkv|flv|wmv|ts)(\?|$)/)) {
-                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
                 // Skip small files (likely thumbnails) and ads
                 if (!urlLower.includes('thumb') && !urlLower.includes('preview') && !urlLower.includes('/ad')) {
-                    interceptedStreams.add(fullUrl);
-                    console.log('[Plexd] Intercepted video:', fullUrl);
+                    isStream = true;
                 }
+            }
+
+            if (isStream) {
+                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
+                interceptedStreams.add(fullUrl);
+                console.log('[Plexd] Intercepted:', fullUrl);
+
+                // Save to chrome.storage for popup access
+                saveInterceptedStreams();
             }
         } catch (e) {
             // Ignore URL parsing errors
         }
+    }
+
+    /**
+     * Save intercepted streams to chrome.storage for popup access
+     */
+    let saveTimeout = null;
+    function saveInterceptedStreams() {
+        // Debounce to avoid too many writes
+        if (saveTimeout) clearTimeout(saveTimeout);
+        saveTimeout = setTimeout(() => {
+            const pageKey = 'streams_' + window.location.hostname + window.location.pathname;
+            const data = {
+                [pageKey]: {
+                    streams: Array.from(interceptedStreams),
+                    title: document.title,
+                    url: window.location.href,
+                    timestamp: Date.now()
+                }
+            };
+            chrome.storage.local.set(data).catch(() => {});
+        }, 500);
     }
 
     /**

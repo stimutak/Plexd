@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plexd</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            width: 320px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 13px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        .header {
+            padding: 12px 16px;
+            background: #0a0a0a;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .logo span {
+            color: #6366f1;
+        }
+
+        .settings-btn {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .settings-btn:hover {
+            color: #fff;
+        }
+
+        .content {
+            padding: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .section-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #888;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .video-list {
+            list-style: none;
+        }
+
+        .video-item {
+            padding: 10px 12px;
+            background: #252525;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .video-item:hover {
+            background: #333;
+        }
+
+        .video-item.selected {
+            background: #3730a3;
+        }
+
+        .video-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .video-meta {
+            font-size: 11px;
+            color: #888;
+            display: flex;
+            gap: 8px;
+        }
+
+        .video-type {
+            background: #333;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+        }
+
+        .video-item.selected .video-type {
+            background: #4f46e5;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 24px 16px;
+            color: #888;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 8px;
+            color: #aaa;
+        }
+
+        .actions {
+            padding: 12px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn-primary {
+            background: #6366f1;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #5558e3;
+        }
+
+        .btn-primary:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #333;
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: #444;
+        }
+
+        .plexd-url {
+            padding: 12px;
+            border-top: 1px solid #333;
+        }
+
+        .plexd-url input {
+            width: 100%;
+            padding: 8px 10px;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 12px;
+        }
+
+        .plexd-url input:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+
+        .plexd-url label {
+            display: block;
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+
+        .status {
+            padding: 8px 12px;
+            background: #1e3a2f;
+            color: #4ade80;
+            font-size: 12px;
+            text-align: center;
+            display: none;
+        }
+
+        .status.error {
+            background: #3b1c1c;
+            color: #f87171;
+        }
+
+        .status.visible {
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 24px;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">Plex<span>d</span></div>
+        <button class="settings-btn" id="settingsBtn" title="Settings">&#9881;</button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div class="content" id="content">
+        <div class="loading">Scanning for videos...</div>
+    </div>
+
+    <div class="plexd-url" id="plexdUrlSection">
+        <label for="plexdUrl">Plexd URL (where to send videos)</label>
+        <input type="url" id="plexdUrl" placeholder="http://localhost:8080 or file path">
+    </div>
+
+    <div class="actions">
+        <button class="btn btn-secondary" id="openPlexdBtn">Open Plexd</button>
+        <button class="btn btn-primary" id="sendBtn" disabled>Send Selected</button>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

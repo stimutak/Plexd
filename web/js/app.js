@@ -38,7 +38,68 @@ const PlexdApp = (function() {
         // Handle window resize
         window.addEventListener('resize', debounce(updateLayout, 100));
 
+        // Listen for extension messages
+        setupExtensionListener();
+
+        // Load streams from URL parameters (from extension)
+        loadStreamsFromUrl();
+
         console.log('Plexd initialized');
+    }
+
+    /**
+     * Listen for messages from Plexd browser extension
+     */
+    function setupExtensionListener() {
+        // Listen for messages from extension content script
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+                if (message.action === 'addStreams' && message.streams) {
+                    message.streams.forEach(stream => {
+                        if (stream.url && isValidUrl(stream.url)) {
+                            addStream(stream.url);
+                        }
+                    });
+                    sendResponse({ success: true, count: message.streams.length });
+                }
+                return true;
+            });
+        }
+
+        // Also listen for postMessage (works across origins)
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.action === 'plexd-add-streams') {
+                const streams = event.data.streams || [];
+                streams.forEach(stream => {
+                    if (stream.url && isValidUrl(stream.url)) {
+                        addStream(stream.url);
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Load streams from URL parameters
+     * Supports: ?streams=url1,url2,url3
+     */
+    function loadStreamsFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        const streamsParam = params.get('streams');
+
+        if (streamsParam) {
+            const urls = streamsParam.split(',').map(s => decodeURIComponent(s.trim()));
+            urls.forEach(url => {
+                if (url && isValidUrl(url)) {
+                    addStream(url);
+                }
+            });
+
+            // Clear URL params after loading (cleaner URL)
+            if (urls.length > 0 && window.history.replaceState) {
+                window.history.replaceState({}, '', window.location.pathname);
+            }
+        }
     }
 
     /**

@@ -35,14 +35,33 @@ Plexd enables simultaneous playback of multiple video streams in a single applic
 - DRM-protected streams (Netflix, Hulu, Disney+, etc.)
 - Login-required video URLs (authentication doesn't transfer)
 
-### Future: Embed Mode
+## Browser Extension
 
-For sites where you're logged in, an **iframe embed mode** could display the webpage itself (with its video player) rather than extracting the video. This would work for:
-- Logged-in streaming sites (if they allow iframe embedding)
-- News sites with video
-- Any page you can view in your browser
+The Plexd browser extension lets you send videos from any webpage directly to Plexd.
 
-*Note: Many sites block iframe embedding (X-Frame-Options). A browser extension or native app would be needed to bypass this.*
+### Installation (Chrome/Edge/Brave)
+
+1. Open `chrome://extensions` (or `edge://extensions`)
+2. Enable "Developer mode" (toggle in top right)
+3. Click "Load unpacked"
+4. Select the `extension/` folder
+
+### Usage
+
+1. Navigate to any page with videos
+2. Click the Plexd extension icon
+3. See detected videos listed
+4. Select videos and click "Send to Plexd"
+5. Videos appear in your Plexd grid
+
+### What the Extension Detects
+
+- `<video>` elements with src attributes
+- `<source>` elements inside videos
+- YouTube/Vimeo embeds (shows embed info)
+- Videos in data attributes
+
+*Note: DRM-protected streams still won't play - the extension finds the URL but Plexd can't decrypt the content.*
 
 ## Architecture
 
@@ -114,6 +133,11 @@ Plexd/
 │   ├── index.html  # Main entry
 │   ├── css/        # Styles
 │   └── js/         # Application logic
+├── extension/      # Browser extension
+│   ├── manifest.json
+│   ├── popup.html/js
+│   ├── content.js  # Video detection
+│   └── background.js
 ├── ios/            # iOS app (future)
 └── docs/           # Documentation
 ```

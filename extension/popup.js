@@ -254,10 +254,29 @@
             let plexdTab = tabs.find(t => t.url && t.url.startsWith(plexdOrigin));
 
             if (plexdTab) {
-                // Update existing tab with new URL (will reload and add streams)
-                await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                // Plexd is already open - inject streams without reloading
+                try {
+                    const streamUrls = selectedList.map(v => v.url);
+                    await chrome.scripting.executeScript({
+                        target: { tabId: plexdTab.id },
+                        func: (urls) => {
+                            if (window.PlexdApp && window.PlexdApp.addStream) {
+                                urls.forEach(url => window.PlexdApp.addStream(url));
+                                return true;
+                            }
+                            return false;
+                        },
+                        args: [streamUrls]
+                    });
+                    // Focus the Plexd tab
+                    await chrome.tabs.update(plexdTab.id, { active: true });
+                } catch (e) {
+                    // Fallback: reload with URL params if injection fails
+                    console.log('Script injection failed, using URL params:', e);
+                    await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                }
             } else {
-                // Open new Plexd tab
+                // Open new Plexd tab with streams in URL
                 await chrome.tabs.create({ url: targetUrl });
             }
 

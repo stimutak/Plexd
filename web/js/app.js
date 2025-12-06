@@ -331,6 +331,9 @@ const PlexdApp = (function() {
     };
 })();
 
+// Expose to window for extension access
+window.PlexdApp = PlexdApp;
+
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', PlexdApp.init);

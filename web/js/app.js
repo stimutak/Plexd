@@ -160,6 +160,9 @@ const PlexdApp = (function() {
      * Add a stream to the display
      */
     function addStream(url) {
+        console.log('[Plexd] addStream called with:', url);
+        console.log('[Plexd] Current stream count:', PlexdStream.getStreamCount());
+
         const stream = PlexdStream.createStream(url, {
             autoplay: true,
             muted: true
@@ -169,6 +172,8 @@ const PlexdApp = (function() {
         updateStreamCount();
         updateLayout();
 
+        console.log('[Plexd] New stream count:', PlexdStream.getStreamCount());
+        console.log('[Plexd] All streams:', PlexdStream.getAllStreams().map(s => s.id));
         showMessage(`Added stream: ${truncateUrl(url)}`, 'success');
     }
 

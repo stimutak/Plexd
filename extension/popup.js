@@ -255,24 +255,33 @@
 
             if (plexdTab) {
                 // Plexd is already open - inject streams without reloading
+                console.log('[Plexd Popup] Found existing Plexd tab:', plexdTab.id, plexdTab.url);
                 try {
-                    const streamUrls = selectedList.map(v => v.url);
-                    await chrome.scripting.executeScript({
+                    const urlsToAdd = selectedList.map(v => v.url);
+                    console.log('[Plexd Popup] Injecting streams:', urlsToAdd);
+                    const results = await chrome.scripting.executeScript({
                         target: { tabId: plexdTab.id },
                         func: (urls) => {
+                            console.log('[Plexd Inject] Received URLs:', urls);
                             if (window.PlexdApp && window.PlexdApp.addStream) {
-                                urls.forEach(url => window.PlexdApp.addStream(url));
-                                return true;
+                                console.log('[Plexd Inject] PlexdApp found, adding streams');
+                                urls.forEach(url => {
+                                    console.log('[Plexd Inject] Adding:', url);
+                                    window.PlexdApp.addStream(url);
+                                });
+                                return { success: true, count: urls.length };
                             }
-                            return false;
+                            console.log('[Plexd Inject] PlexdApp not found!');
+                            return { success: false, reason: 'PlexdApp not found' };
                         },
-                        args: [streamUrls]
+                        args: [urlsToAdd]
                     });
+                    console.log('[Plexd Popup] Injection result:', results);
                     // Focus the Plexd tab
                     await chrome.tabs.update(plexdTab.id, { active: true });
                 } catch (e) {
                     // Fallback: reload with URL params if injection fails
-                    console.log('Script injection failed, using URL params:', e);
+                    console.log('[Plexd Popup] Script injection failed:', e);
                     await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
                 }
             } else {

@@ -63,8 +63,56 @@
                 return;
             }
 
-            // Inject content script if needed and get videos
-            const results = await chrome.tabs.sendMessage(tab.id, { action: 'getVideos' });
+            let results = null;
+
+            // Try sending message to content script first
+            try {
+                results = await Promise.race([
+                    chrome.tabs.sendMessage(tab.id, { action: 'getVideos' }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000))
+                ]);
+            } catch (msgErr) {
+                console.log('Message failed, trying executeScript:', msgErr);
+            }
+
+            // Fallback: directly execute script to get videos
+            if (!results || !results.videos) {
+                const scriptResults = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    func: () => {
+                        // Get intercepted streams from content script's global (if available)
+                        const sources = [];
+                        const seen = new Set();
+
+                        // Find video elements
+                        document.querySelectorAll('video').forEach(video => {
+                            // Check src
+                            if (video.src && !video.src.startsWith('blob:') && !seen.has(video.src)) {
+                                seen.add(video.src);
+                                sources.push({ type: 'video', url: video.src, title: document.title });
+                            }
+                            // Check currentSrc
+                            if (video.currentSrc && !video.currentSrc.startsWith('blob:') && !seen.has(video.currentSrc)) {
+                                seen.add(video.currentSrc);
+                                sources.push({ type: 'currentSrc', url: video.currentSrc, title: document.title });
+                            }
+                            // Check source elements
+                            video.querySelectorAll('source[src]').forEach(source => {
+                                if (source.src && !source.src.startsWith('blob:') && !seen.has(source.src)) {
+                                    seen.add(source.src);
+                                    sources.push({ type: 'source', url: source.src, title: document.title });
+                                }
+                            });
+                        });
+
+                        return { videos: sources, pageTitle: document.title };
+                    }
+                });
+
+                if (scriptResults && scriptResults[0] && scriptResults[0].result) {
+                    results = scriptResults[0].result;
+                }
+            }
 
             if (results && results.videos && results.videos.length > 0) {
                 videos = results.videos;

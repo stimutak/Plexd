@@ -27,6 +27,12 @@ const PlexdStream = (function() {
     // Current grid layout for navigation
     let gridCols = 1;
 
+    // Favorites set - stores favorited stream URLs
+    const favorites = new Set();
+
+    // Callback for favorites updates
+    let favoritesUpdateCallback = null;
+
     /**
      * Create a new stream from a URL
      * @param {string} url - Video stream URL
@@ -56,10 +62,16 @@ const PlexdStream = (function() {
         // Create info overlay
         const infoOverlay = createInfoOverlay(url);
 
+        // Create favorite indicator (always present, visibility controlled by CSS)
+        const favIndicator = document.createElement('div');
+        favIndicator.className = 'plexd-favorite-indicator';
+        favIndicator.innerHTML = '★';
+
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
         wrapper.appendChild(infoOverlay);
+        wrapper.appendChild(favIndicator);
 
         // Make draggable and focusable (for keyboard in fullscreen)
         wrapper.draggable = true;
@@ -226,6 +238,16 @@ const PlexdStream = (function() {
             toggleTrueFullscreen(streamId);
         };
 
+        // Favorite button
+        const favBtn = document.createElement('button');
+        favBtn.className = 'plexd-btn plexd-fav-btn';
+        favBtn.innerHTML = '☆';
+        favBtn.title = 'Toggle favorite (*)';
+        favBtn.onclick = (e) => {
+            e.stopPropagation();
+            toggleFavorite(streamId);
+        };
+
         // Info toggle button
         const infoBtn = document.createElement('button');
         infoBtn.className = 'plexd-btn plexd-info-btn';
@@ -249,6 +271,7 @@ const PlexdStream = (function() {
         buttonRow.appendChild(skipBackBtn);
         buttonRow.appendChild(muteBtn);
         buttonRow.appendChild(skipFwdBtn);
+        buttonRow.appendChild(favBtn);
         buttonRow.appendChild(pipBtn);
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
@@ -1086,6 +1109,139 @@ const PlexdStream = (function() {
         }
     }
 
+    /**
+     * Toggle favorite status for a stream
+     */
+    function toggleFavorite(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        const isFavorited = favorites.has(stream.url);
+
+        if (isFavorited) {
+            favorites.delete(stream.url);
+            stream.wrapper.classList.remove('plexd-favorited');
+        } else {
+            favorites.add(stream.url);
+            stream.wrapper.classList.add('plexd-favorited');
+        }
+
+        // Update favorite button appearance
+        updateFavoriteButton(stream);
+
+        // Persist favorites
+        saveFavorites();
+
+        // Notify callback
+        if (favoritesUpdateCallback) {
+            favoritesUpdateCallback();
+        }
+
+        return !isFavorited;
+    }
+
+    /**
+     * Update favorite button appearance
+     */
+    function updateFavoriteButton(stream) {
+        const favBtn = stream.controls.querySelector('.plexd-fav-btn');
+        if (favBtn) {
+            const isFavorited = favorites.has(stream.url);
+            favBtn.innerHTML = isFavorited ? '★' : '☆';
+            favBtn.classList.toggle('favorited', isFavorited);
+        }
+    }
+
+    /**
+     * Check if a stream URL is favorited
+     */
+    function isFavorited(url) {
+        return favorites.has(url);
+    }
+
+    /**
+     * Get all favorited stream URLs
+     */
+    function getFavorites() {
+        return Array.from(favorites);
+    }
+
+    /**
+     * Get favorited streams (currently active)
+     */
+    function getFavoritedStreams() {
+        return Array.from(streams.values()).filter(s => favorites.has(s.url));
+    }
+
+    /**
+     * Get favorite count
+     */
+    function getFavoriteCount() {
+        // Count how many current streams are favorited
+        return Array.from(streams.values()).filter(s => favorites.has(s.url)).length;
+    }
+
+    /**
+     * Save favorites to localStorage
+     */
+    function saveFavorites() {
+        localStorage.setItem('plexd_favorites', JSON.stringify(Array.from(favorites)));
+    }
+
+    /**
+     * Load favorites from localStorage
+     */
+    function loadFavorites() {
+        const saved = localStorage.getItem('plexd_favorites');
+        if (saved) {
+            const urls = JSON.parse(saved);
+            favorites.clear();
+            urls.forEach(url => favorites.add(url));
+        }
+    }
+
+    /**
+     * Set favorites update callback
+     */
+    function setFavoritesUpdateCallback(callback) {
+        favoritesUpdateCallback = callback;
+    }
+
+    /**
+     * Sync favorite status for existing streams (call after loading favorites)
+     */
+    function syncFavoriteStatus() {
+        streams.forEach(stream => {
+            if (favorites.has(stream.url)) {
+                stream.wrapper.classList.add('plexd-favorited');
+                updateFavoriteButton(stream);
+            }
+        });
+    }
+
+    /**
+     * Update stream controls based on cell size (responsive controls)
+     */
+    function updateControlsSize(streamId, cellWidth, cellHeight) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const wrapper = stream.wrapper;
+
+        // Remove existing size classes
+        wrapper.classList.remove('plexd-compact-controls', 'plexd-minimal-controls');
+
+        // Apply appropriate class based on cell size
+        if (cellWidth < 200 || cellHeight < 150) {
+            wrapper.classList.add('plexd-minimal-controls');
+        } else if (cellWidth < 300 || cellHeight < 220) {
+            wrapper.classList.add('plexd-compact-controls');
+        }
+    }
+
+    // Load favorites on init
+    loadFavorites();
+
     // Public API
     return {
         createStream,
@@ -1116,7 +1272,17 @@ const PlexdStream = (function() {
         setGridCols,
         reorderStreams,
         seekRelative,
-        seekTo
+        seekTo,
+        // Favorites
+        toggleFavorite,
+        isFavorited,
+        getFavorites,
+        getFavoritedStreams,
+        getFavoriteCount,
+        setFavoritesUpdateCallback,
+        syncFavoriteStatus,
+        // Responsive controls
+        updateControlsSize
     };
 })();
 

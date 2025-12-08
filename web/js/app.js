@@ -18,6 +18,15 @@ const PlexdApp = (function() {
     const streamQueue = [];
     const streamHistory = [];
 
+    // View mode: 'all' or 'favorites'
+    let viewMode = 'all';
+
+    // Tetris layout mode
+    let tetrisMode = false;
+
+    // Header visibility
+    let headerVisible = true;
+
     /**
      * Initialize the application
      */
@@ -53,10 +62,71 @@ const PlexdApp = (function() {
         updateCombinationsList();
         loadShortcutsPreference();
 
+        // Set up header toggle button
+        setupHeaderToggle();
+
+        // Set up favorites callback
+        PlexdStream.setFavoritesUpdateCallback(updateFavoritesUI);
+        updateFavoritesUI();
+
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
 
+        // Sync favorite status for loaded streams
+        setTimeout(() => PlexdStream.syncFavoriteStatus(), 100);
+
         console.log('Plexd initialized');
+    }
+
+    /**
+     * Set up header toggle button
+     */
+    function setupHeaderToggle() {
+        const toggleBtn = document.getElementById('header-toggle');
+        const header = document.querySelector('.plexd-header');
+        const app = document.querySelector('.plexd-app');
+
+        if (toggleBtn && header) {
+            toggleBtn.addEventListener('click', () => {
+                toggleHeader();
+            });
+        }
+    }
+
+    /**
+     * Toggle header visibility
+     */
+    function toggleHeader() {
+        const header = document.querySelector('.plexd-header');
+        const toggleBtn = document.getElementById('header-toggle');
+        const app = document.querySelector('.plexd-app');
+
+        headerVisible = !headerVisible;
+
+        if (headerVisible) {
+            header.classList.remove('plexd-header-hidden');
+            toggleBtn.classList.add('header-visible');
+            toggleBtn.innerHTML = '☰';
+            app.classList.remove('header-hidden');
+        } else {
+            header.classList.add('plexd-header-hidden');
+            toggleBtn.classList.remove('header-visible');
+            toggleBtn.innerHTML = '☰';
+            app.classList.add('header-hidden');
+        }
+
+        // Trigger layout update after transition
+        setTimeout(updateLayout, 350);
+    }
+
+    /**
+     * Update favorites UI elements
+     */
+    function updateFavoritesUI() {
+        const favsCountEl = document.getElementById('favs-count');
+        if (favsCountEl) {
+            favsCountEl.textContent = PlexdStream.getFavoriteCount();
+        }
     }
 
     /**
@@ -287,9 +357,29 @@ const PlexdApp = (function() {
     function updateLayout() {
         if (!containerEl) return;
 
-        const streams = PlexdStream.getAllStreams();
-        if (streams.length === 0) {
-            showEmptyState();
+        const allStreams = PlexdStream.getAllStreams();
+
+        // Filter based on view mode
+        let streamsToShow = allStreams;
+        if (viewMode === 'favorites') {
+            streamsToShow = PlexdStream.getFavoritedStreams();
+        }
+
+        // Handle visibility of streams based on view mode
+        allStreams.forEach(stream => {
+            if (viewMode === 'favorites') {
+                stream.wrapper.style.display = PlexdStream.isFavorited(stream.url) ? '' : 'none';
+            } else {
+                stream.wrapper.style.display = '';
+            }
+        });
+
+        if (streamsToShow.length === 0) {
+            if (viewMode === 'favorites' && allStreams.length > 0) {
+                showEmptyState('No Favorites', 'Star some streams to see them here');
+            } else {
+                showEmptyState();
+            }
             return;
         }
 
@@ -300,8 +390,19 @@ const PlexdApp = (function() {
             height: containerEl.clientHeight
         };
 
-        const layout = PlexdGrid.calculateLayout(container, streams);
+        let layout;
+        if (tetrisMode) {
+            layout = calculateTetrisLayout(container, streamsToShow);
+        } else {
+            layout = PlexdGrid.calculateLayout(container, streamsToShow);
+        }
+
         PlexdGrid.applyLayout(containerEl, layout, PlexdStream.getVideoElements());
+
+        // Update stream controls based on cell size (responsive controls)
+        layout.cells.forEach(cell => {
+            PlexdStream.updateControlsSize(cell.streamId, cell.width, cell.height);
+        });
 
         // Update grid columns for keyboard navigation
         PlexdStream.setGridCols(layout.cols);
@@ -311,6 +412,157 @@ const PlexdApp = (function() {
         if (efficiencyEl) {
             efficiencyEl.textContent = Math.round(layout.efficiency * 100) + '%';
         }
+
+        // Update favorites count
+        updateFavoritesUI();
+    }
+
+    /**
+     * Set view mode (all or favorites)
+     */
+    function setViewMode(mode) {
+        viewMode = mode;
+
+        // Update button states
+        const allBtn = document.getElementById('view-all-btn');
+        const favsBtn = document.getElementById('view-favs-btn');
+
+        if (allBtn) allBtn.classList.toggle('active', mode === 'all');
+        if (favsBtn) favsBtn.classList.toggle('active', mode === 'favorites');
+
+        updateLayout();
+        showMessage(`View: ${mode === 'all' ? 'All Streams' : 'Favorites Only'}`, 'info');
+    }
+
+    /**
+     * Toggle tetris layout mode
+     */
+    function toggleTetrisMode() {
+        tetrisMode = !tetrisMode;
+
+        const tetrisBtn = document.getElementById('tetris-btn');
+        const app = document.querySelector('.plexd-app');
+
+        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode);
+        if (app) app.classList.toggle('tetris-mode', tetrisMode);
+
+        updateLayout();
+        showMessage(`Tetris mode: ${tetrisMode ? 'ON' : 'OFF'}`, 'info');
+    }
+
+    /**
+     * Calculate Tetris-like layout based on video aspect ratios
+     * Packs videos more efficiently by considering their actual proportions
+     */
+    function calculateTetrisLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0 };
+        if (count === 1) {
+            const fit = PlexdGrid.fitToContainer(container, streams[0].aspectRatio || 16/9);
+            return {
+                cells: [{
+                    streamId: streams[0].id,
+                    x: (container.width - fit.width) / 2,
+                    y: (container.height - fit.height) / 2,
+                    width: fit.width,
+                    height: fit.height
+                }],
+                rows: 1,
+                cols: 1,
+                efficiency: (fit.width * fit.height) / (container.width * container.height)
+            };
+        }
+
+        // Sort streams by aspect ratio (widest first for better packing)
+        const sorted = [...streams].sort((a, b) =>
+            (b.aspectRatio || 16/9) - (a.aspectRatio || 16/9)
+        );
+
+        // Use a bin-packing approach
+        const cells = [];
+        const occupied = []; // Track occupied regions
+
+        // Calculate target cell sizes based on count
+        const targetArea = (container.width * container.height) / count;
+        const targetSize = Math.sqrt(targetArea);
+
+        // Track available rows
+        const rowHeights = [];
+        let currentY = 0;
+        let currentX = 0;
+        let currentRowHeight = 0;
+        let maxRowWidth = 0;
+
+        sorted.forEach((stream, index) => {
+            const aspectRatio = stream.aspectRatio || 16/9;
+
+            // Calculate size for this video
+            let width, height;
+            if (aspectRatio > 1) {
+                // Wide video
+                width = Math.min(targetSize * Math.sqrt(aspectRatio), container.width * 0.6);
+                height = width / aspectRatio;
+            } else {
+                // Tall video
+                height = Math.min(targetSize / Math.sqrt(aspectRatio), container.height * 0.6);
+                width = height * aspectRatio;
+            }
+
+            // Check if fits in current row
+            if (currentX + width > container.width) {
+                // Move to next row
+                currentY += currentRowHeight;
+                currentX = 0;
+                currentRowHeight = 0;
+            }
+
+            // Check if fits vertically
+            if (currentY + height > container.height) {
+                // Scale down remaining videos to fit
+                const remainingCount = count - index;
+                const remainingHeight = container.height - currentY;
+                const scaleFactor = Math.min(1, remainingHeight / height);
+                width *= scaleFactor;
+                height *= scaleFactor;
+            }
+
+            cells.push({
+                streamId: stream.id,
+                x: currentX,
+                y: currentY,
+                width: width,
+                height: height
+            });
+
+            currentX += width;
+            currentRowHeight = Math.max(currentRowHeight, height);
+            maxRowWidth = Math.max(maxRowWidth, currentX);
+        });
+
+        // Center the layout
+        const totalHeight = currentY + currentRowHeight;
+        const offsetX = (container.width - maxRowWidth) / 2;
+        const offsetY = (container.height - totalHeight) / 2;
+
+        cells.forEach(cell => {
+            cell.x += Math.max(0, offsetX);
+            cell.y += Math.max(0, offsetY);
+        });
+
+        // Calculate efficiency
+        const videoArea = cells.reduce((sum, cell) => sum + (cell.width * cell.height), 0);
+        const efficiency = videoArea / (container.width * container.height);
+
+        // Estimate cols for keyboard nav
+        const avgWidth = cells.reduce((sum, cell) => sum + cell.width, 0) / cells.length;
+        const cols = Math.round(container.width / avgWidth);
+
+        return {
+            cells,
+            rows: Math.ceil(count / cols),
+            cols,
+            efficiency
+        };
     }
 
     /**
@@ -325,18 +577,18 @@ const PlexdApp = (function() {
     /**
      * Show empty state message
      */
-    function showEmptyState() {
+    function showEmptyState(title = 'No Streams', message = 'Enter a video URL above to add your first stream') {
         let emptyState = document.getElementById('empty-state');
         if (!emptyState) {
             emptyState = document.createElement('div');
             emptyState.id = 'empty-state';
             emptyState.className = 'plexd-empty-state';
-            emptyState.innerHTML = `
-                <h2>No Streams</h2>
-                <p>Enter a video URL above to add your first stream</p>
-            `;
             containerEl.appendChild(emptyState);
         }
+        emptyState.innerHTML = `
+            <h2>${escapeHtml(title)}</h2>
+            <p>${escapeHtml(message)}</p>
+        `;
         emptyState.style.display = 'flex';
     }
 
@@ -475,6 +727,24 @@ const PlexdApp = (function() {
             case '?':
                 // Toggle keyboard shortcuts visibility
                 toggleShortcutsOverlay();
+                break;
+            case 't':
+            case 'T':
+                // Toggle header toolbar
+                toggleHeader();
+                break;
+            case 'g':
+            case 'G':
+                // Toggle favorites view
+                setViewMode(viewMode === 'all' ? 'favorites' : 'all');
+                break;
+            case '*':
+            case '8': // Shift+8 = * on many keyboards
+                // Favorite selected stream
+                if (selected && e.shiftKey || e.key === '*') {
+                    const nowFavorited = PlexdStream.toggleFavorite(selected.id);
+                    showMessage(nowFavorited ? 'Added to favorites' : 'Removed from favorites', 'info');
+                }
                 break;
         }
     }
@@ -1168,7 +1438,11 @@ const PlexdApp = (function() {
         playAllFromQueue,
         // History
         clearHistory,
-        togglePanel
+        togglePanel,
+        // View modes
+        setViewMode,
+        toggleTetrisMode,
+        toggleHeader
     };
 })();
 

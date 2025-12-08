@@ -830,3 +830,222 @@ body {
     gap: 12px;
     justify-content: flex-end;
 }
+
+/* ========================================
+   Header Toggle (Floating Action Button)
+   ======================================== */
+
+.plexd-header-toggle {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(99, 102, 241, 0.9);
+    border: none;
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 200;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.plexd-header-toggle:hover {
+    background: rgba(99, 102, 241, 1);
+    transform: scale(1.1);
+}
+
+.plexd-header-toggle.header-visible {
+    opacity: 0.5;
+}
+
+.plexd-header-toggle.header-visible:hover {
+    opacity: 1;
+}
+
+/* Header hidden state */
+.plexd-header.plexd-header-hidden {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.plexd-header {
+    transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+/* Expand container when header is hidden */
+.plexd-app.header-hidden #plexd-container {
+    height: 100vh;
+}
+
+/* ========================================
+   Responsive Per-Stream Controls
+   ======================================== */
+
+/* Small stream cells - compact controls */
+.plexd-stream.plexd-compact-controls .plexd-controls {
+    padding: 6px;
+}
+
+.plexd-stream.plexd-compact-controls .plexd-seek-container {
+    margin-bottom: 4px;
+    gap: 4px;
+}
+
+.plexd-stream.plexd-compact-controls .plexd-seek-bar {
+    height: 4px;
+}
+
+.plexd-stream.plexd-compact-controls .plexd-time-display {
+    font-size: 9px;
+}
+
+.plexd-stream.plexd-compact-controls .plexd-btn-row {
+    gap: 2px;
+}
+
+.plexd-stream.plexd-compact-controls .plexd-btn {
+    width: 22px;
+    height: 22px;
+    font-size: 10px;
+}
+
+/* Very small cells - minimal controls */
+.plexd-stream.plexd-minimal-controls .plexd-controls {
+    padding: 4px;
+}
+
+.plexd-stream.plexd-minimal-controls .plexd-seek-container {
+    display: none;
+}
+
+.plexd-stream.plexd-minimal-controls .plexd-btn-row {
+    gap: 1px;
+}
+
+.plexd-stream.plexd-minimal-controls .plexd-btn {
+    width: 18px;
+    height: 18px;
+    font-size: 9px;
+}
+
+/* Hide some buttons in minimal mode - keep only essential controls */
+.plexd-stream.plexd-minimal-controls .plexd-skip-btn,
+.plexd-stream.plexd-minimal-controls .plexd-pip-btn,
+.plexd-stream.plexd-minimal-controls .plexd-info-btn,
+.plexd-stream.plexd-minimal-controls .plexd-popout-btn {
+    display: none;
+}
+
+/* ========================================
+   Favorites System
+   ======================================== */
+
+/* Favorite indicator on stream */
+.plexd-favorite-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.plexd-stream.plexd-favorited .plexd-favorite-indicator {
+    opacity: 1;
+}
+
+.plexd-stream:hover .plexd-favorite-indicator {
+    opacity: 1;
+}
+
+/* Favorite button in controls */
+.plexd-btn.plexd-fav-btn {
+    color: #888;
+}
+
+.plexd-btn.plexd-fav-btn.favorited {
+    color: #fbbf24;
+}
+
+/* View toggle buttons in header */
+.plexd-view-toggle {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+}
+
+.plexd-view-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+    border: 1px solid #444;
+    background: transparent;
+    color: #888;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.plexd-view-btn:hover {
+    background: #333;
+    color: #fff;
+}
+
+.plexd-view-btn.active {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #fff;
+}
+
+.plexd-view-btn .badge {
+    display: inline-block;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1px 5px;
+    border-radius: 8px;
+    font-size: 10px;
+    margin-left: 4px;
+}
+
+/* ========================================
+   Tetris Layout Mode
+   ======================================== */
+
+.plexd-tetris-btn {
+    background: #333;
+}
+
+.plexd-tetris-btn.active {
+    background: #22c55e;
+    color: #fff;
+}
+
+/* Tetris mode indicator */
+.plexd-app.tetris-mode #plexd-container::before {
+    content: 'TETRIS MODE';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(34, 197, 94, 0.8);
+    color: #fff;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    z-index: 50;
+    letter-spacing: 1px;
+}

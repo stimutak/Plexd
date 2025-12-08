@@ -13,6 +13,11 @@
 </head>
 <body>
     <div class="plexd-app">
+        <!-- Header Toggle Button (always visible) -->
+        <button id="header-toggle" class="plexd-header-toggle header-visible" title="Toggle toolbar (T)">
+            ☰
+        </button>
+
         <!-- Header / Toolbar -->
         <header class="plexd-header">
             <div class="plexd-logo">Plex<span>d</span></div>
@@ -36,6 +41,22 @@
                     <span>Streams:</span>
                     <span id="stream-count" class="plexd-stat-value">0</span>
                 </div>
+
+                <!-- View Toggle (All / Favorites) -->
+                <div class="plexd-view-toggle">
+                    <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams">
+                        All
+                    </button>
+                    <button id="view-favs-btn" class="plexd-view-btn" onclick="PlexdApp.setViewMode('favorites')" title="Show favorites only">
+                        Favs <span id="favs-count" class="badge">0</span>
+                    </button>
+                </div>
+
+                <!-- Tetris Layout Toggle -->
+                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Toggle Tetris layout mode">
+                    Tetris
+                </button>
+
                 <button onclick="PlexdApp.togglePanel('queue-panel')" class="plexd-button plexd-button-secondary" title="Queue">
                     Queue <span id="queue-count" class="plexd-badge">0</span>
                 </button>
@@ -112,6 +133,9 @@
             <kbd>Space</kbd> Play/Pause &nbsp;
             <kbd>M</kbd> Mute &nbsp;
             <kbd>F</kbd> True Fullscreen &nbsp;
+            <kbd>T</kbd> Toggle Toolbar &nbsp;
+            <kbd>G</kbd> Favorites View &nbsp;
+            <kbd>*</kbd> Favorite Stream &nbsp;
             <kbd>?</kbd> Hide this
         </div>
     </div>

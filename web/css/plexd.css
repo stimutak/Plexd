@@ -939,65 +939,87 @@ body {
 .plexd-stream.plexd-minimal-controls .plexd-skip-btn,
 .plexd-stream.plexd-minimal-controls .plexd-pip-btn,
 .plexd-stream.plexd-minimal-controls .plexd-info-btn,
-.plexd-stream.plexd-minimal-controls .plexd-popout-btn {
+.plexd-stream.plexd-minimal-controls .plexd-popout-btn,
+.plexd-stream.plexd-minimal-controls .plexd-rating-btn {
     display: none;
 }
 
 /* ========================================
-   Favorites System
+   Rating System
    ======================================== */
 
-/* Favorite indicator on stream */
-.plexd-favorite-indicator {
+/* Rating indicator on stream */
+.plexd-rating-indicator {
     position: absolute;
     top: 8px;
     right: 8px;
-    width: 24px;
+    min-width: 24px;
     height: 24px;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 50%;
+    padding: 0 6px;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
+    font-size: 12px;
     z-index: 5;
     opacity: 0;
     transition: opacity 0.2s;
+    color: #fbbf24;
+    letter-spacing: -2px;
 }
 
-.plexd-stream.plexd-favorited .plexd-favorite-indicator {
+.plexd-rating-indicator.rated {
     opacity: 1;
 }
 
-.plexd-stream:hover .plexd-favorite-indicator {
+.plexd-stream:hover .plexd-rating-indicator {
     opacity: 1;
 }
 
-/* Favorite button in controls */
-.plexd-btn.plexd-fav-btn {
+/* Rating colors by level */
+.plexd-rating-indicator.rated-1 { color: #ef4444; }
+.plexd-rating-indicator.rated-2 { color: #f97316; }
+.plexd-rating-indicator.rated-3 { color: #eab308; }
+.plexd-rating-indicator.rated-4 { color: #84cc16; }
+.plexd-rating-indicator.rated-5 { color: #22c55e; }
+
+/* Rating button in controls */
+.plexd-btn.plexd-rating-btn {
     color: #888;
+    min-width: 28px;
+    letter-spacing: -2px;
+    font-size: 12px;
 }
 
-.plexd-btn.plexd-fav-btn.favorited {
+.plexd-btn.plexd-rating-btn.rated {
     color: #fbbf24;
 }
+
+.plexd-btn.plexd-rating-btn.rated-1 { color: #ef4444; }
+.plexd-btn.plexd-rating-btn.rated-2 { color: #f97316; }
+.plexd-btn.plexd-rating-btn.rated-3 { color: #eab308; }
+.plexd-btn.plexd-rating-btn.rated-4 { color: #84cc16; }
+.plexd-btn.plexd-rating-btn.rated-5 { color: #22c55e; }
 
 /* View toggle buttons in header */
 .plexd-view-toggle {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     margin-left: 8px;
+    flex-wrap: wrap;
 }
 
 .plexd-view-btn {
-    padding: 6px 12px;
-    font-size: 12px;
+    padding: 4px 8px;
+    font-size: 11px;
     border: 1px solid #444;
     background: transparent;
     color: #888;
     border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s;
+    letter-spacing: -1px;
 }
 
 .plexd-view-btn:hover {
@@ -1011,14 +1033,36 @@ body {
     color: #fff;
 }
 
+/* Rating-specific view button colors when active */
+.plexd-view-btn.rating-1.active { background: #ef4444; border-color: #ef4444; }
+.plexd-view-btn.rating-2.active { background: #f97316; border-color: #f97316; }
+.plexd-view-btn.rating-3.active { background: #eab308; border-color: #eab308; }
+.plexd-view-btn.rating-4.active { background: #84cc16; border-color: #84cc16; }
+.plexd-view-btn.rating-5.active { background: #22c55e; border-color: #22c55e; }
+
 .plexd-view-btn .badge {
     display: inline-block;
     background: rgba(255, 255, 255, 0.2);
-    padding: 1px 5px;
+    padding: 1px 4px;
     border-radius: 8px;
-    font-size: 10px;
-    margin-left: 4px;
+    font-size: 9px;
+    margin-left: 2px;
+    letter-spacing: 0;
 }
+
+/* Hide zero counts */
+.plexd-view-btn .badge:empty,
+.plexd-view-btn .badge[data-count="0"] {
+    display: none;
+}
+
+/* Rated stream border indicators */
+.plexd-stream.plexd-rated { outline-offset: -2px; }
+.plexd-stream.plexd-rated-1 { outline: 2px solid rgba(239, 68, 68, 0.5); }
+.plexd-stream.plexd-rated-2 { outline: 2px solid rgba(249, 115, 22, 0.5); }
+.plexd-stream.plexd-rated-3 { outline: 2px solid rgba(234, 179, 8, 0.5); }
+.plexd-stream.plexd-rated-4 { outline: 2px solid rgba(132, 204, 22, 0.5); }
+.plexd-stream.plexd-rated-5 { outline: 2px solid rgba(34, 197, 94, 0.5); }
 
 /* ========================================
    Tetris Layout Mode

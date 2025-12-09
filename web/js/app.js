@@ -18,8 +18,11 @@ const PlexdApp = (function() {
     const streamQueue = [];
     const streamHistory = [];
 
-    // View mode: 'all' or 'favorites'
+    // View mode: 'all', or 1-5 for star ratings
     let viewMode = 'all';
+
+    // View mode cycle order: all -> 1 -> 2 -> 3 -> 4 -> 5 -> all
+    const viewModes = ['all', 1, 2, 3, 4, 5];
 
     // Tetris layout mode
     let tetrisMode = false;
@@ -65,15 +68,15 @@ const PlexdApp = (function() {
         // Set up header toggle button
         setupHeaderToggle();
 
-        // Set up favorites callback
-        PlexdStream.setFavoritesUpdateCallback(updateFavoritesUI);
-        updateFavoritesUI();
+        // Set up ratings callback
+        PlexdStream.setRatingsUpdateCallback(updateRatingsUI);
+        updateRatingsUI();
 
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
 
-        // Sync favorite status for loaded streams
-        setTimeout(() => PlexdStream.syncFavoriteStatus(), 100);
+        // Sync rating status for loaded streams
+        setTimeout(() => PlexdStream.syncRatingStatus(), 100);
 
         console.log('Plexd initialized');
     }
@@ -120,13 +123,21 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Update favorites UI elements
+     * Update ratings UI elements
      */
-    function updateFavoritesUI() {
-        const favsCountEl = document.getElementById('favs-count');
-        if (favsCountEl) {
-            favsCountEl.textContent = PlexdStream.getFavoriteCount();
+    function updateRatingsUI() {
+        const counts = PlexdStream.getAllRatingCounts();
+
+        // Update view button badges
+        for (let i = 1; i <= 5; i++) {
+            const badge = document.getElementById(`rating-${i}-count`);
+            if (badge) {
+                badge.textContent = counts[i];
+            }
         }
+
+        // Update current view button active state
+        updateViewButtons();
     }
 
     /**
@@ -359,24 +370,26 @@ const PlexdApp = (function() {
 
         const allStreams = PlexdStream.getAllStreams();
 
-        // Filter based on view mode
+        // Filter based on view mode (all or specific star rating)
         let streamsToShow = allStreams;
-        if (viewMode === 'favorites') {
-            streamsToShow = PlexdStream.getFavoritedStreams();
+        if (viewMode !== 'all') {
+            streamsToShow = PlexdStream.getStreamsByRating(viewMode);
         }
 
         // Handle visibility of streams based on view mode
         allStreams.forEach(stream => {
-            if (viewMode === 'favorites') {
-                stream.wrapper.style.display = PlexdStream.isFavorited(stream.url) ? '' : 'none';
-            } else {
+            if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
+            } else {
+                const rating = PlexdStream.getRating(stream.url);
+                stream.wrapper.style.display = (rating === viewMode) ? '' : 'none';
             }
         });
 
         if (streamsToShow.length === 0) {
-            if (viewMode === 'favorites' && allStreams.length > 0) {
-                showEmptyState('No Favorites', 'Star some streams to see them here');
+            if (viewMode !== 'all' && allStreams.length > 0) {
+                const stars = '★'.repeat(viewMode);
+                showEmptyState(`No ${stars} Streams`, `Rate streams with ${viewMode} star${viewMode > 1 ? 's' : ''} to see them here`);
             } else {
                 showEmptyState();
             }
@@ -413,25 +426,46 @@ const PlexdApp = (function() {
             efficiencyEl.textContent = Math.round(layout.efficiency * 100) + '%';
         }
 
-        // Update favorites count
-        updateFavoritesUI();
+        // Update ratings UI
+        updateRatingsUI();
     }
 
     /**
-     * Set view mode (all or favorites)
+     * Set view mode (all or 1-5 for star ratings)
      */
     function setViewMode(mode) {
         viewMode = mode;
-
-        // Update button states
-        const allBtn = document.getElementById('view-all-btn');
-        const favsBtn = document.getElementById('view-favs-btn');
-
-        if (allBtn) allBtn.classList.toggle('active', mode === 'all');
-        if (favsBtn) favsBtn.classList.toggle('active', mode === 'favorites');
-
+        updateViewButtons();
         updateLayout();
-        showMessage(`View: ${mode === 'all' ? 'All Streams' : 'Favorites Only'}`, 'info');
+
+        if (mode === 'all') {
+            showMessage('View: All Streams', 'info');
+        } else {
+            const stars = '★'.repeat(mode);
+            showMessage(`View: ${stars} Streams`, 'info');
+        }
+    }
+
+    /**
+     * Cycle to next view mode (V key)
+     */
+    function cycleViewMode() {
+        const currentIndex = viewModes.indexOf(viewMode);
+        const nextIndex = (currentIndex + 1) % viewModes.length;
+        setViewMode(viewModes[nextIndex]);
+    }
+
+    /**
+     * Update view button active states
+     */
+    function updateViewButtons() {
+        const allBtn = document.getElementById('view-all-btn');
+        if (allBtn) allBtn.classList.toggle('active', viewMode === 'all');
+
+        for (let i = 1; i <= 5; i++) {
+            const btn = document.getElementById(`view-${i}-btn`);
+            if (btn) btn.classList.toggle('active', viewMode === i);
+        }
     }
 
     /**
@@ -733,17 +767,38 @@ const PlexdApp = (function() {
                 // Toggle header toolbar
                 toggleHeader();
                 break;
+            case 'v':
+            case 'V':
+                // Cycle view mode (all -> 1★ -> 2★ -> 3★ -> 4★ -> 5★ -> all)
+                cycleViewMode();
+                break;
             case 'g':
             case 'G':
-                // Toggle favorites view
-                setViewMode(viewMode === 'all' ? 'favorites' : 'all');
+                // Rate selected stream (cycle through ratings)
+                if (selected) {
+                    const newRating = PlexdStream.cycleRating(selected.id);
+                    const stars = '★'.repeat(newRating);
+                    showMessage(`Rated: ${stars}`, 'info');
+                }
                 break;
-            case '*':
-            case '8': // Shift+8 = * on many keyboards
-                // Favorite selected stream
-                if (selected && e.shiftKey || e.key === '*') {
-                    const nowFavorited = PlexdStream.toggleFavorite(selected.id);
-                    showMessage(nowFavorited ? 'Added to favorites' : 'Removed from favorites', 'info');
+            case '0':
+                // Clear rating on selected stream
+                if (selected) {
+                    PlexdStream.clearRating(selected.id);
+                    showMessage('Rating cleared', 'info');
+                }
+                break;
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+                // Set specific rating on selected stream
+                if (selected && !e.ctrlKey && !e.metaKey) {
+                    const rating = parseInt(e.key);
+                    PlexdStream.setRating(selected.id, rating);
+                    const stars = '★'.repeat(rating);
+                    showMessage(`Rated: ${stars}`, 'info');
                 }
                 break;
         }
@@ -1441,6 +1496,7 @@ const PlexdApp = (function() {
         togglePanel,
         // View modes
         setViewMode,
+        cycleViewMode,
         toggleTetrisMode,
         toggleHeader
     };

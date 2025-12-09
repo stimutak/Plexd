@@ -27,11 +27,11 @@ const PlexdStream = (function() {
     // Current grid layout for navigation
     let gridCols = 1;
 
-    // Favorites set - stores favorited stream URLs
-    const favorites = new Set();
+    // Ratings map - stores stream URL -> rating (1-5 stars, 0 = not rated)
+    const ratings = new Map();
 
-    // Callback for favorites updates
-    let favoritesUpdateCallback = null;
+    // Callback for ratings updates
+    let ratingsUpdateCallback = null;
 
     /**
      * Create a new stream from a URL
@@ -62,16 +62,16 @@ const PlexdStream = (function() {
         // Create info overlay
         const infoOverlay = createInfoOverlay(url);
 
-        // Create favorite indicator (always present, visibility controlled by CSS)
-        const favIndicator = document.createElement('div');
-        favIndicator.className = 'plexd-favorite-indicator';
-        favIndicator.innerHTML = '★';
+        // Create rating indicator (always present, visibility controlled by CSS)
+        const ratingIndicator = document.createElement('div');
+        ratingIndicator.className = 'plexd-rating-indicator';
+        ratingIndicator.innerHTML = ''; // Will be set based on rating
 
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
         wrapper.appendChild(infoOverlay);
-        wrapper.appendChild(favIndicator);
+        wrapper.appendChild(ratingIndicator);
 
         // Make draggable and focusable (for keyboard in fullscreen)
         wrapper.draggable = true;
@@ -238,14 +238,14 @@ const PlexdStream = (function() {
             toggleTrueFullscreen(streamId);
         };
 
-        // Favorite button
-        const favBtn = document.createElement('button');
-        favBtn.className = 'plexd-btn plexd-fav-btn';
-        favBtn.innerHTML = '☆';
-        favBtn.title = 'Toggle favorite (*)';
-        favBtn.onclick = (e) => {
+        // Rating button (cycles through 0-5 stars)
+        const ratingBtn = document.createElement('button');
+        ratingBtn.className = 'plexd-btn plexd-rating-btn';
+        ratingBtn.innerHTML = '☆';
+        ratingBtn.title = 'Rate stream (G to cycle 1-5, or click)';
+        ratingBtn.onclick = (e) => {
             e.stopPropagation();
-            toggleFavorite(streamId);
+            cycleRating(streamId);
         };
 
         // Info toggle button
@@ -271,7 +271,7 @@ const PlexdStream = (function() {
         buttonRow.appendChild(skipBackBtn);
         buttonRow.appendChild(muteBtn);
         buttonRow.appendChild(skipFwdBtn);
-        buttonRow.appendChild(favBtn);
+        buttonRow.appendChild(ratingBtn);
         buttonRow.appendChild(pipBtn);
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
@@ -1110,111 +1110,193 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Toggle favorite status for a stream
+     * Cycle rating for a stream (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 0)
      */
-    function toggleFavorite(streamId) {
+    function cycleRating(streamId) {
         const stream = streams.get(streamId);
-        if (!stream) return false;
+        if (!stream) return 0;
 
-        const isFavorited = favorites.has(stream.url);
+        const currentRating = ratings.get(stream.url) || 0;
+        const newRating = (currentRating % 5) + 1; // 1, 2, 3, 4, 5, then wraps
 
-        if (isFavorited) {
-            favorites.delete(stream.url);
-            stream.wrapper.classList.remove('plexd-favorited');
+        setRating(streamId, newRating);
+        return newRating;
+    }
+
+    /**
+     * Set rating for a stream (0-5)
+     */
+    function setRating(streamId, rating) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        // Clamp rating 0-5
+        rating = Math.max(0, Math.min(5, rating));
+
+        if (rating === 0) {
+            ratings.delete(stream.url);
         } else {
-            favorites.add(stream.url);
-            stream.wrapper.classList.add('plexd-favorited');
+            ratings.set(stream.url, rating);
         }
 
-        // Update favorite button appearance
-        updateFavoriteButton(stream);
+        // Update wrapper classes for all rating levels
+        for (let i = 1; i <= 5; i++) {
+            stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);
+        }
+        stream.wrapper.classList.toggle('plexd-rated', rating > 0);
 
-        // Persist favorites
-        saveFavorites();
+        // Update rating button and indicator
+        updateRatingDisplay(stream);
+
+        // Persist ratings
+        saveRatings();
 
         // Notify callback
-        if (favoritesUpdateCallback) {
-            favoritesUpdateCallback();
-        }
-
-        return !isFavorited;
-    }
-
-    /**
-     * Update favorite button appearance
-     */
-    function updateFavoriteButton(stream) {
-        const favBtn = stream.controls.querySelector('.plexd-fav-btn');
-        if (favBtn) {
-            const isFavorited = favorites.has(stream.url);
-            favBtn.innerHTML = isFavorited ? '★' : '☆';
-            favBtn.classList.toggle('favorited', isFavorited);
+        if (ratingsUpdateCallback) {
+            ratingsUpdateCallback();
         }
     }
 
     /**
-     * Check if a stream URL is favorited
+     * Clear rating for a stream
      */
-    function isFavorited(url) {
-        return favorites.has(url);
+    function clearRating(streamId) {
+        setRating(streamId, 0);
     }
 
     /**
-     * Get all favorited stream URLs
+     * Update rating button and indicator appearance
      */
-    function getFavorites() {
-        return Array.from(favorites);
-    }
+    function updateRatingDisplay(stream) {
+        const rating = ratings.get(stream.url) || 0;
 
-    /**
-     * Get favorited streams (currently active)
-     */
-    function getFavoritedStreams() {
-        return Array.from(streams.values()).filter(s => favorites.has(s.url));
-    }
+        // Update button
+        const ratingBtn = stream.controls.querySelector('.plexd-rating-btn');
+        if (ratingBtn) {
+            if (rating === 0) {
+                ratingBtn.innerHTML = '☆';
+                ratingBtn.className = 'plexd-btn plexd-rating-btn';
+            } else {
+                ratingBtn.innerHTML = '★'.repeat(rating);
+                ratingBtn.className = `plexd-btn plexd-rating-btn rated rated-${rating}`;
+            }
+        }
 
-    /**
-     * Get favorite count
-     */
-    function getFavoriteCount() {
-        // Count how many current streams are favorited
-        return Array.from(streams.values()).filter(s => favorites.has(s.url)).length;
-    }
-
-    /**
-     * Save favorites to localStorage
-     */
-    function saveFavorites() {
-        localStorage.setItem('plexd_favorites', JSON.stringify(Array.from(favorites)));
-    }
-
-    /**
-     * Load favorites from localStorage
-     */
-    function loadFavorites() {
-        const saved = localStorage.getItem('plexd_favorites');
-        if (saved) {
-            const urls = JSON.parse(saved);
-            favorites.clear();
-            urls.forEach(url => favorites.add(url));
+        // Update indicator
+        const indicator = stream.wrapper.querySelector('.plexd-rating-indicator');
+        if (indicator) {
+            if (rating === 0) {
+                indicator.innerHTML = '';
+                indicator.className = 'plexd-rating-indicator';
+            } else {
+                indicator.innerHTML = '★'.repeat(rating);
+                indicator.className = `plexd-rating-indicator rated rated-${rating}`;
+            }
         }
     }
 
     /**
-     * Set favorites update callback
+     * Get rating for a stream URL
      */
-    function setFavoritesUpdateCallback(callback) {
-        favoritesUpdateCallback = callback;
+    function getRating(url) {
+        return ratings.get(url) || 0;
     }
 
     /**
-     * Sync favorite status for existing streams (call after loading favorites)
+     * Get streams with a specific rating
      */
-    function syncFavoriteStatus() {
+    function getStreamsByRating(rating) {
+        return Array.from(streams.values()).filter(s => (ratings.get(s.url) || 0) === rating);
+    }
+
+    /**
+     * Get streams with any rating (rated streams)
+     */
+    function getRatedStreams() {
+        return Array.from(streams.values()).filter(s => ratings.has(s.url));
+    }
+
+    /**
+     * Get count of streams with a specific rating
+     */
+    function getRatingCount(rating) {
+        if (rating === 0) {
+            return Array.from(streams.values()).filter(s => !ratings.has(s.url)).length;
+        }
+        return Array.from(streams.values()).filter(s => ratings.get(s.url) === rating).length;
+    }
+
+    /**
+     * Get all rating counts
+     */
+    function getAllRatingCounts() {
+        const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         streams.forEach(stream => {
-            if (favorites.has(stream.url)) {
-                stream.wrapper.classList.add('plexd-favorited');
-                updateFavoriteButton(stream);
+            const rating = ratings.get(stream.url) || 0;
+            counts[rating]++;
+        });
+        return counts;
+    }
+
+    /**
+     * Save ratings to localStorage
+     */
+    function saveRatings() {
+        const obj = {};
+        ratings.forEach((rating, url) => {
+            obj[url] = rating;
+        });
+        localStorage.setItem('plexd_ratings', JSON.stringify(obj));
+    }
+
+    /**
+     * Load ratings from localStorage
+     */
+    function loadRatings() {
+        // Load new ratings format
+        const saved = localStorage.getItem('plexd_ratings');
+        if (saved) {
+            const obj = JSON.parse(saved);
+            ratings.clear();
+            Object.keys(obj).forEach(url => {
+                ratings.set(url, obj[url]);
+            });
+        }
+
+        // Migrate old favorites to 5-star ratings
+        const oldFavorites = localStorage.getItem('plexd_favorites');
+        if (oldFavorites) {
+            const urls = JSON.parse(oldFavorites);
+            urls.forEach(url => {
+                if (!ratings.has(url)) {
+                    ratings.set(url, 5); // Migrate favorites to 5-star
+                }
+            });
+            // Remove old format after migration
+            localStorage.removeItem('plexd_favorites');
+            saveRatings();
+        }
+    }
+
+    /**
+     * Set ratings update callback
+     */
+    function setRatingsUpdateCallback(callback) {
+        ratingsUpdateCallback = callback;
+    }
+
+    /**
+     * Sync rating status for existing streams (call after loading ratings)
+     */
+    function syncRatingStatus() {
+        streams.forEach(stream => {
+            const rating = ratings.get(stream.url);
+            if (rating) {
+                for (let i = 1; i <= 5; i++) {
+                    stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);
+                }
+                stream.wrapper.classList.add('plexd-rated');
+                updateRatingDisplay(stream);
             }
         });
     }
@@ -1239,8 +1321,8 @@ const PlexdStream = (function() {
         }
     }
 
-    // Load favorites on init
-    loadFavorites();
+    // Load ratings on init
+    loadRatings();
 
     // Public API
     return {
@@ -1273,14 +1355,17 @@ const PlexdStream = (function() {
         reorderStreams,
         seekRelative,
         seekTo,
-        // Favorites
-        toggleFavorite,
-        isFavorited,
-        getFavorites,
-        getFavoritedStreams,
-        getFavoriteCount,
-        setFavoritesUpdateCallback,
-        syncFavoriteStatus,
+        // Ratings
+        cycleRating,
+        setRating,
+        clearRating,
+        getRating,
+        getStreamsByRating,
+        getRatedStreams,
+        getRatingCount,
+        getAllRatingCounts,
+        setRatingsUpdateCallback,
+        syncRatingStatus,
         // Responsive controls
         updateControlsSize
     };

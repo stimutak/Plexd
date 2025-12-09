@@ -700,8 +700,12 @@ const PlexdApp = (function() {
     function toggleCleanMode() {
         const clean = PlexdStream.toggleCleanMode();
         const btn = document.getElementById('clean-mode-btn');
-        if (btn) btn.classList.toggle('active', clean);
-        showMessage(clean ? 'Clean mode ON' : 'Clean mode OFF', 'info');
+        if (btn) {
+            btn.classList.toggle('active', clean);
+            btn.textContent = clean ? '🙈' : '👁';
+            btn.title = clean ? 'Show per-stream controls' : 'Hide per-stream controls';
+        }
+        showMessage(clean ? 'Controls hidden' : 'Controls visible', 'info');
     }
 
     /**

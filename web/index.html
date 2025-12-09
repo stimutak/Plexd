@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=3">
+    <link rel="stylesheet" href="css/plexd.css?v=4">
 </head>
 <body>
     <div class="plexd-app">
@@ -44,49 +44,20 @@
 
                 <!-- View Toggle (All / Star Ratings) -->
                 <div class="plexd-view-toggle">
-                    <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams (V to cycle)">
-                        All
-                    </button>
-                    <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="Show 1-star streams">
-                        ★<span id="rating-1-count" class="badge">0</span>
-                    </button>
-                    <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="Show 2-star streams">
-                        ★★<span id="rating-2-count" class="badge">0</span>
-                    </button>
-                    <button id="view-3-btn" class="plexd-view-btn rating-3" onclick="PlexdApp.setViewMode(3)" title="Show 3-star streams">
-                        ★★★<span id="rating-3-count" class="badge">0</span>
-                    </button>
-                    <button id="view-4-btn" class="plexd-view-btn rating-4" onclick="PlexdApp.setViewMode(4)" title="Show 4-star streams">
-                        ★★★★<span id="rating-4-count" class="badge">0</span>
-                    </button>
-                    <button id="view-5-btn" class="plexd-view-btn rating-5" onclick="PlexdApp.setViewMode(5)" title="Show 5-star streams">
-                        ★★★★★<span id="rating-5-count" class="badge">0</span>
-                    </button>
+                    <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams (V to cycle)">All</button>
+                    <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="1-star">1</button>
+                    <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="2-star">2</button>
+                    <button id="view-3-btn" class="plexd-view-btn rating-3" onclick="PlexdApp.setViewMode(3)" title="3-star">3</button>
+                    <button id="view-4-btn" class="plexd-view-btn rating-4" onclick="PlexdApp.setViewMode(4)" title="4-star">4</button>
+                    <button id="view-5-btn" class="plexd-view-btn rating-5" onclick="PlexdApp.setViewMode(5)" title="5-star">5</button>
                 </div>
 
-                <!-- Tetris Layout Toggle -->
-                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Toggle Tetris layout mode">
-                    Tetris
-                </button>
-
-                <button onclick="PlexdApp.togglePanel('queue-panel')" class="plexd-button plexd-button-secondary" title="Queue">
-                    Queue <span id="queue-count" class="plexd-badge">0</span>
-                </button>
-                <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">
-                    History
-                </button>
-                <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save stream combination (Ctrl+S)">
-                    Save
-                </button>
-                <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Load saved combinations">
-                    Load
-                </button>
-                <button onclick="PlexdStream.popoutAllStreams()" class="plexd-button plexd-button-secondary" title="Pop out all streams to separate windows">
-                    Pop Out All
-                </button>
-                <button id="clear-all-btn" class="plexd-button plexd-button-secondary" title="Clear all streams">
-                    Clear All
-                </button>
+                <!-- Layout & Actions -->
+                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout">T</button>
+                <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
+                <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save current (Ctrl+S)">+</button>
+                <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
+                <button id="clear-all-btn" class="plexd-button plexd-button-secondary" title="Clear all">Clear</button>
             </div>
         </header>
 
@@ -156,8 +127,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=3"></script>
-    <script src="js/stream.js?v=3"></script>
-    <script src="js/app.js?v=3"></script>
+    <script src="js/grid.js?v=4"></script>
+    <script src="js/stream.js?v=4"></script>
+    <script src="js/app.js?v=4"></script>
 </body>
 </html>

@@ -43,22 +43,23 @@ body {
 .plexd-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: #1a1a1a;
-    border-bottom: 1px solid #333;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #161616;
+    border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;
+    height: 40px;
 }
 
 .plexd-logo {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #ccc;
     letter-spacing: -0.5px;
 }
 
 .plexd-logo span {
-    color: #6366f1;
+    color: #888;
 }
 
 /* URL Input */
@@ -71,10 +72,10 @@ body {
 
 .plexd-input {
     flex: 1;
-    padding: 8px 12px;
-    font-size: 14px;
+    padding: 4px 8px;
+    font-size: 12px;
     border: 1px solid #333;
-    border-radius: 6px;
+    border-radius: 4px;
     background: #0a0a0a;
     color: #fff;
     outline: none;
@@ -82,7 +83,7 @@ body {
 }
 
 .plexd-input:focus {
-    border-color: #6366f1;
+    border-color: #555;
 }
 
 .plexd-input::placeholder {
@@ -91,26 +92,26 @@ body {
 
 /* Buttons */
 .plexd-button {
-    padding: 8px 16px;
-    font-size: 14px;
+    padding: 4px 10px;
+    font-size: 11px;
     font-weight: 500;
     border: none;
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .plexd-button-primary {
-    background: #6366f1;
+    background: #444;
     color: #fff;
 }
 
 .plexd-button-primary:hover {
-    background: #5558e3;
+    background: #555;
 }
 
 .plexd-button-primary:active {
-    background: #4749d4;
+    background: #666;
 }
 
 .plexd-button-secondary {
@@ -246,7 +247,7 @@ body {
     -webkit-appearance: none;
     width: 14px;
     height: 14px;
-    background: #6366f1;
+    background: #555;
     border-radius: 50%;
     cursor: pointer;
 }
@@ -254,7 +255,7 @@ body {
 .plexd-seek-bar::-moz-range-thumb {
     width: 14px;
     height: 14px;
-    background: #6366f1;
+    background: #555;
     border-radius: 50%;
     cursor: pointer;
     border: none;
@@ -364,78 +365,47 @@ body {
     }
 
     .plexd-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 16px;
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
     }
 
     .plexd-input,
     .plexd-button {
-        padding: 12px 16px;
-        font-size: 16px;
-    }
-
-    /* View toggle buttons - larger touch targets and better visibility */
-    .plexd-view-btn {
         padding: 8px 12px;
         font-size: 14px;
-        min-height: 36px;
-        background: #333;
-        border-color: #555;
-        color: #fff;
+        min-height: 32px;
     }
 
-    .plexd-view-btn.rating-1 { color: #ef4444; }
-    .plexd-view-btn.rating-2 { color: #f97316; }
-    .plexd-view-btn.rating-3 { color: #eab308; }
-    .plexd-view-btn.rating-4 { color: #84cc16; }
-    .plexd-view-btn.rating-5 { color: #22c55e; }
+    /* View toggle buttons - touch targets */
+    .plexd-view-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+        min-height: 28px;
+        background: #2a2a2a;
+        border-color: #444;
+    }
 
     /* Header toggle button */
     .plexd-header-toggle {
-        width: 48px;
-        height: 48px;
-        font-size: 22px;
-    }
-
-    /* Rating button in controls - more visible */
-    .plexd-btn.plexd-rating-btn {
-        min-width: 36px;
-        font-size: 16px;
-        background: rgba(0, 0, 0, 0.8);
-        color: #fbbf24;
-    }
-
-    /* Rating indicator always visible */
-    .plexd-rating-indicator {
-        min-width: 32px;
-        height: 32px;
-        font-size: 16px;
-        background: rgba(0, 0, 0, 0.9);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    /* Tetris button - more visible */
-    .plexd-tetris-btn {
-        min-height: 36px;
-        background: #444;
-        color: #fff;
-    }
-
-    .plexd-tetris-btn.active {
-        background: #22c55e;
-    }
-
-    /* General buttons in header */
-    .plexd-button-secondary {
-        background: #444;
-        color: #fff;
-    }
-
-    /* Header toggle always visible */
-    .plexd-header-toggle {
+        width: 36px;
+        height: 36px;
+        font-size: 18px;
         opacity: 1 !important;
-        background: rgba(99, 102, 241, 1);
+        background: #3a3a3a;
+    }
+
+    /* Rating button in controls */
+    .plexd-btn.plexd-rating-btn {
+        min-width: 32px;
+        font-size: 14px;
+    }
+
+    /* Rating indicator */
+    .plexd-rating-indicator {
+        min-width: 28px;
+        height: 28px;
+        font-size: 14px;
     }
 }
 
@@ -555,7 +525,7 @@ body {
    ======================================== */
 
 .plexd-stream.plexd-selected {
-    outline: 3px solid #6366f1;
+    outline: 3px solid #555;
     outline-offset: -3px;
     z-index: 10;
 }
@@ -678,12 +648,12 @@ body {
 }
 
 .plexd-combo-load {
-    background: #6366f1;
+    background: #555;
     color: #fff;
 }
 
 .plexd-combo-load:hover {
-    background: #5558e3;
+    background: #666;
 }
 
 .plexd-combo-delete {
@@ -710,14 +680,14 @@ body {
 
 .plexd-panel {
     position: fixed;
-    top: 56px;
-    right: -320px;
-    width: 300px;
-    height: calc(100vh - 56px);
-    background: #1a1a1a;
-    border-left: 1px solid #333;
+    top: 40px;
+    right: -280px;
+    width: 260px;
+    height: calc(100vh - 40px);
+    background: #161616;
+    border-left: 1px solid #2a2a2a;
     z-index: 100;
-    transition: right 0.3s ease;
+    transition: right 0.25s ease;
     display: flex;
     flex-direction: column;
 }
@@ -730,16 +700,16 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 16px;
-    background: #252525;
-    border-bottom: 1px solid #333;
+    padding: 8px 12px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
 }
 
 .plexd-panel-header h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 600;
-    color: #fff;
+    color: #ccc;
 }
 
 .plexd-panel-actions {
@@ -764,7 +734,7 @@ body {
 .plexd-button-small {
     padding: 4px 10px;
     font-size: 11px;
-    background: #6366f1;
+    background: #555;
     color: #fff;
     border: none;
     border-radius: 4px;
@@ -772,7 +742,7 @@ body {
 }
 
 .plexd-button-small:hover {
-    background: #5558e3;
+    background: #666;
 }
 
 .plexd-panel-content {
@@ -836,7 +806,7 @@ body {
 
 .plexd-badge {
     display: inline-block;
-    background: #6366f1;
+    background: #555;
     color: #fff;
     font-size: 10px;
     padding: 2px 6px;
@@ -930,31 +900,30 @@ body {
 
 .plexd-header-toggle {
     position: fixed;
-    top: 12px;
-    left: 12px;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: rgba(99, 102, 241, 0.9);
-    border: none;
-    color: #fff;
-    font-size: 18px;
+    top: 8px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    background: rgba(60, 60, 60, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #999;
+    font-size: 16px;
     cursor: pointer;
     z-index: 200;
-    transition: all 0.3s ease;
+    transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .plexd-header-toggle:hover {
-    background: rgba(99, 102, 241, 1);
-    transform: scale(1.1);
+    background: rgba(80, 80, 80, 1);
+    color: #fff;
 }
 
 .plexd-header-toggle.header-visible {
-    opacity: 0.5;
+    opacity: 0.6;
 }
 
 .plexd-header-toggle.header-visible:hover {
@@ -1118,40 +1087,38 @@ body {
 /* View toggle buttons in header */
 .plexd-view-toggle {
     display: flex;
-    gap: 2px;
-    margin-left: 8px;
-    flex-wrap: wrap;
+    gap: 1px;
+    margin-left: 4px;
 }
 
 .plexd-view-btn {
-    padding: 4px 8px;
-    font-size: 11px;
-    border: 1px solid #444;
-    background: transparent;
-    color: #888;
-    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    border: 1px solid #333;
+    background: #222;
+    color: #666;
+    border-radius: 3px;
     cursor: pointer;
-    transition: all 0.2s;
-    letter-spacing: -1px;
+    transition: all 0.15s;
 }
 
 .plexd-view-btn:hover {
     background: #333;
-    color: #fff;
+    color: #aaa;
 }
 
 .plexd-view-btn.active {
-    background: #6366f1;
-    border-color: #6366f1;
+    background: #444;
+    border-color: #555;
     color: #fff;
 }
 
 /* Rating-specific view button colors when active */
-.plexd-view-btn.rating-1.active { background: #ef4444; border-color: #ef4444; }
-.plexd-view-btn.rating-2.active { background: #f97316; border-color: #f97316; }
-.plexd-view-btn.rating-3.active { background: #eab308; border-color: #eab308; }
-.plexd-view-btn.rating-4.active { background: #84cc16; border-color: #84cc16; }
-.plexd-view-btn.rating-5.active { background: #22c55e; border-color: #22c55e; }
+.plexd-view-btn.rating-1.active { background: #7f1d1d; border-color: #991b1b; color: #fca5a5; }
+.plexd-view-btn.rating-2.active { background: #7c2d12; border-color: #9a3412; color: #fdba74; }
+.plexd-view-btn.rating-3.active { background: #713f12; border-color: #854d0e; color: #fde047; }
+.plexd-view-btn.rating-4.active { background: #365314; border-color: #3f6212; color: #bef264; }
+.plexd-view-btn.rating-5.active { background: #14532d; border-color: #166534; color: #86efac; }
 
 .plexd-view-btn .badge {
     display: inline-block;

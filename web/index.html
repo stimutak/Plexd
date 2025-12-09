@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=8">
+    <link rel="stylesheet" href="css/plexd.css?v=9">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -64,9 +64,7 @@
 
                 <!-- Sets & History -->
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
-                <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save current (Ctrl+S)">+</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
-                <button id="clear-all-btn" class="plexd-button plexd-button-secondary" title="Clear all">Clear</button>
             </div>
         </header>
 
@@ -103,6 +101,7 @@
             <div class="plexd-panel-header">
                 <h3>Saved Sets</h3>
                 <div class="plexd-panel-actions">
+                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams (Ctrl+S)">+ Save</button>
                     <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file (for AirDrop)">Export</button>
                     <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Import</button>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
@@ -136,8 +135,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=8"></script>
-    <script src="js/stream.js?v=8"></script>
-    <script src="js/app.js?v=8"></script>
+    <script src="js/grid.js?v=9"></script>
+    <script src="js/stream.js?v=9"></script>
+    <script src="js/app.js?v=9"></script>
 </body>
 </html>

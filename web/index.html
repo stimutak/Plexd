@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=7">
+    <link rel="stylesheet" href="css/plexd.css?v=8">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -54,6 +54,15 @@
 
                 <!-- Layout & Actions -->
                 <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout">T</button>
+
+                <!-- Global Controls -->
+                <button id="pause-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePauseAll()" title="Pause/Play all">⏸</button>
+                <button id="mute-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleMuteAll()" title="Mute all">🔇</button>
+                <button id="audio-focus-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleAudioFocus()" title="Audio focus mode">🎧</button>
+                <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls">👁</button>
+                <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="Fullscreen">⛶</button>
+
+                <!-- Sets & History -->
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button id="save-combo-btn" class="plexd-button plexd-button-secondary" title="Save current (Ctrl+S)">+</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
@@ -127,8 +136,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=7"></script>
-    <script src="js/stream.js?v=7"></script>
-    <script src="js/app.js?v=7"></script>
+    <script src="js/grid.js?v=8"></script>
+    <script src="js/stream.js?v=8"></script>
+    <script src="js/app.js?v=8"></script>
 </body>
 </html>

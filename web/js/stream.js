@@ -500,6 +500,30 @@ const PlexdStream = (function() {
         return showInfoOverlay;
     }
 
+    // Clean mode state (hide all per-stream controls)
+    let cleanMode = false;
+
+    /**
+     * Toggle clean mode (hide all per-stream overlays for distraction-free viewing)
+     */
+    function toggleCleanMode() {
+        cleanMode = !cleanMode;
+        const app = document.querySelector('.plexd-app');
+        if (cleanMode) {
+            app.classList.add('clean-mode');
+        } else {
+            app.classList.remove('clean-mode');
+        }
+        return cleanMode;
+    }
+
+    /**
+     * Get clean mode state
+     */
+    function isCleanMode() {
+        return cleanMode;
+    }
+
     /**
      * Update stream info overlay with current stats
      */
@@ -1091,6 +1115,54 @@ const PlexdStream = (function() {
         });
     }
 
+    // Global pause state
+    let globalPaused = false;
+
+    /**
+     * Toggle pause/play all streams
+     */
+    function togglePauseAll() {
+        globalPaused = !globalPaused;
+        if (globalPaused) {
+            pauseAll();
+        } else {
+            playAll();
+        }
+        return globalPaused;
+    }
+
+    // Global mute state
+    let globalMuted = false;
+
+    /**
+     * Toggle mute all streams
+     */
+    function toggleMuteAll() {
+        globalMuted = !globalMuted;
+        streams.forEach(stream => {
+            stream.video.muted = globalMuted;
+            const muteBtn = stream.controls.querySelector('.plexd-mute-btn');
+            if (muteBtn) muteBtn.innerHTML = globalMuted ? '&#128263;' : '&#128266;';
+        });
+        return globalMuted;
+    }
+
+    /**
+     * Request fullscreen for the entire app container
+     */
+    function toggleGlobalFullscreen() {
+        const container = document.querySelector('.plexd-app');
+        if (!document.fullscreenElement) {
+            container.requestFullscreen().catch(err => {
+                console.warn('Fullscreen not supported:', err);
+            });
+            return true;
+        } else {
+            document.exitFullscreen();
+            return false;
+        }
+    }
+
     /**
      * Get video elements map for layout engine
      */
@@ -1375,7 +1447,13 @@ const PlexdStream = (function() {
         setRatingsUpdateCallback,
         syncRatingStatus,
         // Responsive controls
-        updateControlsSize
+        updateControlsSize,
+        // Global controls
+        toggleCleanMode,
+        isCleanMode,
+        togglePauseAll,
+        toggleMuteAll,
+        toggleGlobalFullscreen
     };
 })();
 

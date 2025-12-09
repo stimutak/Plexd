@@ -946,6 +946,15 @@ body {
     height: 100vh;
 }
 
+/* Clean mode - hide all per-stream controls/overlays */
+.plexd-app.clean-mode .plexd-controls,
+.plexd-app.clean-mode .plexd-info-overlay,
+.plexd-app.clean-mode .plexd-rating-indicator,
+.plexd-app.clean-mode .plexd-status,
+.plexd-app.clean-mode .plexd-error-overlay .plexd-error-close {
+    display: none !important;
+}
+
 /* ========================================
    Responsive Per-Stream Controls
    ======================================== */

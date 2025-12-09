@@ -485,6 +485,53 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Toggle pause/play all streams
+     */
+    function togglePauseAll() {
+        const paused = PlexdStream.togglePauseAll();
+        const btn = document.getElementById('pause-all-btn');
+        if (btn) btn.textContent = paused ? '▶' : '⏸';
+        showMessage(paused ? 'All paused' : 'All playing', 'info');
+    }
+
+    /**
+     * Toggle mute all streams
+     */
+    function toggleMuteAll() {
+        const muted = PlexdStream.toggleMuteAll();
+        const btn = document.getElementById('mute-all-btn');
+        if (btn) btn.textContent = muted ? '🔊' : '🔇';
+        showMessage(muted ? 'All muted' : 'All unmuted', 'info');
+    }
+
+    /**
+     * Toggle audio focus mode
+     */
+    function toggleAudioFocus() {
+        const mode = PlexdStream.toggleAudioFocus();
+        const btn = document.getElementById('audio-focus-btn');
+        if (btn) btn.classList.toggle('active', mode !== 'off');
+        showMessage(`Audio focus: ${mode}`, 'info');
+    }
+
+    /**
+     * Toggle clean mode (hide per-stream controls)
+     */
+    function toggleCleanMode() {
+        const clean = PlexdStream.toggleCleanMode();
+        const btn = document.getElementById('clean-mode-btn');
+        if (btn) btn.classList.toggle('active', clean);
+        showMessage(clean ? 'Clean mode ON' : 'Clean mode OFF', 'info');
+    }
+
+    /**
+     * Toggle global fullscreen
+     */
+    function toggleGlobalFullscreen() {
+        PlexdStream.toggleGlobalFullscreen();
+    }
+
+    /**
      * Calculate Tetris-like layout based on video aspect ratios
      * Packs videos more efficiently by considering their actual proportions
      */
@@ -1498,7 +1545,13 @@ const PlexdApp = (function() {
         setViewMode,
         cycleViewMode,
         toggleTetrisMode,
-        toggleHeader
+        toggleHeader,
+        // Global controls
+        togglePauseAll,
+        toggleMuteAll,
+        toggleAudioFocus,
+        toggleCleanMode,
+        toggleGlobalFullscreen
     };
 })();
 

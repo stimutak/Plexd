@@ -375,12 +375,21 @@ body {
         font-size: 16px;
     }
 
-    /* View toggle buttons - larger touch targets */
+    /* View toggle buttons - larger touch targets and better visibility */
     .plexd-view-btn {
         padding: 8px 12px;
-        font-size: 13px;
+        font-size: 14px;
         min-height: 36px;
+        background: #333;
+        border-color: #555;
+        color: #fff;
     }
+
+    .plexd-view-btn.rating-1 { color: #ef4444; }
+    .plexd-view-btn.rating-2 { color: #f97316; }
+    .plexd-view-btn.rating-3 { color: #eab308; }
+    .plexd-view-btn.rating-4 { color: #84cc16; }
+    .plexd-view-btn.rating-5 { color: #22c55e; }
 
     /* Header toggle button */
     .plexd-header-toggle {
@@ -389,22 +398,44 @@ body {
         font-size: 22px;
     }
 
-    /* Rating button in controls */
+    /* Rating button in controls - more visible */
     .plexd-btn.plexd-rating-btn {
         min-width: 36px;
-        font-size: 14px;
+        font-size: 16px;
+        background: rgba(0, 0, 0, 0.8);
+        color: #fbbf24;
     }
 
-    /* Rating indicator always visible when rated */
+    /* Rating indicator always visible */
     .plexd-rating-indicator {
-        min-width: 28px;
-        height: 28px;
-        font-size: 14px;
+        min-width: 32px;
+        height: 32px;
+        font-size: 16px;
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.2);
     }
 
-    /* Tetris button */
+    /* Tetris button - more visible */
     .plexd-tetris-btn {
         min-height: 36px;
+        background: #444;
+        color: #fff;
+    }
+
+    .plexd-tetris-btn.active {
+        background: #22c55e;
+    }
+
+    /* General buttons in header */
+    .plexd-button-secondary {
+        background: #444;
+        color: #fff;
+    }
+
+    /* Header toggle always visible */
+    .plexd-header-toggle {
+        opacity: 1 !important;
+        background: rgba(99, 102, 241, 1);
     }
 }
 

@@ -27,8 +27,8 @@ const PlexdApp = (function() {
     // Tetris layout mode
     let tetrisMode = false;
 
-    // Header visibility
-    let headerVisible = true;
+    // Header visibility (starts hidden)
+    let headerVisible = false;
 
     /**
      * Initialize the application

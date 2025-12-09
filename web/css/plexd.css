@@ -49,8 +49,13 @@ body {
     border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;
     height: 40px;
+<<<<<<< HEAD
     position: relative;
     z-index: 10001;
+=======
+    z-index: 10000;
+    position: relative;
+>>>>>>> bf39c15 (Fix header and hamburger menu z-index for fullscreen)
 }
 
 .plexd-logo {
@@ -929,7 +934,7 @@ body {
     color: #999;
     font-size: 16px;
     cursor: pointer;
-    z-index: 10000;
+    z-index: 10001;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;

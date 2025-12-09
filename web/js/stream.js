@@ -258,6 +258,16 @@ const PlexdStream = (function() {
             toggleStreamInfo(streamId);
         };
 
+        // Reload button
+        const reloadBtn = document.createElement('button');
+        reloadBtn.className = 'plexd-btn plexd-reload-btn';
+        reloadBtn.innerHTML = '↻';
+        reloadBtn.title = 'Reload stream';
+        reloadBtn.onclick = (e) => {
+            e.stopPropagation();
+            reloadStream(streamId);
+        };
+
         // Remove button
         const removeBtn = document.createElement('button');
         removeBtn.className = 'plexd-btn plexd-remove-btn';
@@ -276,6 +286,7 @@ const PlexdStream = (function() {
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
         buttonRow.appendChild(infoBtn);
+        buttonRow.appendChild(reloadBtn);
         buttonRow.appendChild(removeBtn);
 
         controls.appendChild(seekContainer);
@@ -905,6 +916,73 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Reload a stream (handles errors, stalled, paused - gets it playing again)
+     */
+    function reloadStream(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        const url = stream.url;
+        const video = stream.video;
+
+        // Remove any error overlay
+        const errorOverlay = stream.wrapper.querySelector('.plexd-error-overlay');
+        if (errorOverlay) {
+            errorOverlay.remove();
+        }
+
+        // Reset error state
+        stream.error = null;
+
+        // Check if video is just paused (simple case - just play)
+        if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
+            video.play().catch(() => {});
+            return true;
+        }
+
+        // Check if stalled but has data - try seeking to unstick
+        if (video.readyState >= 2 && video.networkState === 2) {
+            // Try seeking slightly to unstick
+            const currentTime = video.currentTime;
+            video.currentTime = currentTime + 0.1;
+            video.play().catch(() => {});
+            return true;
+        }
+
+        // Full reload needed - destroy and recreate
+        if (stream.hls) {
+            stream.hls.destroy();
+            stream.hls = null;
+        }
+
+        // Reload the video
+        if (isHlsUrl(url) && Hls.isSupported()) {
+            const hls = new Hls({
+                maxMaxBufferLength: 30,
+                startLevel: -1
+            });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                video.play().catch(() => {});
+            });
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    stream.error = `HLS Error: ${data.type}`;
+                    updateStreamInfo(stream);
+                }
+            });
+            stream.hls = hls;
+        } else {
+            video.src = url;
+            video.load();
+            video.play().catch(() => {});
+        }
+
+        return true;
+    }
+
+    /**
      * Toggle mute for a stream (with audio focus support)
      */
     function toggleMute(streamId) {
@@ -1429,6 +1507,7 @@ const PlexdStream = (function() {
     return {
         createStream,
         removeStream,
+        reloadStream,
         getStream,
         getAllStreams,
         getStreamCount,

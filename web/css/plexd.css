@@ -44,7 +44,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
+    padding: 6px 50px 6px 12px; /* extra right padding for hamburger menu */
     background: #161616;
     border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;

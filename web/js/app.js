@@ -291,14 +291,27 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // F key for true fullscreen on fullscreen stream
+        // F key for true fullscreen - works on fullscreen, selected, or first stream
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
 
             if (e.key === 'f' || e.key === 'F') {
+                e.preventDefault();
                 const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
                 if (fullscreenStream) {
                     PlexdStream.toggleTrueFullscreen(fullscreenStream.id);
+                } else {
+                    // If no fullscreen stream, try selected stream
+                    const selected = PlexdStream.getSelectedStream && PlexdStream.getSelectedStream();
+                    if (selected) {
+                        PlexdStream.toggleTrueFullscreen(selected.id);
+                    } else {
+                        // If no selection, use first stream
+                        const streams = PlexdStream.getAllStreams();
+                        if (streams.length > 0) {
+                            PlexdStream.toggleTrueFullscreen(streams[0].id);
+                        }
+                    }
                 }
             }
         });
@@ -683,6 +696,11 @@ const PlexdApp = (function() {
         }
     }
 
+    // Track K key state for seek modifier
+    let kKeyHeld = false;
+    document.addEventListener('keydown', (e) => { if (e.key === 'k' || e.key === 'K') kKeyHeld = true; });
+    document.addEventListener('keyup', (e) => { if (e.key === 'k' || e.key === 'K') kKeyHeld = false; });
+
     /**
      * Handle keyboard shortcuts
      */
@@ -734,36 +752,48 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    // In fullscreen: seek forward 10 seconds
+                if (fullscreenStream && kKeyHeld) {
+                    // K+Arrow: seek forward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 10);
+                } else if (fullscreenStream) {
+                    // In fullscreen: switch to next stream
+                    switchFullscreenStream('right');
                 } else {
                     PlexdStream.selectNextStream('right');
                 }
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    // In fullscreen: seek backward 10 seconds
+                if (fullscreenStream && kKeyHeld) {
+                    // K+Arrow: seek backward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -10);
+                } else if (fullscreenStream) {
+                    // In fullscreen: switch to prev stream
+                    switchFullscreenStream('left');
                 } else {
                     PlexdStream.selectNextStream('left');
                 }
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    // In fullscreen: seek forward 60 seconds
+                if (fullscreenStream && kKeyHeld) {
+                    // K+Arrow: seek forward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 60);
+                } else if (fullscreenStream) {
+                    // In fullscreen: switch to stream above
+                    switchFullscreenStream('up');
                 } else {
                     PlexdStream.selectNextStream('up');
                 }
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    // In fullscreen: seek backward 60 seconds
+                if (fullscreenStream && kKeyHeld) {
+                    // K+Arrow: seek backward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -60);
+                } else if (fullscreenStream) {
+                    // In fullscreen: switch to stream below
+                    switchFullscreenStream('down');
                 } else {
                     PlexdStream.selectNextStream('down');
                 }
@@ -848,6 +878,37 @@ const PlexdApp = (function() {
                     showMessage(`Rated: ${stars}`, 'info');
                 }
                 break;
+        }
+    }
+
+    /**
+     * Switch fullscreen to next/prev stream in given direction
+     */
+    function switchFullscreenStream(direction) {
+        const streams = PlexdStream.getAllStreams();
+        const fullscreenStream = PlexdStream.getFullscreenStream();
+        if (!fullscreenStream || streams.length <= 1) return;
+
+        const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
+        let newIndex;
+
+        if (direction === 'right' || direction === 'down') {
+            newIndex = (currentIndex + 1) % streams.length;
+        } else {
+            newIndex = (currentIndex - 1 + streams.length) % streams.length;
+        }
+
+        const newStream = streams[newIndex];
+        const wasInTrueFullscreen = !!document.fullscreenElement;
+
+        // Exit current fullscreen
+        PlexdStream.toggleFullscreen(fullscreenStream.id);
+        // Enter fullscreen on new stream
+        PlexdStream.toggleFullscreen(newStream.id);
+
+        // If was in true fullscreen, re-enter true fullscreen on new stream
+        if (wasInTrueFullscreen) {
+            PlexdStream.toggleTrueFullscreen(newStream.id);
         }
     }
 

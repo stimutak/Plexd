@@ -590,7 +590,28 @@ const PlexdStream = (function() {
         if (!stream) return;
 
         if (document.fullscreenElement) {
-            document.exitFullscreen();
+            // Exit both true fullscreen and browser-fill mode
+            document.exitFullscreen().then(() => {
+                // Also exit browser-fill mode after fullscreen exits
+                if (fullscreenStreamId) {
+                    const fsStream = streams.get(fullscreenStreamId);
+                    if (fsStream) {
+                        fsStream.wrapper.classList.remove('plexd-fullscreen');
+                    }
+                    fullscreenStreamId = null;
+                    triggerLayoutUpdate();
+                }
+            }).catch(() => {
+                // Fallback - try anyway
+                if (fullscreenStreamId) {
+                    const fsStream = streams.get(fullscreenStreamId);
+                    if (fsStream) {
+                        fsStream.wrapper.classList.remove('plexd-fullscreen');
+                    }
+                    fullscreenStreamId = null;
+                    triggerLayoutUpdate();
+                }
+            });
         } else {
             // First ensure browser-fill mode is active
             if (fullscreenStreamId !== streamId) {

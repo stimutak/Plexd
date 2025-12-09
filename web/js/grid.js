@@ -192,6 +192,10 @@ const PlexdGrid = (function() {
         layout.cells.forEach(cell => {
             const videoWrapper = videoElements.get(cell.streamId);
             if (videoWrapper) {
+                // Skip streams in fullscreen mode - don't override their positioning
+                if (videoWrapper.classList.contains('plexd-fullscreen')) {
+                    return;
+                }
                 videoWrapper.style.position = 'absolute';
                 videoWrapper.style.left = cell.x + 'px';
                 videoWrapper.style.top = cell.y + 'px';

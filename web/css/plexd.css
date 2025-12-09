@@ -1028,7 +1028,6 @@ body {
     opacity: 0;
     transition: opacity 0.2s;
     color: #fbbf24;
-    letter-spacing: -2px;
 }
 
 .plexd-rating-indicator.rated {
@@ -1070,8 +1069,7 @@ body {
 .plexd-btn.plexd-rating-btn {
     color: #888;
     min-width: 28px;
-    letter-spacing: -2px;
-    font-size: 12px;
+    font-size: 11px;
 }
 
 .plexd-btn.plexd-rating-btn.rated {

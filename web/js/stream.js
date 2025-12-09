@@ -1118,14 +1118,14 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Cycle rating for a stream (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 0)
+     * Cycle rating for a stream (1 -> 2 -> 3 -> 4 -> 5 -> 0 -> 1...)
      */
     function cycleRating(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return 0;
 
         const currentRating = ratings.get(stream.url) || 0;
-        const newRating = (currentRating % 5) + 1; // 1, 2, 3, 4, 5, then wraps
+        const newRating = (currentRating + 1) % 6; // 0, 1, 2, 3, 4, 5, 0...
 
         setRating(streamId, newRating);
         return newRating;
@@ -1178,26 +1178,26 @@ const PlexdStream = (function() {
     function updateRatingDisplay(stream) {
         const rating = ratings.get(stream.url) || 0;
 
-        // Update button
+        // Update button - show ★N format to keep it compact
         const ratingBtn = stream.controls.querySelector('.plexd-rating-btn');
         if (ratingBtn) {
             if (rating === 0) {
                 ratingBtn.innerHTML = '☆';
                 ratingBtn.className = 'plexd-btn plexd-rating-btn';
             } else {
-                ratingBtn.innerHTML = '★'.repeat(rating);
+                ratingBtn.innerHTML = `★${rating}`;
                 ratingBtn.className = `plexd-btn plexd-rating-btn rated rated-${rating}`;
             }
         }
 
-        // Update indicator
+        // Update indicator - show ★N format to keep it compact
         const indicator = stream.wrapper.querySelector('.plexd-rating-indicator');
         if (indicator) {
             if (rating === 0) {
                 indicator.innerHTML = '';
                 indicator.className = 'plexd-rating-indicator';
             } else {
-                indicator.innerHTML = '★'.repeat(rating);
+                indicator.innerHTML = `★${rating}`;
                 indicator.className = `plexd-rating-indicator rated rated-${rating}`;
             }
         }

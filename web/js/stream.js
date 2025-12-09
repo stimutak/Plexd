@@ -758,10 +758,18 @@ const PlexdStream = (function() {
             console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
             updateStreamInfo(stream);
 
-            // Show error visually
+            // Show error visually with close button
             const errorOverlay = document.createElement('div');
             errorOverlay.className = 'plexd-error-overlay';
-            errorOverlay.innerHTML = `<div class="plexd-error-msg">⚠️ ${stream.error}</div>`;
+            errorOverlay.innerHTML = `
+                <div class="plexd-error-content">
+                    <div class="plexd-error-msg">⚠️ ${stream.error}</div>
+                    <button class="plexd-error-close" title="Remove stream">✕ Close</button>
+                </div>
+            `;
+            errorOverlay.querySelector('.plexd-error-close').onclick = () => {
+                removeStream(stream.id);
+            };
             stream.wrapper.appendChild(errorOverlay);
         });
 

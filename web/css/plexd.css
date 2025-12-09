@@ -374,6 +374,38 @@ body {
         padding: 12px 16px;
         font-size: 16px;
     }
+
+    /* View toggle buttons - larger touch targets */
+    .plexd-view-btn {
+        padding: 8px 12px;
+        font-size: 13px;
+        min-height: 36px;
+    }
+
+    /* Header toggle button */
+    .plexd-header-toggle {
+        width: 48px;
+        height: 48px;
+        font-size: 22px;
+    }
+
+    /* Rating button in controls */
+    .plexd-btn.plexd-rating-btn {
+        min-width: 36px;
+        font-size: 14px;
+    }
+
+    /* Rating indicator always visible when rated */
+    .plexd-rating-indicator {
+        min-width: 28px;
+        height: 28px;
+        font-size: 14px;
+    }
+
+    /* Tetris button */
+    .plexd-tetris-btn {
+        min-height: 36px;
+    }
 }
 
 /* ========================================
@@ -975,6 +1007,26 @@ body {
 
 .plexd-stream:hover .plexd-rating-indicator {
     opacity: 1;
+}
+
+/* Touch devices - always show rated indicators and rating controls */
+@media (pointer: coarse) {
+    .plexd-rating-indicator {
+        opacity: 1;
+    }
+
+    .plexd-rating-indicator:not(.rated) {
+        opacity: 0.5;
+    }
+
+    .plexd-rating-indicator.rated {
+        opacity: 1;
+    }
+
+    /* On touch devices, always show rating button even in minimal mode */
+    .plexd-stream.plexd-minimal-controls .plexd-rating-btn {
+        display: flex;
+    }
 }
 
 /* Rating colors by level */

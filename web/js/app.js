@@ -1275,6 +1275,28 @@ const PlexdApp = (function() {
                 const showInfo = PlexdStream.toggleAllStreamInfo();
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
+            case 'c':
+            case 'C':
+                // Copy stream URL(s) - Shift+C for all, C for selected/focused
+                if (e.shiftKey) {
+                    // Copy all stream URLs
+                    const count = PlexdStream.copyAllStreamUrls();
+                    if (count) {
+                        showMessage(`Copied ${count} stream URL(s)`, 'success');
+                    } else {
+                        showMessage('No streams to copy', 'info');
+                    }
+                } else {
+                    // Copy selected or focused stream URL
+                    const targetStream = PlexdStream.getFullscreenStream() || selected;
+                    if (targetStream) {
+                        PlexdStream.copyStreamUrl(targetStream.id);
+                        showMessage('URL copied to clipboard', 'success');
+                    } else {
+                        showMessage('Select a stream first (use arrow keys)', 'info');
+                    }
+                }
+                break;
             case 'p':
             case 'P':
                 if (selected) {

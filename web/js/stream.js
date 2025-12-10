@@ -30,6 +30,22 @@ const PlexdStream = (function() {
     // Ratings map - stores stream URL -> rating (1-5 stars, 0 = not rated)
     const ratings = new Map();
 
+    // ===== STREAM RECOVERY CONFIGURATION =====
+    const RECOVERY_CONFIG = {
+        maxRetries: 5,                    // Maximum auto-recovery attempts
+        baseRetryDelay: 1000,             // Base delay (1 second)
+        maxRetryDelay: 30000,             // Max delay (30 seconds)
+        watchdogInterval: 5000,           // Check streams every 5 seconds
+        stallTimeout: 10000,              // Consider stalled after 10s no progress
+        bufferEmptyTimeout: 15000,        // Timeout for empty buffer
+        hlsRecoveryDelay: 500,            // Delay before HLS recovery attempt
+        enableAutoRecovery: true          // Master switch for auto-recovery
+    };
+
+    // Health monitoring state
+    let healthCheckInterval = null;
+    let isPageVisible = true;
+
     // Callback for ratings updates
     let ratingsUpdateCallback = null;
 
@@ -93,8 +109,23 @@ const PlexdStream = (function() {
             infoOverlay,
             hls: null, // HLS.js instance if used
             aspectRatio: DEFAULT_ASPECT_RATIO,
-            state: 'loading', // loading, playing, paused, error
-            error: null
+            state: 'loading', // loading, playing, paused, buffering, error, recovering
+            error: null,
+            // Recovery state
+            recovery: {
+                retryCount: 0,
+                lastRetryTime: 0,
+                isRecovering: false,
+                retryTimer: null
+            },
+            // Health monitoring state
+            health: {
+                lastTimeUpdate: Date.now(),
+                lastCurrentTime: 0,
+                stallStartTime: null,
+                bufferEmptyStartTime: null,
+                consecutiveStalls: 0
+            }
         };
 
         // Set up event listeners
@@ -102,31 +133,7 @@ const PlexdStream = (function() {
 
         // Set source - use HLS.js for .m3u8 streams
         if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
-            const hls = new Hls({
-                enableWorker: true,
-                lowLatencyMode: true,
-                // Auto quality selection with preference for higher quality
-                autoStartLoad: true,
-                startLevel: -1, // Auto select
-                capLevelToPlayerSize: false // Don't cap to player size - use max quality
-            });
-            hls.loadSource(url);
-            hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                // Select highest quality level
-                if (data.levels && data.levels.length > 0) {
-                    const maxLevel = data.levels.length - 1;
-                    hls.currentLevel = maxLevel;
-                }
-                video.play().catch(() => {});
-            });
-            hls.on(Hls.Events.ERROR, (event, data) => {
-                console.error('HLS error:', data);
-                if (data.fatal) {
-                    stream.state = 'error';
-                    stream.error = 'HLS stream error: ' + data.type;
-                }
-            });
+            const hls = createHlsInstance(stream, url);
             stream.hls = hls;
         } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
             // Safari has native HLS support
@@ -147,6 +154,306 @@ const PlexdStream = (function() {
      */
     function isHlsUrl(url) {
         return url.toLowerCase().includes('.m3u8');
+    }
+
+    /**
+     * Get adaptive HLS configuration based on active stream count
+     */
+    function getAdaptiveHlsConfig() {
+        const streamCount = streams.size;
+
+        // Base config optimized for low latency and quality
+        const config = {
+            enableWorker: true,
+            lowLatencyMode: true,
+            autoStartLoad: true,
+            startLevel: -1,
+            capLevelToPlayerSize: false,
+            // Recovery settings
+            manifestLoadingTimeOut: 10000,
+            manifestLoadingMaxRetry: 4,
+            manifestLoadingRetryDelay: 500,
+            levelLoadingTimeOut: 10000,
+            levelLoadingMaxRetry: 4,
+            levelLoadingRetryDelay: 500,
+            fragLoadingTimeOut: 20000,
+            fragLoadingMaxRetry: 6,
+            fragLoadingRetryDelay: 500
+        };
+
+        // Adapt buffer sizes based on stream count for memory efficiency
+        if (streamCount <= 2) {
+            // Few streams - generous buffers for smooth playback
+            config.maxBufferLength = 30;
+            config.maxMaxBufferLength = 60;
+            config.maxBufferSize = 60 * 1000 * 1000; // 60MB
+            config.maxBufferHole = 0.5;
+        } else if (streamCount <= 4) {
+            // Moderate streams - balanced buffers
+            config.maxBufferLength = 20;
+            config.maxMaxBufferLength = 40;
+            config.maxBufferSize = 30 * 1000 * 1000; // 30MB
+            config.maxBufferHole = 0.5;
+        } else if (streamCount <= 8) {
+            // Many streams - reduced buffers
+            config.maxBufferLength = 15;
+            config.maxMaxBufferLength = 30;
+            config.maxBufferSize = 20 * 1000 * 1000; // 20MB
+            config.maxBufferHole = 0.8;
+        } else {
+            // Lots of streams - minimal buffers
+            config.maxBufferLength = 10;
+            config.maxMaxBufferLength = 20;
+            config.maxBufferSize = 10 * 1000 * 1000; // 10MB
+            config.maxBufferHole = 1.0;
+        }
+
+        return config;
+    }
+
+    /**
+     * Create HLS.js instance with robust error handling and recovery
+     */
+    function createHlsInstance(stream, url) {
+        const config = getAdaptiveHlsConfig();
+        const hls = new Hls(config);
+        const video = stream.video;
+
+        hls.loadSource(url);
+        hls.attachMedia(video);
+
+        // Manifest parsed - start playback
+        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+            // Select highest quality level
+            if (data.levels && data.levels.length > 0) {
+                const maxLevel = data.levels.length - 1;
+                hls.currentLevel = maxLevel;
+            }
+            video.play().catch(() => {});
+            // Reset recovery state on successful manifest load
+            stream.recovery.retryCount = 0;
+            stream.recovery.isRecovering = false;
+        });
+
+        // Comprehensive error handling with recovery
+        hls.on(Hls.Events.ERROR, (event, data) => {
+            handleHlsError(stream, hls, data);
+        });
+
+        // Buffer state monitoring
+        hls.on(Hls.Events.BUFFER_APPENDED, () => {
+            // Buffer got data, reset stall tracking
+            stream.health.bufferEmptyStartTime = null;
+        });
+
+        hls.on(Hls.Events.BUFFER_EOS, () => {
+            // End of stream - normal completion
+            stream.state = 'paused';
+        });
+
+        // Fragment loading progress - indicates healthy streaming
+        hls.on(Hls.Events.FRAG_LOADED, () => {
+            // Reset health indicators on successful fragment load
+            stream.health.consecutiveStalls = 0;
+            if (stream.state === 'recovering') {
+                stream.state = 'playing';
+                updateStreamInfo(stream);
+            }
+        });
+
+        return hls;
+    }
+
+    /**
+     * Handle HLS.js errors with intelligent recovery
+     */
+    function handleHlsError(stream, hls, data) {
+        console.warn(`HLS error [${stream.id}]:`, data.type, data.details, data.fatal ? '(FATAL)' : '');
+
+        // Non-fatal errors - let HLS.js handle internally
+        if (!data.fatal) {
+            // Track buffer stalls
+            if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                stream.health.consecutiveStalls++;
+                if (stream.health.consecutiveStalls > 3) {
+                    // Too many stalls - try recovery
+                    triggerRecovery(stream, 'excessive_stalls');
+                }
+            }
+            return;
+        }
+
+        // Fatal error - need recovery
+        stream.state = 'error';
+
+        if (!RECOVERY_CONFIG.enableAutoRecovery) {
+            stream.error = `HLS Error: ${data.type}`;
+            showStreamError(stream);
+            return;
+        }
+
+        // Different recovery strategies based on error type
+        switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+                // Network errors are often transient - aggressive retry
+                console.log(`[${stream.id}] Network error - attempting recovery`);
+                scheduleRecovery(stream, 'network_error');
+                break;
+
+            case Hls.ErrorTypes.MEDIA_ERROR:
+                // Media errors might be recoverable
+                console.log(`[${stream.id}] Media error - attempting HLS recovery`);
+                try {
+                    hls.recoverMediaError();
+                    stream.state = 'recovering';
+                    updateStreamInfo(stream);
+                } catch (e) {
+                    // If recovery fails, schedule full reload
+                    scheduleRecovery(stream, 'media_error');
+                }
+                break;
+
+            case Hls.ErrorTypes.OTHER_ERROR:
+            default:
+                // Other errors - try full reload
+                console.log(`[${stream.id}] Other error - scheduling reload`);
+                scheduleRecovery(stream, 'other_error');
+                break;
+        }
+    }
+
+    /**
+     * Schedule recovery with exponential backoff
+     */
+    function scheduleRecovery(stream, reason) {
+        if (stream.recovery.isRecovering) {
+            return; // Already recovering
+        }
+
+        if (stream.recovery.retryCount >= RECOVERY_CONFIG.maxRetries) {
+            console.log(`[${stream.id}] Max retries (${RECOVERY_CONFIG.maxRetries}) reached - giving up`);
+            stream.error = `Stream failed after ${RECOVERY_CONFIG.maxRetries} retries (${reason})`;
+            stream.state = 'error';
+            showStreamError(stream);
+            return;
+        }
+
+        stream.recovery.isRecovering = true;
+        stream.recovery.retryCount++;
+        stream.state = 'recovering';
+        stream.wrapper.dataset.recovering = 'true';
+        updateStreamInfo(stream);
+
+        // Calculate delay with exponential backoff
+        const delay = Math.min(
+            RECOVERY_CONFIG.baseRetryDelay * Math.pow(2, stream.recovery.retryCount - 1),
+            RECOVERY_CONFIG.maxRetryDelay
+        );
+
+        console.log(`[${stream.id}] Scheduling recovery in ${delay}ms (attempt ${stream.recovery.retryCount}/${RECOVERY_CONFIG.maxRetries})`);
+
+        // Clear any existing retry timer
+        if (stream.recovery.retryTimer) {
+            clearTimeout(stream.recovery.retryTimer);
+        }
+
+        stream.recovery.retryTimer = setTimeout(() => {
+            stream.recovery.lastRetryTime = Date.now();
+            performRecovery(stream);
+        }, delay);
+    }
+
+    /**
+     * Perform actual stream recovery
+     */
+    function performRecovery(stream) {
+        console.log(`[${stream.id}] Performing recovery attempt ${stream.recovery.retryCount}`);
+
+        // Remove any existing error overlay
+        const errorOverlay = stream.wrapper.querySelector('.plexd-error-overlay');
+        if (errorOverlay) {
+            errorOverlay.remove();
+        }
+
+        // Reset error state
+        stream.error = null;
+
+        // Destroy existing HLS instance
+        if (stream.hls) {
+            stream.hls.destroy();
+            stream.hls = null;
+        }
+
+        // Reset video element
+        const video = stream.video;
+        video.src = '';
+        video.load();
+
+        // Small delay before reload
+        setTimeout(() => {
+            if (isHlsUrl(stream.url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                // Create fresh HLS instance
+                const hls = createHlsInstance(stream, stream.url);
+                stream.hls = hls;
+            } else if (isHlsUrl(stream.url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = stream.url;
+                video.play().catch(() => {});
+            } else {
+                video.src = stream.url;
+                video.load();
+                video.play().catch(() => {});
+            }
+
+            stream.recovery.isRecovering = false;
+            stream.state = 'loading';
+            delete stream.wrapper.dataset.recovering;
+            updateStreamInfo(stream);
+        }, 100);
+    }
+
+    /**
+     * Trigger recovery from health check failures
+     */
+    function triggerRecovery(stream, reason) {
+        if (!RECOVERY_CONFIG.enableAutoRecovery || stream.recovery.isRecovering) {
+            return;
+        }
+        scheduleRecovery(stream, reason);
+    }
+
+    /**
+     * Show error overlay on stream
+     */
+    function showStreamError(stream) {
+        // Remove any existing error overlay first
+        const existing = stream.wrapper.querySelector('.plexd-error-overlay');
+        if (existing) {
+            existing.remove();
+        }
+
+        const errorOverlay = document.createElement('div');
+        errorOverlay.className = 'plexd-error-overlay';
+        errorOverlay.innerHTML = `
+            <div class="plexd-error-content">
+                <div class="plexd-error-msg">⚠️ ${stream.error || 'Stream error'}</div>
+                <div class="plexd-error-actions">
+                    <button class="plexd-error-retry" title="Retry">↻ Retry</button>
+                    <button class="plexd-error-close" title="Remove stream">✕ Close</button>
+                </div>
+            </div>
+        `;
+        errorOverlay.querySelector('.plexd-error-retry').onclick = (e) => {
+            e.stopPropagation();
+            // Reset retry count for manual retry
+            stream.recovery.retryCount = 0;
+            performRecovery(stream);
+        };
+        errorOverlay.querySelector('.plexd-error-close').onclick = (e) => {
+            e.stopPropagation();
+            removeStream(stream.id);
+        };
+        stream.wrapper.appendChild(errorOverlay);
+        updateStreamInfo(stream);
     }
 
     /**
@@ -568,6 +875,7 @@ const PlexdStream = (function() {
             const stateIcons = {
                 loading: '⏳',
                 buffering: '⏳',
+                recovering: '🔄',
                 playing: '▶️',
                 paused: '⏸️',
                 error: '❌'
@@ -866,6 +1174,12 @@ const PlexdStream = (function() {
             if (timeDisplay && video.duration && isFinite(video.duration)) {
                 timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
             }
+            // Track health - video is making progress
+            if (video.currentTime !== stream.health.lastCurrentTime) {
+                stream.health.lastTimeUpdate = Date.now();
+                stream.health.lastCurrentTime = video.currentTime;
+                stream.health.stallStartTime = null;
+            }
         });
 
         // Click to select stream
@@ -1015,32 +1329,43 @@ const PlexdStream = (function() {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
             console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
-            updateStreamInfo(stream);
 
-            // Show error visually with close button
-            const errorOverlay = document.createElement('div');
-            errorOverlay.className = 'plexd-error-overlay';
-            errorOverlay.innerHTML = `
-                <div class="plexd-error-content">
-                    <div class="plexd-error-msg">⚠️ ${stream.error}</div>
-                    <button class="plexd-error-close" title="Remove stream">✕ Close</button>
-                </div>
-            `;
-            errorOverlay.querySelector('.plexd-error-close').onclick = () => {
-                removeStream(stream.id);
-            };
-            stream.wrapper.appendChild(errorOverlay);
+            // For non-HLS streams, try automatic recovery
+            if (!stream.hls && RECOVERY_CONFIG.enableAutoRecovery) {
+                scheduleRecovery(stream, stream.error);
+            } else if (!stream.hls) {
+                showStreamError(stream);
+            }
+            // HLS errors are handled by handleHlsError
         });
 
         // Handle stalled/waiting
         video.addEventListener('waiting', () => {
             stream.state = 'buffering';
+            // Track when stall started for health monitoring
+            if (!stream.health.stallStartTime) {
+                stream.health.stallStartTime = Date.now();
+            }
             updateStreamInfo(stream);
         });
 
         video.addEventListener('playing', () => {
             stream.state = 'playing';
+            // Reset health indicators on playback resumption
+            stream.health.stallStartTime = null;
+            stream.health.consecutiveStalls = 0;
+            stream.recovery.retryCount = 0;
+            stream.recovery.isRecovering = false;
+            delete stream.wrapper.dataset.recovering;
             updateStreamInfo(stream);
+        });
+
+        // Stalled event - network issues
+        video.addEventListener('stalled', () => {
+            console.log(`[${stream.id}] Network stalled - waiting for data`);
+            if (!stream.health.stallStartTime) {
+                stream.health.stallStartTime = Date.now();
+            }
         });
     }
 
@@ -1094,6 +1419,12 @@ const PlexdStream = (function() {
     function removeStream(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return false;
+
+        // Clean up recovery timer if pending
+        if (stream.recovery.retryTimer) {
+            clearTimeout(stream.recovery.retryTimer);
+            stream.recovery.retryTimer = null;
+        }
 
         // Clean up HLS instance if present
         if (stream.hls) {
@@ -1744,6 +2075,162 @@ const PlexdStream = (function() {
         }
     }
 
+    // ===== HEALTH MONITORING WATCHDOG =====
+
+    /**
+     * Check health of all streams and trigger recovery if needed
+     */
+    function runHealthCheck() {
+        if (!RECOVERY_CONFIG.enableAutoRecovery || !isPageVisible) {
+            return;
+        }
+
+        const now = Date.now();
+
+        streams.forEach((stream) => {
+            // Skip if already in error/recovering state
+            if (stream.state === 'error' || stream.recovery.isRecovering) {
+                return;
+            }
+
+            // Skip if paused (user intended)
+            if (stream.video.paused && stream.state === 'paused') {
+                return;
+            }
+
+            const video = stream.video;
+
+            // Check for frozen video (no timeupdate for too long while supposedly playing)
+            if (stream.state === 'playing' && !video.paused) {
+                const timeSinceUpdate = now - stream.health.lastTimeUpdate;
+                if (timeSinceUpdate > RECOVERY_CONFIG.stallTimeout) {
+                    console.log(`[${stream.id}] Frozen detected - no time updates for ${timeSinceUpdate}ms`);
+                    triggerRecovery(stream, 'frozen_video');
+                    return;
+                }
+            }
+
+            // Check for prolonged stall
+            if (stream.health.stallStartTime) {
+                const stallDuration = now - stream.health.stallStartTime;
+                if (stallDuration > RECOVERY_CONFIG.stallTimeout) {
+                    console.log(`[${stream.id}] Prolonged stall detected - ${stallDuration}ms`);
+                    triggerRecovery(stream, 'prolonged_stall');
+                    return;
+                }
+            }
+
+            // Check buffer health for HLS streams
+            if (stream.hls && video.buffered.length > 0) {
+                const bufferEnd = video.buffered.end(video.buffered.length - 1);
+                const bufferAhead = bufferEnd - video.currentTime;
+
+                // If buffer is nearly empty and we're playing
+                if (bufferAhead < 1 && !video.paused && stream.state === 'playing') {
+                    if (!stream.health.bufferEmptyStartTime) {
+                        stream.health.bufferEmptyStartTime = now;
+                    } else if (now - stream.health.bufferEmptyStartTime > RECOVERY_CONFIG.bufferEmptyTimeout) {
+                        console.log(`[${stream.id}] Buffer empty for too long - ${bufferAhead}s ahead`);
+                        triggerRecovery(stream, 'buffer_underrun');
+                        stream.health.bufferEmptyStartTime = null;
+                    }
+                } else {
+                    stream.health.bufferEmptyStartTime = null;
+                }
+            }
+        });
+    }
+
+    /**
+     * Start the health monitoring watchdog
+     */
+    function startHealthMonitoring() {
+        if (healthCheckInterval) {
+            clearInterval(healthCheckInterval);
+        }
+        healthCheckInterval = setInterval(runHealthCheck, RECOVERY_CONFIG.watchdogInterval);
+        console.log('Stream health monitoring started');
+    }
+
+    /**
+     * Stop the health monitoring watchdog
+     */
+    function stopHealthMonitoring() {
+        if (healthCheckInterval) {
+            clearInterval(healthCheckInterval);
+            healthCheckInterval = null;
+        }
+    }
+
+    // ===== VISIBILITY-BASED OPTIMIZATION =====
+
+    /**
+     * Handle page visibility changes to optimize resource usage
+     */
+    function handleVisibilityChange() {
+        isPageVisible = !document.hidden;
+
+        if (isPageVisible) {
+            console.log('Page visible - resuming streams');
+            // Page is visible again - resume/recover streams
+            streams.forEach((stream) => {
+                // If stream was supposed to be playing, try to resume
+                if (stream.state === 'buffering' ||
+                    (stream.video.paused && stream.state !== 'paused' && stream.state !== 'error')) {
+                    stream.video.play().catch(() => {});
+                }
+            });
+            // Restart health monitoring
+            startHealthMonitoring();
+        } else {
+            console.log('Page hidden - reducing activity');
+            // Page is hidden - pause health checks to save resources
+            // Note: We don't pause streams as user might be listening to audio
+            stopHealthMonitoring();
+        }
+    }
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    /**
+     * Get recovery configuration (for debugging/testing)
+     */
+    function getRecoveryConfig() {
+        return { ...RECOVERY_CONFIG };
+    }
+
+    /**
+     * Update recovery configuration
+     */
+    function setRecoveryConfig(config) {
+        Object.assign(RECOVERY_CONFIG, config);
+    }
+
+    /**
+     * Get health status of all streams
+     */
+    function getStreamHealthStatus() {
+        const status = [];
+        streams.forEach((stream) => {
+            status.push({
+                id: stream.id,
+                state: stream.state,
+                recoveryRetries: stream.recovery.retryCount,
+                isRecovering: stream.recovery.isRecovering,
+                timeSinceUpdate: Date.now() - stream.health.lastTimeUpdate,
+                stallDuration: stream.health.stallStartTime
+                    ? Date.now() - stream.health.stallStartTime
+                    : 0,
+                consecutiveStalls: stream.health.consecutiveStalls
+            });
+        });
+        return status;
+    }
+
+    // Start health monitoring on init
+    startHealthMonitoring();
+
     // Load ratings on init
     loadRatings();
 
@@ -1820,7 +2307,13 @@ const PlexdStream = (function() {
         isCleanMode,
         togglePauseAll,
         toggleMuteAll,
-        toggleGlobalFullscreen
+        toggleGlobalFullscreen,
+        // Stream health and recovery
+        getStreamHealthStatus,
+        getRecoveryConfig,
+        setRecoveryConfig,
+        startHealthMonitoring,
+        stopHealthMonitoring
     };
 })();
 

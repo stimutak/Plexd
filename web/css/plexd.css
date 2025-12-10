@@ -49,6 +49,8 @@ body {
     border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;
     height: 40px;
+    position: relative;
+    z-index: 10001;
 }
 
 .plexd-logo {
@@ -910,7 +912,7 @@ body {
     color: #999;
     font-size: 16px;
     cursor: pointer;
-    z-index: 200;
+    z-index: 10000;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;

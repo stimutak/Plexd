@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <title>Plexd Remote</title>
+
+    <link rel="stylesheet" href="css/remote.css">
+</head>
+<body>
+    <div class="remote-app">
+        <!-- Connection Status -->
+        <header class="remote-header">
+            <div class="remote-logo">Plex<span>d</span> Remote</div>
+            <div id="connection-status" class="connection-status disconnected">
+                <span class="status-dot"></span>
+                <span class="status-text">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Stream List -->
+        <main class="remote-main">
+            <div id="stream-list" class="stream-list">
+                <div class="empty-state">
+                    <p>Waiting for connection to Plexd...</p>
+                    <p class="hint">Make sure the main Plexd app is open in another tab/window on the same device or network.</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Global Controls -->
+        <footer class="remote-controls">
+            <!-- Transport Controls -->
+            <div class="control-row transport-controls">
+                <button id="btn-prev" class="control-btn nav-btn" title="Previous">
+                    <span class="icon">◀</span>
+                </button>
+                <button id="btn-pause-all" class="control-btn large-btn" title="Play/Pause All">
+                    <span class="icon">⏸</span>
+                </button>
+                <button id="btn-next" class="control-btn nav-btn" title="Next">
+                    <span class="icon">▶</span>
+                </button>
+            </div>
+
+            <!-- Seek Controls -->
+            <div class="control-row seek-controls">
+                <button id="btn-seek-back" class="control-btn" title="Skip -10s">
+                    <span class="icon">-10s</span>
+                </button>
+                <button id="btn-mute-all" class="control-btn" title="Mute/Unmute All">
+                    <span class="icon">🔇</span>
+                </button>
+                <button id="btn-seek-fwd" class="control-btn" title="Skip +10s">
+                    <span class="icon">+10s</span>
+                </button>
+            </div>
+
+            <!-- View Controls -->
+            <div class="control-row view-controls">
+                <button id="btn-fullscreen" class="control-btn" title="Fullscreen">
+                    <span class="icon">⛶</span>
+                </button>
+                <button id="btn-view-mode" class="control-btn" title="View Mode">
+                    <span class="icon">All</span>
+                </button>
+                <button id="btn-tetris" class="control-btn" title="Tetris Mode">
+                    <span class="icon">T</span>
+                </button>
+                <button id="btn-clean" class="control-btn" title="Clean Mode">
+                    <span class="icon">👁</span>
+                </button>
+            </div>
+        </footer>
+    </div>
+
+    <script src="js/remote.js"></script>
+</body>
+</html>

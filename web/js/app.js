@@ -441,7 +441,7 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // F key for true fullscreen - enters grid fullscreen or toggles
+        // F key for true fullscreen - toggles true fullscreen (hides browser chrome)
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
 
@@ -449,11 +449,12 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 const mode = PlexdStream.getFullscreenMode();
 
+                // F toggles true fullscreen
                 if (mode === 'true-grid' || mode === 'true-focused') {
-                    // Already in true fullscreen - exit completely
+                    // Exit true fullscreen completely
                     PlexdStream.exitTrueFullscreen();
                 } else {
-                    // Enter grid fullscreen (shows all streams in true fullscreen)
+                    // Enter true fullscreen (grid mode)
                     PlexdStream.enterGridFullscreen();
                 }
             }
@@ -1310,29 +1311,29 @@ const PlexdApp = (function() {
             case 'z':
             case 'Z':
                 e.preventDefault();
-                // Enter or Z: toggle focused mode on selected stream
-                // In grid mode (normal or true-grid), this enters focused mode on selected stream
-                // In focused mode, this exits back to grid mode (toggle behavior)
-                // Quick jump: when no selection, uses first stream from current filter
+                // Enter or Z: toggle between grid and focused view (browser-fill)
+                // In grid mode: enter focused mode on selected stream
+                // In focused mode: exit back to grid
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
-                        // Already in focused mode - exit back to grid (toggle off)
+                        // In focused mode - exit back to grid
                         PlexdStream.exitFocusedMode();
-                    } else if (selected) {
-                        // Enter focused mode on selected stream
-                        PlexdStream.enterFocusedMode(selected.id);
                     } else {
-                        // No selection - quick jump to first stream matching current filter
-                        const streams = viewMode === 'all'
-                            ? PlexdStream.getAllStreams()
-                            : PlexdStream.getStreamsByRating(viewMode);
-                        if (streams.length > 0) {
-                            PlexdStream.enterFocusedMode(streams[0].id);
-                        } else if (viewMode !== 'all') {
-                            // No streams in filter, show message
-                            const stars = '★'.repeat(viewMode);
-                            showMessage(`No ${stars} streams to show`, 'warning');
+                        // In grid mode - enter focused mode
+                        if (selected) {
+                            PlexdStream.enterFocusedMode(selected.id);
+                        } else {
+                            // No selection - quick jump to first stream matching current filter
+                            const streams = viewMode === 'all'
+                                ? PlexdStream.getAllStreams()
+                                : PlexdStream.getStreamsByRating(viewMode);
+                            if (streams.length > 0) {
+                                PlexdStream.enterFocusedMode(streams[0].id);
+                            } else if (viewMode !== 'all') {
+                                const stars = '★'.repeat(viewMode);
+                                showMessage(`No ${stars} streams to show`, 'warning');
+                            }
                         }
                     }
                 }
@@ -1351,6 +1352,7 @@ const PlexdApp = (function() {
                     e.preventDefault();
                     saveStreamCombination();
                 }
+                // Plain S does nothing (use Enter/Z for focus toggle)
                 break;
             case 'Escape':
                 // Escape behavior depends on current mode:

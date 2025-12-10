@@ -62,10 +62,15 @@ const PlexdStream = (function() {
         // Create info overlay
         const infoOverlay = createInfoOverlay(url);
 
-        // Create rating indicator (always present, visibility controlled by CSS)
+        // Create rating indicator (tappable on touch devices)
         const ratingIndicator = document.createElement('div');
         ratingIndicator.className = 'plexd-rating-indicator';
-        ratingIndicator.innerHTML = ''; // Will be set based on rating
+        ratingIndicator.innerHTML = '☆'; // Show empty star initially
+        ratingIndicator.title = 'Tap to rate';
+        ratingIndicator.onclick = (e) => {
+            e.stopPropagation();
+            cycleRating(id);
+        };
 
         // Assemble
         wrapper.appendChild(video);
@@ -258,6 +263,26 @@ const PlexdStream = (function() {
             toggleStreamInfo(streamId);
         };
 
+        // Copy URL button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'plexd-btn plexd-copy-btn';
+        copyBtn.innerHTML = '📋';
+        copyBtn.title = 'Copy stream URL';
+        copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            copyStreamUrl(streamId);
+        };
+
+        // Reload button
+        const reloadBtn = document.createElement('button');
+        reloadBtn.className = 'plexd-btn plexd-reload-btn';
+        reloadBtn.innerHTML = '↻';
+        reloadBtn.title = 'Reload stream';
+        reloadBtn.onclick = (e) => {
+            e.stopPropagation();
+            reloadStream(streamId);
+        };
+
         // Remove button
         const removeBtn = document.createElement('button');
         removeBtn.className = 'plexd-btn plexd-remove-btn';
@@ -276,6 +301,8 @@ const PlexdStream = (function() {
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
         buttonRow.appendChild(infoBtn);
+        buttonRow.appendChild(copyBtn);
+        buttonRow.appendChild(reloadBtn);
         buttonRow.appendChild(removeBtn);
 
         controls.appendChild(seekContainer);
@@ -779,6 +806,37 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Switch to next/prev stream while in fullscreen
+     */
+    function switchFullscreenStream(direction) {
+        if (!fullscreenStreamId) return;
+
+        const streamList = Array.from(streams.values());
+        if (streamList.length <= 1) return;
+
+        const currentIndex = streamList.findIndex(s => s.id === fullscreenStreamId);
+        if (currentIndex === -1) return;
+
+        let newIndex;
+        if (direction === 'next') {
+            newIndex = (currentIndex + 1) % streamList.length;
+        } else {
+            newIndex = (currentIndex - 1 + streamList.length) % streamList.length;
+        }
+
+        const currentStream = streamList[currentIndex];
+        const newStream = streamList[newIndex];
+
+        // Switch fullscreen to new stream
+        currentStream.wrapper.classList.remove('plexd-fullscreen');
+        newStream.wrapper.classList.add('plexd-fullscreen');
+        fullscreenStreamId = newStream.id;
+
+        // Focus the new stream for keyboard controls
+        newStream.wrapper.focus();
+    }
+
+    /**
      * Set up video element event listeners
      */
     function setupVideoEvents(stream) {
@@ -867,6 +925,39 @@ const PlexdStream = (function() {
                     break;
             }
         });
+
+        // Swipe gesture handling for fullscreen stream switching
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+
+        wrapper.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
+        }, { passive: true });
+
+        wrapper.addEventListener('touchend', (e) => {
+            // Only handle swipes in fullscreen mode
+            if (!wrapper.classList.contains('plexd-fullscreen')) return;
+
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = touchEndY - touchStartY;
+            const deltaTime = Date.now() - touchStartTime;
+
+            // Require: horizontal swipe > 50px, faster than 300ms, more horizontal than vertical
+            if (Math.abs(deltaX) > 50 && deltaTime < 300 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                if (deltaX > 0) {
+                    // Swipe right = previous stream
+                    switchFullscreenStream('prev');
+                } else {
+                    // Swipe left = next stream
+                    switchFullscreenStream('next');
+                }
+            }
+        }, { passive: true });
 
         // Drag and drop handlers
         wrapper.addEventListener('dragstart', (e) => {
@@ -1025,6 +1116,114 @@ const PlexdStream = (function() {
 
         triggerLayoutUpdate();
         return true;
+    }
+
+    /**
+     * Reload a stream (handles errors, stalled, paused - gets it playing again)
+     */
+    function reloadStream(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        const url = stream.url;
+        const video = stream.video;
+
+        // Remove any error overlay
+        const errorOverlay = stream.wrapper.querySelector('.plexd-error-overlay');
+        if (errorOverlay) {
+            errorOverlay.remove();
+        }
+
+        // Reset error state
+        stream.error = null;
+
+        // Check if video is just paused (simple case - just play)
+        if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
+            video.play().catch(() => {});
+            return true;
+        }
+
+        // Check if stalled but has data - try seeking to unstick
+        if (video.readyState >= 2 && video.networkState === 2) {
+            // Try seeking slightly to unstick
+            const currentTime = video.currentTime;
+            video.currentTime = currentTime + 0.1;
+            video.play().catch(() => {});
+            return true;
+        }
+
+        // Full reload needed - destroy and recreate
+        if (stream.hls) {
+            stream.hls.destroy();
+            stream.hls = null;
+        }
+
+        // Reload the video
+        if (isHlsUrl(url) && Hls.isSupported()) {
+            const hls = new Hls({
+                maxMaxBufferLength: 30,
+                startLevel: -1
+            });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                video.play().catch(() => {});
+            });
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    stream.error = `HLS Error: ${data.type}`;
+                    updateStreamInfo(stream);
+                }
+            });
+            stream.hls = hls;
+        } else {
+            video.src = url;
+            video.load();
+            video.play().catch(() => {});
+        }
+
+        return true;
+    }
+
+    /**
+     * Copy stream URL to clipboard
+     */
+    function copyStreamUrl(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        navigator.clipboard.writeText(stream.url).then(() => {
+            // Visual feedback - briefly highlight the copy button
+            const copyBtn = stream.controls.querySelector('.plexd-copy-btn');
+            if (copyBtn) {
+                copyBtn.innerHTML = '✓';
+                setTimeout(() => {
+                    copyBtn.innerHTML = '📋';
+                }, 1000);
+            }
+        }).catch(err => {
+            console.warn('Copy failed:', err);
+        });
+
+        return true;
+    }
+
+    /**
+     * Copy all stream URLs to clipboard (newline separated)
+     */
+    function copyAllStreamUrls() {
+        const urls = [];
+        streams.forEach(stream => {
+            urls.push(stream.url);
+        });
+
+        if (urls.length === 0) return false;
+
+        navigator.clipboard.writeText(urls.join('\n')).catch(err => {
+            console.warn('Copy all failed:', err);
+        });
+
+        return urls.length;
     }
 
     /**
@@ -1406,11 +1605,11 @@ const PlexdStream = (function() {
             }
         }
 
-        // Update indicator - show ★N format to keep it compact
+        // Update indicator - always show on touch, tappable to rate
         const indicator = stream.wrapper.querySelector('.plexd-rating-indicator');
         if (indicator) {
             if (rating === 0) {
-                indicator.innerHTML = '';
+                indicator.innerHTML = '☆';
                 indicator.className = 'plexd-rating-indicator';
             } else {
                 indicator.innerHTML = `★${rating}`;
@@ -1568,6 +1767,9 @@ const PlexdStream = (function() {
     return {
         createStream,
         removeStream,
+        reloadStream,
+        copyStreamUrl,
+        copyAllStreamUrls,
         getStream,
         getAllStreams,
         getStreamCount,

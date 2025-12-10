@@ -49,8 +49,13 @@ body {
     border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;
     height: 40px;
+<<<<<<< HEAD
     position: relative;
     z-index: 10001;
+=======
+    z-index: 10000;
+    position: relative;
+>>>>>>> bf39c15 (Fix header and hamburger menu z-index for fullscreen)
 }
 
 .plexd-logo {
@@ -493,24 +498,25 @@ body {
 }
 
 .plexd-error-close {
-    padding: 10px 24px;
-    background: #333;
-    border: 1px solid #555;
+    padding: 12px 28px;
+    background: #ef4444;
+    border: none;
     border-radius: 6px;
     color: #fff;
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: 600;
     cursor: pointer;
     transition: background 0.2s;
 }
 
 .plexd-error-close:hover {
-    background: #444;
+    background: #dc2626;
 }
 
 @media (pointer: coarse) {
     .plexd-error-close {
-        padding: 14px 32px;
-        font-size: 16px;
+        padding: 16px 40px;
+        font-size: 18px;
     }
 }
 
@@ -919,17 +925,17 @@ body {
 
 .plexd-header-toggle {
     position: fixed;
-    top: 8px;
-    right: 12px;
+    top: 4px;
+    right: 8px;
     width: 32px;
     height: 32px;
-    border-radius: 6px;
-    background: rgba(60, 60, 60, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #999;
+    border-radius: 4px;
+    background: #333;
+    border: 1px solid #444;
+    color: #aaa;
     font-size: 16px;
     cursor: pointer;
-    z-index: 10000;
+    z-index: 10001;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
@@ -965,12 +971,11 @@ body {
     height: 100vh;
 }
 
-/* Clean mode - hide all per-stream controls/overlays */
+/* Clean mode - hide all per-stream controls/overlays (except errors) */
 .plexd-app.clean-mode .plexd-controls,
 .plexd-app.clean-mode .plexd-info-overlay,
 .plexd-app.clean-mode .plexd-rating-indicator,
-.plexd-app.clean-mode .plexd-status,
-.plexd-app.clean-mode .plexd-error-overlay .plexd-error-close {
+.plexd-app.clean-mode .plexd-status {
     display: none !important;
 }
 
@@ -1038,24 +1043,29 @@ body {
    Rating System
    ======================================== */
 
-/* Rating indicator on stream */
+/* Rating indicator on stream - tappable */
 .plexd-rating-indicator {
     position: absolute;
     top: 8px;
     right: 8px;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 6px;
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 12px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 14px;
     z-index: 5;
     opacity: 0;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s, transform 0.1s;
     color: #fbbf24;
+    cursor: pointer;
+}
+
+.plexd-rating-indicator:active {
+    transform: scale(0.95);
 }
 
 .plexd-rating-indicator.rated {
@@ -1066,14 +1076,13 @@ body {
     opacity: 1;
 }
 
-/* Touch devices - always show rated indicators and rating controls */
+/* Touch devices - always show rating indicator (tappable) */
 @media (pointer: coarse) {
     .plexd-rating-indicator {
-        opacity: 1;
-    }
-
-    .plexd-rating-indicator:not(.rated) {
-        opacity: 0.5;
+        opacity: 0.7;
+        min-width: 36px;
+        height: 36px;
+        font-size: 16px;
     }
 
     .plexd-rating-indicator.rated {

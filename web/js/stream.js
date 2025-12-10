@@ -806,6 +806,37 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Switch to next/prev stream while in fullscreen
+     */
+    function switchFullscreenStream(direction) {
+        if (!fullscreenStreamId) return;
+
+        const streamList = Array.from(streams.values());
+        if (streamList.length <= 1) return;
+
+        const currentIndex = streamList.findIndex(s => s.id === fullscreenStreamId);
+        if (currentIndex === -1) return;
+
+        let newIndex;
+        if (direction === 'next') {
+            newIndex = (currentIndex + 1) % streamList.length;
+        } else {
+            newIndex = (currentIndex - 1 + streamList.length) % streamList.length;
+        }
+
+        const currentStream = streamList[currentIndex];
+        const newStream = streamList[newIndex];
+
+        // Switch fullscreen to new stream
+        currentStream.wrapper.classList.remove('plexd-fullscreen');
+        newStream.wrapper.classList.add('plexd-fullscreen');
+        fullscreenStreamId = newStream.id;
+
+        // Focus the new stream for keyboard controls
+        newStream.wrapper.focus();
+    }
+
+    /**
      * Set up video element event listeners
      */
     function setupVideoEvents(stream) {
@@ -894,6 +925,39 @@ const PlexdStream = (function() {
                     break;
             }
         });
+
+        // Swipe gesture handling for fullscreen stream switching
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+
+        wrapper.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
+        }, { passive: true });
+
+        wrapper.addEventListener('touchend', (e) => {
+            // Only handle swipes in fullscreen mode
+            if (!wrapper.classList.contains('plexd-fullscreen')) return;
+
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = touchEndY - touchStartY;
+            const deltaTime = Date.now() - touchStartTime;
+
+            // Require: horizontal swipe > 50px, faster than 300ms, more horizontal than vertical
+            if (Math.abs(deltaX) > 50 && deltaTime < 300 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                if (deltaX > 0) {
+                    // Swipe right = previous stream
+                    switchFullscreenStream('prev');
+                } else {
+                    // Swipe left = next stream
+                    switchFullscreenStream('next');
+                }
+            }
+        }, { passive: true });
 
         // Drag and drop handlers
         wrapper.addEventListener('dragstart', (e) => {

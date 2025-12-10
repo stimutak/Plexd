@@ -2142,39 +2142,89 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 // ========================================
-// Remote Control via BroadcastChannel
+// Remote Control via BroadcastChannel + localStorage
 // ========================================
 
 /**
  * PlexdRemote - Handles communication between main display and remote control
- * Uses BroadcastChannel API for same-origin communication across tabs/windows
+ * Uses BroadcastChannel for same-browser tabs AND localStorage for cross-device
  */
 const PlexdRemote = (function() {
     'use strict';
 
     let channel = null;
     let stateUpdateInterval = null;
+    let commandPollInterval = null;
+    const COMMAND_KEY = 'plexd_remote_command';
+    const STATE_KEY = 'plexd_remote_state';
 
     /**
      * Initialize remote control listener (called on main display)
      */
     function init() {
-        if (typeof BroadcastChannel === 'undefined') {
-            console.warn('BroadcastChannel not supported - remote control unavailable');
-            return;
+        // BroadcastChannel for same-browser tabs
+        if (typeof BroadcastChannel !== 'undefined') {
+            channel = new BroadcastChannel('plexd-remote');
+            channel.onmessage = (event) => {
+                const { action, payload } = event.data;
+                handleRemoteCommand(action, payload);
+            };
         }
 
-        channel = new BroadcastChannel('plexd-remote');
+        // localStorage polling for cross-device (iPhone to TV)
+        startCommandPolling();
 
-        channel.onmessage = (event) => {
-            const { action, payload } = event.data;
-            handleRemoteCommand(action, payload);
-        };
-
-        // Send state updates periodically and on changes
+        // Send state updates periodically
         startStateUpdates();
 
         console.log('Plexd remote control listener initialized');
+    }
+
+    /**
+     * Poll for commands from remote devices (HTTP API + localStorage fallback)
+     */
+    function startCommandPolling() {
+        // HTTP API polling for cross-device (iPhone to MBP)
+        commandPollInterval = setInterval(async () => {
+            try {
+                const res = await fetch('/api/remote/command');
+                if (res.ok) {
+                    const cmd = await res.json();
+                    if (cmd && cmd.action) {
+                        handleRemoteCommand(cmd.action, cmd.payload);
+                    }
+                }
+            } catch (e) {
+                // API not available, fall back to localStorage
+                const cmdData = localStorage.getItem(COMMAND_KEY);
+                if (cmdData) {
+                    try {
+                        const cmd = JSON.parse(cmdData);
+                        if (Date.now() - cmd.timestamp < 5000) {
+                            localStorage.removeItem(COMMAND_KEY);
+                            handleRemoteCommand(cmd.action, cmd.payload);
+                        } else {
+                            localStorage.removeItem(COMMAND_KEY);
+                        }
+                    } catch (err) {
+                        localStorage.removeItem(COMMAND_KEY);
+                    }
+                }
+            }
+        }, 200);
+
+        // Also listen for storage events (works across tabs on same device)
+        window.addEventListener('storage', (e) => {
+            if (e.key === COMMAND_KEY && e.newValue) {
+                try {
+                    const cmd = JSON.parse(e.newValue);
+                    localStorage.removeItem(COMMAND_KEY);
+                    handleRemoteCommand(cmd.action, cmd.payload);
+                } catch (err) {
+                    // ignore
+                }
+            }
+        });
     }
 
     /**
@@ -2369,10 +2419,28 @@ const PlexdRemote = (function() {
      * Send current state to all remotes
      */
     function sendState() {
-        if (!channel) return;
-        channel.postMessage({
-            action: 'stateUpdate',
-            payload: getState()
+        const state = getState();
+
+        // BroadcastChannel for same-browser
+        if (channel) {
+            channel.postMessage({
+                action: 'stateUpdate',
+                payload: state
+            });
+        }
+
+        // HTTP API for cross-device (iPhone to MBP)
+        fetch('/api/remote/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(state)
+        }).catch(() => {
+            // API not available, use localStorage fallback
+            try {
+                localStorage.setItem(STATE_KEY, JSON.stringify(state));
+            } catch (e) {
+                // localStorage might be full or unavailable
+            }
         });
     }
 

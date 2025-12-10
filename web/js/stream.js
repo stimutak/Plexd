@@ -840,9 +840,10 @@ const PlexdStream = (function() {
                     break;
                 case 'z':
                 case 'Z':
-                    // Z in focused mode: do nothing, stay focused
-                    // Z is for entering focused mode, not exiting
-                    // Let app.js handle mode transitions
+                case 'Enter':
+                    // Z or Enter in focused mode: exit back to grid (toggle behavior)
+                    e.preventDefault();
+                    exitFocusedMode();
                     break;
                 case 'Escape':
                     e.preventDefault();

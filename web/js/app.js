@@ -1263,14 +1263,14 @@ const PlexdApp = (function() {
             case 'z':
             case 'Z':
                 e.preventDefault();
-                // Enter or Z: focus on selected stream (enter focused mode)
-                // In grid mode (normal or true-grid), this enters focused mode on selected stream
-                // In focused mode, this does nothing (stay focused, use arrows to switch)
+                // Enter or Z: toggle focused mode on stream
+                // In grid mode: enters focused mode on selected stream
+                // In focused mode: exits back to grid
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
-                        // Already in focused mode - do nothing (stay focused)
-                        // User can use arrows to switch streams or Escape to exit
+                        // Already in focused mode - exit back to grid
+                        PlexdStream.exitFocusedMode();
                     } else if (selected) {
                         // Enter focused mode on selected stream
                         PlexdStream.enterFocusedMode(selected.id);

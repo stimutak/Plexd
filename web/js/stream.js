@@ -843,6 +843,18 @@ const PlexdStream = (function() {
                         video.pause();
                     }
                     break;
+                case 'ArrowLeft':
+                case 'ArrowRight':
+                case 'ArrowUp':
+                case 'ArrowDown':
+                    // Prevent default video seeking behavior
+                    // Let the event bubble to app.js handleKeyboard for stream switching
+                    e.preventDefault();
+                    break;
+                case 'Enter':
+                    // Prevent any default behavior, let app.js handle focus mode
+                    e.preventDefault();
+                    break;
                 case 'z':
                 case 'Z':
                     // Z in focused mode: do nothing, stay focused

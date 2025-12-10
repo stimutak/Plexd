@@ -340,18 +340,30 @@ const PlexdApp = (function() {
     function handleAddStream() {
         if (!inputEl) return;
 
-        const url = inputEl.value.trim();
-        if (!url) {
+        const input = inputEl.value.trim();
+        if (!input) {
             showMessage('Please enter a stream URL', 'error');
             return;
         }
 
-        if (!isValidUrl(url)) {
-            showMessage('Please enter a valid URL', 'error');
-            return;
+        // Split by newlines, commas, or spaces to support multiple URLs
+        const urls = input.split(/[\n,\s]+/).filter(u => u.trim());
+        let addedCount = 0;
+
+        urls.forEach(url => {
+            url = url.trim();
+            if (url && isValidUrl(url)) {
+                addStream(url);
+                addedCount++;
+            }
+        });
+
+        if (addedCount === 0) {
+            showMessage('No valid URLs found', 'error');
+        } else if (addedCount > 1) {
+            showMessage(`Added ${addedCount} streams`, 'success');
         }
 
-        addStream(url);
         inputEl.value = '';
         inputEl.focus();
     }

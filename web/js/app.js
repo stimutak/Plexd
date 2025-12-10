@@ -48,6 +48,9 @@ const PlexdApp = (function() {
         // Set up event listeners
         setupEventListeners();
 
+        // Set up file drop support (QuickTime, etc.)
+        setupFileDrop();
+
         // Connect stream manager to layout updates
         PlexdStream.setLayoutUpdateCallback(updateLayout);
 
@@ -94,6 +97,146 @@ const PlexdApp = (function() {
                 toggleHeader();
             });
         }
+    }
+
+    /**
+     * Set up file drop support for QuickTime and other video files
+     */
+    function setupFileDrop() {
+        const app = document.querySelector('.plexd-app');
+        if (!app) return;
+
+        // Create drop overlay
+        const dropOverlay = document.createElement('div');
+        dropOverlay.id = 'plexd-drop-overlay';
+        dropOverlay.className = 'plexd-drop-overlay';
+        dropOverlay.innerHTML = `
+            <div class="plexd-drop-content">
+                <div class="plexd-drop-icon">🎬</div>
+                <div class="plexd-drop-text">Drop video files here</div>
+                <div class="plexd-drop-hint">QuickTime, MP4, WebM, and more</div>
+            </div>
+        `;
+        app.appendChild(dropOverlay);
+
+        // Supported video MIME types
+        const videoTypes = [
+            'video/quicktime',      // .mov
+            'video/mp4',            // .mp4
+            'video/webm',           // .webm
+            'video/x-m4v',          // .m4v
+            'video/x-matroska',     // .mkv
+            'video/avi',            // .avi
+            'video/x-msvideo',      // .avi (alt)
+            'video/ogg',            // .ogv
+            'video/3gpp',           // .3gp
+            'video/x-flv',          // .flv
+            'video/mpeg'            // .mpeg
+        ];
+
+        // Also check file extensions as fallback
+        const videoExtensions = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg'];
+
+        function isVideoFile(file) {
+            // Check MIME type
+            if (file.type && videoTypes.some(t => file.type.startsWith(t.split('/')[0] + '/'))) {
+                return true;
+            }
+            // Fallback to extension check
+            const name = file.name.toLowerCase();
+            return videoExtensions.some(ext => name.endsWith(ext));
+        }
+
+        let dragCounter = 0;
+
+        // Prevent default drag behavior on the whole document
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+        });
+
+        // Show overlay when dragging files over the app
+        app.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            dragCounter++;
+
+            // Check if dragging files (not internal drag)
+            if (e.dataTransfer && e.dataTransfer.types.includes('Files')) {
+                dropOverlay.classList.add('active');
+            }
+        });
+
+        app.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dragCounter--;
+
+            if (dragCounter === 0) {
+                dropOverlay.classList.remove('active');
+            }
+        });
+
+        app.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        });
+
+        // Handle file drop
+        app.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove('active');
+
+            const files = e.dataTransfer?.files;
+            if (!files || files.length === 0) return;
+
+            let addedCount = 0;
+            let skippedCount = 0;
+
+            Array.from(files).forEach(file => {
+                if (isVideoFile(file)) {
+                    // Create object URL for the file
+                    const objectUrl = URL.createObjectURL(file);
+
+                    // Add as stream
+                    addStreamFromFile(objectUrl, file.name);
+                    addedCount++;
+                } else {
+                    skippedCount++;
+                }
+            });
+
+            if (addedCount > 0) {
+                showMessage(`Added ${addedCount} video${addedCount > 1 ? 's' : ''} from dropped file${addedCount > 1 ? 's' : ''}`, 'success');
+            }
+            if (skippedCount > 0 && addedCount === 0) {
+                showMessage('Dropped file(s) are not supported video formats', 'error');
+            }
+        });
+    }
+
+    /**
+     * Add a stream from a dropped file
+     */
+    function addStreamFromFile(objectUrl, fileName) {
+        const stream = PlexdStream.createStream(objectUrl, {
+            autoplay: true,
+            muted: true
+        });
+
+        // Store the filename for display
+        stream.fileName = fileName;
+
+        containerEl.appendChild(stream.wrapper);
+        updateStreamCount();
+        updateLayout();
+
+        // Note: We don't add file streams to history since object URLs are temporary
+        showMessage(`Added: ${fileName}`, 'success');
     }
 
     /**
@@ -291,27 +434,20 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // F key for true fullscreen - works on fullscreen, selected, or first stream
+        // F key for true fullscreen - enters grid fullscreen or toggles
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
 
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
-                const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
-                if (fullscreenStream) {
-                    PlexdStream.toggleTrueFullscreen(fullscreenStream.id);
+                const mode = PlexdStream.getFullscreenMode();
+
+                if (mode === 'true-grid' || mode === 'true-focused') {
+                    // Already in true fullscreen - exit completely
+                    PlexdStream.exitTrueFullscreen();
                 } else {
-                    // If no fullscreen stream, try selected stream
-                    const selected = PlexdStream.getSelectedStream && PlexdStream.getSelectedStream();
-                    if (selected) {
-                        PlexdStream.toggleTrueFullscreen(selected.id);
-                    } else {
-                        // If no selection, use first stream
-                        const streams = PlexdStream.getAllStreams();
-                        if (streams.length > 0) {
-                            PlexdStream.toggleTrueFullscreen(streams[0].id);
-                        }
-                    }
+                    // Enter grid fullscreen (shows all streams in true fullscreen)
+                    PlexdStream.enterGridFullscreen();
                 }
             }
         });
@@ -538,10 +674,18 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Toggle global fullscreen
+     * Toggle global fullscreen (grid fullscreen mode)
+     * Enters true fullscreen with grid view (all streams visible)
      */
     function toggleGlobalFullscreen() {
-        PlexdStream.toggleGlobalFullscreen();
+        const mode = PlexdStream.getFullscreenMode();
+        if (mode === 'true-grid' || mode === 'true-focused') {
+            // Already in true fullscreen - exit
+            PlexdStream.exitTrueFullscreen();
+        } else {
+            // Enter grid fullscreen
+            PlexdStream.enterGridFullscreen();
+        }
     }
 
     /**
@@ -1073,7 +1217,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek forward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 10);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to next stream
+                    // In focused fullscreen: switch to next stream (stay in focused mode)
                     switchFullscreenStream('right');
                 } else {
                     PlexdStream.selectNextStream('right');
@@ -1085,7 +1229,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek backward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -10);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to prev stream
+                    // In focused fullscreen: switch to prev stream (stay in focused mode)
                     switchFullscreenStream('left');
                 } else {
                     PlexdStream.selectNextStream('left');
@@ -1097,7 +1241,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek forward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 60);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to stream above
+                    // In focused fullscreen: switch to stream above (stay in focused mode)
                     switchFullscreenStream('up');
                 } else {
                     PlexdStream.selectNextStream('up');
@@ -1109,7 +1253,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek backward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -60);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to stream below
+                    // In focused fullscreen: switch to stream below (stay in focused mode)
                     switchFullscreenStream('down');
                 } else {
                     PlexdStream.selectNextStream('down');
@@ -1119,17 +1263,29 @@ const PlexdApp = (function() {
             case 'z':
             case 'Z':
                 e.preventDefault();
-                // Enter or Z for fullscreen (Z is left-hand friendly)
-                if (selected) {
-                    PlexdStream.toggleFullscreen(selected.id);
-                } else if (fullscreenStream) {
-                    // Exit fullscreen if already in it
-                    PlexdStream.toggleFullscreen(fullscreenStream.id);
-                } else {
-                    // No selection and no fullscreen - fullscreen the first stream
-                    const allStreams = PlexdStream.getAllStreams();
-                    if (allStreams.length > 0) {
-                        PlexdStream.toggleFullscreen(allStreams[0].id);
+                // Enter or Z: focus on selected stream (enter focused mode)
+                // In grid mode (normal or true-grid), this enters focused mode on selected stream
+                // In focused mode, this does nothing (stay focused, use arrows to switch)
+                {
+                    const mode = PlexdStream.getFullscreenMode();
+                    if (mode === 'true-focused' || mode === 'browser-fill') {
+                        // Already in focused mode - do nothing (stay focused)
+                        // User can use arrows to switch streams or Escape to exit
+                    } else if (selected) {
+                        // Enter focused mode on selected stream
+                        PlexdStream.enterFocusedMode(selected.id);
+                    } else if (mode === 'true-grid') {
+                        // In grid fullscreen but no selection - select first stream
+                        const streams = PlexdStream.getAllStreams();
+                        if (streams.length > 0) {
+                            PlexdStream.enterFocusedMode(streams[0].id);
+                        }
+                    } else {
+                        // Normal mode, no selection - focus first stream
+                        const streams = PlexdStream.getAllStreams();
+                        if (streams.length > 0) {
+                            PlexdStream.enterFocusedMode(streams[0].id);
+                        }
                     }
                 }
                 break;
@@ -1149,13 +1305,30 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'Escape':
-                // Exit fullscreen or deselect
-                if (fullscreenStream) {
-                    PlexdStream.toggleFullscreen(fullscreenStream.id);
-                } else {
-                    PlexdStream.selectStream(null);
+                // Escape behavior depends on current mode:
+                // - true-focused: return to true-grid (stay in true fullscreen)
+                // - true-grid: exit true fullscreen completely
+                // - browser-fill: exit to normal grid
+                // - none: deselect
+                {
+                    const mode = PlexdStream.getFullscreenMode();
+                    if (mode === 'true-focused') {
+                        // Return to grid view in true fullscreen
+                        PlexdStream.exitFocusedMode();
+                    } else if (mode === 'true-grid') {
+                        // Exit true fullscreen completely
+                        PlexdStream.exitTrueFullscreen();
+                    } else if (mode === 'browser-fill') {
+                        // Exit browser-fill fullscreen
+                        if (fullscreenStream) {
+                            PlexdStream.toggleFullscreen(fullscreenStream.id);
+                        }
+                    } else {
+                        // Normal mode - just deselect
+                        PlexdStream.selectStream(null);
+                    }
+                    if (inputEl) inputEl.blur();
                 }
-                if (inputEl) inputEl.blur();
                 break;
             case '?':
                 // Toggle keyboard shortcuts visibility
@@ -1205,13 +1378,24 @@ const PlexdApp = (function() {
 
     /**
      * Switch fullscreen to next/prev stream in given direction
+     * Stays in the current fullscreen mode (focused mode)
+     * Respects current viewMode filter (rating subgroups)
      */
     function switchFullscreenStream(direction) {
-        const streams = PlexdStream.getAllStreams();
+        // Get streams based on current view mode filter
+        let streams;
+        if (viewMode === 'all') {
+            streams = PlexdStream.getAllStreams();
+        } else {
+            streams = PlexdStream.getStreamsByRating(viewMode);
+        }
+
         const fullscreenStream = PlexdStream.getFullscreenStream();
         if (!fullscreenStream || streams.length <= 1) return;
 
         const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
+        if (currentIndex === -1) return; // Current stream not in filtered set
+
         let newIndex;
 
         if (direction === 'right' || direction === 'down') {
@@ -1221,16 +1405,14 @@ const PlexdApp = (function() {
         }
 
         const newStream = streams[newIndex];
-        const wasInTrueFullscreen = !!document.fullscreenElement;
+        const mode = PlexdStream.getFullscreenMode();
 
-        // Exit current fullscreen
-        PlexdStream.toggleFullscreen(fullscreenStream.id);
-        // Enter fullscreen on new stream
-        PlexdStream.toggleFullscreen(newStream.id);
+        // Switch to new stream while staying in focused mode
+        PlexdStream.enterFocusedMode(newStream.id);
 
-        // If was in true fullscreen, re-enter true fullscreen on new stream
-        if (wasInTrueFullscreen) {
-            PlexdStream.toggleTrueFullscreen(newStream.id);
+        // If was in true-focused mode, ensure wrapper gets focus for keyboard events
+        if (mode === 'true-focused') {
+            newStream.wrapper.focus();
         }
     }
 

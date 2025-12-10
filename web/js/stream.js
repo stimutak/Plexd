@@ -552,17 +552,32 @@ const PlexdStream = (function() {
     // Track which stream is fullscreen
     let fullscreenStreamId = null;
 
+    // Track fullscreen modes:
+    // - 'none': normal windowed mode
+    // - 'browser-fill': CSS fullscreen (fills viewport, browser chrome visible)
+    // - 'true-grid': True fullscreen on app container (grid view)
+    // - 'true-focused': True fullscreen on a specific stream
+    let fullscreenMode = 'none';
+
     /**
      * Toggle fullscreen for a stream (browser-fill mode)
+     * In true fullscreen, this focuses/unfocuses a stream without exiting true fullscreen
      */
     function toggleFullscreen(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
+        // If we're in true-grid fullscreen, focus this stream (enter true-focused mode)
+        if (fullscreenMode === 'true-grid') {
+            enterFocusedMode(streamId);
+            return;
+        }
+
         if (fullscreenStreamId === streamId) {
             // Exit fullscreen
             stream.wrapper.classList.remove('plexd-fullscreen');
             fullscreenStreamId = null;
+            fullscreenMode = 'none';
             // Also exit true fullscreen if active
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -578,53 +593,164 @@ const PlexdStream = (function() {
             // Enter fullscreen
             stream.wrapper.classList.add('plexd-fullscreen');
             fullscreenStreamId = streamId;
+            fullscreenMode = 'browser-fill';
         }
         triggerLayoutUpdate();
     }
 
     /**
-     * Toggle true fullscreen (hides browser chrome)
+     * Enter focused mode on a stream (used from grid mode in true fullscreen)
      */
-    function toggleTrueFullscreen(streamId) {
+    function enterFocusedMode(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
+        // Exit any existing browser-fill fullscreen
+        if (fullscreenStreamId && fullscreenStreamId !== streamId) {
+            const prevStream = streams.get(fullscreenStreamId);
+            if (prevStream) {
+                prevStream.wrapper.classList.remove('plexd-fullscreen');
+            }
+        }
+
+        // Apply CSS fullscreen to this stream
+        stream.wrapper.classList.add('plexd-fullscreen');
+        fullscreenStreamId = streamId;
+
+        // If we're in true fullscreen grid mode, switch to focused mode
         if (document.fullscreenElement) {
-            // Exit both true fullscreen and browser-fill mode
-            document.exitFullscreen().then(() => {
-                // Also exit browser-fill mode after fullscreen exits
-                if (fullscreenStreamId) {
-                    const fsStream = streams.get(fullscreenStreamId);
-                    if (fsStream) {
-                        fsStream.wrapper.classList.remove('plexd-fullscreen');
-                    }
-                    fullscreenStreamId = null;
-                    triggerLayoutUpdate();
-                }
-            }).catch(() => {
-                // Fallback - try anyway
-                if (fullscreenStreamId) {
-                    const fsStream = streams.get(fullscreenStreamId);
-                    if (fsStream) {
-                        fsStream.wrapper.classList.remove('plexd-fullscreen');
-                    }
-                    fullscreenStreamId = null;
-                    triggerLayoutUpdate();
-                }
-            });
+            fullscreenMode = 'true-focused';
+            // Focus wrapper for keyboard events
+            stream.wrapper.focus();
         } else {
+            fullscreenMode = 'browser-fill';
+        }
+
+        // Select this stream
+        selectStream(streamId);
+        triggerLayoutUpdate();
+    }
+
+    /**
+     * Exit focused mode back to grid view (stays in true fullscreen if applicable)
+     */
+    function exitFocusedMode() {
+        if (fullscreenStreamId) {
+            const stream = streams.get(fullscreenStreamId);
+            if (stream) {
+                stream.wrapper.classList.remove('plexd-fullscreen');
+            }
+            fullscreenStreamId = null;
+        }
+
+        // If we were in true-focused mode, return to true-grid mode
+        if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
+            fullscreenMode = 'true-grid';
+        } else {
+            fullscreenMode = 'none';
+        }
+
+        triggerLayoutUpdate();
+    }
+
+    /**
+     * Toggle true fullscreen (hides browser chrome)
+     * If no stream specified, enters grid fullscreen mode
+     */
+    function toggleTrueFullscreen(streamId) {
+        if (document.fullscreenElement) {
+            // Exit true fullscreen completely
+            exitTrueFullscreen();
+        } else if (streamId) {
+            // Enter true fullscreen focused on a specific stream
+            const stream = streams.get(streamId);
+            if (!stream) return;
+
             // First ensure browser-fill mode is active
             if (fullscreenStreamId !== streamId) {
-                toggleFullscreen(streamId);
+                if (fullscreenStreamId) {
+                    const prevStream = streams.get(fullscreenStreamId);
+                    if (prevStream) {
+                        prevStream.wrapper.classList.remove('plexd-fullscreen');
+                    }
+                }
+                stream.wrapper.classList.add('plexd-fullscreen');
+                fullscreenStreamId = streamId;
             }
-            // Then request true fullscreen
+
+            // Request true fullscreen on the stream
             stream.wrapper.requestFullscreen().then(() => {
-                // Focus the wrapper so it receives keyboard events
+                fullscreenMode = 'true-focused';
                 stream.wrapper.focus();
             }).catch(err => {
                 console.log('Fullscreen request failed:', err);
             });
+        } else {
+            // Enter grid fullscreen (fullscreen on app container)
+            enterGridFullscreen();
         }
+    }
+
+    /**
+     * Enter true fullscreen in grid mode (shows all streams)
+     */
+    function enterGridFullscreen() {
+        const container = document.querySelector('.plexd-app');
+        if (!container) return;
+
+        // Exit any focused stream first
+        if (fullscreenStreamId) {
+            const stream = streams.get(fullscreenStreamId);
+            if (stream) {
+                stream.wrapper.classList.remove('plexd-fullscreen');
+            }
+            fullscreenStreamId = null;
+        }
+
+        container.requestFullscreen().then(() => {
+            fullscreenMode = 'true-grid';
+            triggerLayoutUpdate();
+        }).catch(err => {
+            console.log('Grid fullscreen request failed:', err);
+        });
+    }
+
+    /**
+     * Exit true fullscreen completely
+     */
+    function exitTrueFullscreen() {
+        if (!document.fullscreenElement) return;
+
+        document.exitFullscreen().then(() => {
+            // Also exit browser-fill mode
+            if (fullscreenStreamId) {
+                const stream = streams.get(fullscreenStreamId);
+                if (stream) {
+                    stream.wrapper.classList.remove('plexd-fullscreen');
+                }
+                fullscreenStreamId = null;
+            }
+            fullscreenMode = 'none';
+            triggerLayoutUpdate();
+        }).catch(() => {
+            // Fallback
+            if (fullscreenStreamId) {
+                const stream = streams.get(fullscreenStreamId);
+                if (stream) {
+                    stream.wrapper.classList.remove('plexd-fullscreen');
+                }
+                fullscreenStreamId = null;
+            }
+            fullscreenMode = 'none';
+            triggerLayoutUpdate();
+        });
+    }
+
+    /**
+     * Get the current fullscreen mode
+     */
+    function getFullscreenMode() {
+        return fullscreenMode;
     }
 
     /**
@@ -695,29 +821,15 @@ const PlexdStream = (function() {
         });
 
         // Keyboard handling on wrapper (for fullscreen mode)
+        // Note: Arrow keys and most keys are handled by app.js
+        // This handler catches keys when the wrapper has focus (in true-focused mode)
         wrapper.addEventListener('keydown', (e) => {
-            // Only handle when this element or fullscreen is active
+            // Only handle when this element is the fullscreen element or has focus
             if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
                 return;
             }
 
             switch (e.key) {
-                case 'ArrowRight':
-                    e.preventDefault();
-                    seekRelative(stream.id, 10);
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    seekRelative(stream.id, -10);
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    seekRelative(stream.id, 60);
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    seekRelative(stream.id, -60);
-                    break;
                 case ' ':
                     e.preventDefault();
                     if (video.paused) {
@@ -728,9 +840,19 @@ const PlexdStream = (function() {
                     break;
                 case 'z':
                 case 'Z':
+                    // Z in focused mode: do nothing, stay focused
+                    // Z is for entering focused mode, not exiting
+                    // Let app.js handle mode transitions
+                    break;
                 case 'Escape':
                     e.preventDefault();
-                    toggleFullscreen(stream.id);
+                    // Escape in true-focused mode: return to grid view (stay in true fullscreen)
+                    if (fullscreenMode === 'true-focused') {
+                        exitFocusedMode();
+                    } else {
+                        // In browser-fill mode: exit completely
+                        toggleFullscreen(stream.id);
+                    }
                     break;
                 case 'f':
                 case 'F':
@@ -1425,6 +1547,22 @@ const PlexdStream = (function() {
     // Load ratings on init
     loadRatings();
 
+    // Listen for fullscreen changes (when user exits via browser UI)
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement) {
+            // Exited fullscreen - reset mode
+            if (fullscreenStreamId) {
+                const stream = streams.get(fullscreenStreamId);
+                if (stream) {
+                    stream.wrapper.classList.remove('plexd-fullscreen');
+                }
+                fullscreenStreamId = null;
+            }
+            fullscreenMode = 'none';
+            triggerLayoutUpdate();
+        }
+    });
+
     // Public API
     return {
         createStream,
@@ -1437,6 +1575,11 @@ const PlexdStream = (function() {
         toggleTrueFullscreen,
         isAnyFullscreen,
         getFullscreenStream,
+        getFullscreenMode,
+        enterFocusedMode,
+        exitFocusedMode,
+        enterGridFullscreen,
+        exitTrueFullscreen,
         pauseAll,
         playAll,
         muteAll,

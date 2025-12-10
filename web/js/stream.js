@@ -263,6 +263,16 @@ const PlexdStream = (function() {
             toggleStreamInfo(streamId);
         };
 
+        // Copy URL button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'plexd-btn plexd-copy-btn';
+        copyBtn.innerHTML = '📋';
+        copyBtn.title = 'Copy stream URL';
+        copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            copyStreamUrl(streamId);
+        };
+
         // Reload button
         const reloadBtn = document.createElement('button');
         reloadBtn.className = 'plexd-btn plexd-reload-btn';
@@ -291,6 +301,7 @@ const PlexdStream = (function() {
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
         buttonRow.appendChild(infoBtn);
+        buttonRow.appendChild(copyBtn);
         buttonRow.appendChild(reloadBtn);
         buttonRow.appendChild(removeBtn);
 
@@ -1111,6 +1122,47 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Copy stream URL to clipboard
+     */
+    function copyStreamUrl(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        navigator.clipboard.writeText(stream.url).then(() => {
+            // Visual feedback - briefly highlight the copy button
+            const copyBtn = stream.controls.querySelector('.plexd-copy-btn');
+            if (copyBtn) {
+                copyBtn.innerHTML = '✓';
+                setTimeout(() => {
+                    copyBtn.innerHTML = '📋';
+                }, 1000);
+            }
+        }).catch(err => {
+            console.warn('Copy failed:', err);
+        });
+
+        return true;
+    }
+
+    /**
+     * Copy all stream URLs to clipboard (newline separated)
+     */
+    function copyAllStreamUrls() {
+        const urls = [];
+        streams.forEach(stream => {
+            urls.push(stream.url);
+        });
+
+        if (urls.length === 0) return false;
+
+        navigator.clipboard.writeText(urls.join('\n')).catch(err => {
+            console.warn('Copy all failed:', err);
+        });
+
+        return urls.length;
+    }
+
+    /**
      * Toggle mute for a stream (with audio focus support)
      */
     function toggleMute(streamId) {
@@ -1652,6 +1704,8 @@ const PlexdStream = (function() {
         createStream,
         removeStream,
         reloadStream,
+        copyStreamUrl,
+        copyAllStreamUrls,
         getStream,
         getAllStreams,
         getStreamCount,

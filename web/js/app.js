@@ -20,15 +20,18 @@ const PlexdApp = (function() {
 
     // View mode: 'all', or 1-5 for star ratings
     let viewMode = 'all';
+    window._plexdViewMode = viewMode;
 
     // View mode cycle order: all -> 1 -> 2 -> 3 -> 4 -> 5 -> all
     const viewModes = ['all', 1, 2, 3, 4, 5];
 
     // Tetris layout mode
     let tetrisMode = false;
+    window._plexdTetrisMode = tetrisMode;
 
     // Header visibility (starts hidden)
     let headerVisible = false;
+    window._plexdHeaderVisible = headerVisible;
 
     /**
      * Initialize the application
@@ -248,6 +251,7 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
 
         headerVisible = !headerVisible;
+        window._plexdHeaderVisible = headerVisible;
 
         if (headerVisible) {
             header.classList.remove('plexd-header-hidden');
@@ -584,6 +588,7 @@ const PlexdApp = (function() {
      */
     function setViewMode(mode) {
         viewMode = mode;
+        window._plexdViewMode = mode;
         updateViewButtons();
         updateLayout();
 
@@ -622,6 +627,7 @@ const PlexdApp = (function() {
      */
     function toggleTetrisMode() {
         tetrisMode = !tetrisMode;
+        window._plexdTetrisMode = tetrisMode;
 
         const tetrisBtn = document.getElementById('tetris-btn');
         const app = document.querySelector('.plexd-app');
@@ -2134,3 +2140,292 @@ if (document.readyState === 'loading') {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = PlexdApp;
 }
+
+// ========================================
+// Remote Control via BroadcastChannel
+// ========================================
+
+/**
+ * PlexdRemote - Handles communication between main display and remote control
+ * Uses BroadcastChannel API for same-origin communication across tabs/windows
+ */
+const PlexdRemote = (function() {
+    'use strict';
+
+    let channel = null;
+    let stateUpdateInterval = null;
+
+    /**
+     * Initialize remote control listener (called on main display)
+     */
+    function init() {
+        if (typeof BroadcastChannel === 'undefined') {
+            console.warn('BroadcastChannel not supported - remote control unavailable');
+            return;
+        }
+
+        channel = new BroadcastChannel('plexd-remote');
+
+        channel.onmessage = (event) => {
+            const { action, payload } = event.data;
+            handleRemoteCommand(action, payload);
+        };
+
+        // Send state updates periodically and on changes
+        startStateUpdates();
+
+        console.log('Plexd remote control listener initialized');
+    }
+
+    /**
+     * Handle incoming remote commands
+     */
+    function handleRemoteCommand(action, payload = {}) {
+        switch (action) {
+            // Connection
+            case 'ping':
+                sendState();
+                break;
+
+            // Playback controls
+            case 'togglePauseAll':
+                PlexdApp.togglePauseAll();
+                sendState();
+                break;
+            case 'toggleMuteAll':
+                PlexdApp.toggleMuteAll();
+                sendState();
+                break;
+            case 'togglePause':
+                if (payload.streamId) {
+                    const stream = PlexdStream.getStream(payload.streamId);
+                    if (stream && stream.video) {
+                        if (stream.video.paused) {
+                            stream.video.play().catch(() => {});
+                        } else {
+                            stream.video.pause();
+                        }
+                    }
+                }
+                sendState();
+                break;
+            case 'toggleMute':
+                if (payload.streamId) {
+                    PlexdStream.toggleMute(payload.streamId);
+                }
+                sendState();
+                break;
+            case 'seek':
+                if (payload.streamId && typeof payload.time === 'number') {
+                    PlexdStream.seekTo(payload.streamId, payload.time);
+                }
+                sendState();
+                break;
+            case 'seekRelative':
+                if (payload.streamId && typeof payload.offset === 'number') {
+                    PlexdStream.seekRelative(payload.streamId, payload.offset);
+                }
+                sendState();
+                break;
+
+            // Selection/Navigation
+            case 'selectStream':
+                PlexdStream.selectStream(payload.streamId || null);
+                sendState();
+                break;
+            case 'selectNext':
+                PlexdStream.selectNextStream(payload.direction || 'right');
+                sendState();
+                break;
+
+            // Fullscreen
+            case 'enterFullscreen':
+                if (payload.streamId) {
+                    PlexdStream.enterFocusedMode(payload.streamId);
+                } else {
+                    PlexdStream.enterGridFullscreen();
+                }
+                sendState();
+                break;
+            case 'exitFullscreen':
+                const mode = PlexdStream.getFullscreenMode();
+                if (mode === 'true-focused') {
+                    PlexdStream.exitFocusedMode();
+                } else if (mode === 'true-grid') {
+                    PlexdStream.exitTrueFullscreen();
+                } else if (mode === 'browser-fill') {
+                    const fs = PlexdStream.getFullscreenStream();
+                    if (fs) PlexdStream.toggleFullscreen(fs.id);
+                }
+                sendState();
+                break;
+            case 'toggleGlobalFullscreen':
+                PlexdApp.toggleGlobalFullscreen();
+                sendState();
+                break;
+
+            // View modes
+            case 'setViewMode':
+                PlexdApp.setViewMode(payload.mode);
+                sendState();
+                break;
+            case 'cycleViewMode':
+                PlexdApp.cycleViewMode();
+                sendState();
+                break;
+            case 'toggleTetrisMode':
+                PlexdApp.toggleTetrisMode();
+                sendState();
+                break;
+
+            // Ratings
+            case 'setRating':
+                if (payload.streamId && typeof payload.rating === 'number') {
+                    PlexdStream.setRating(payload.streamId, payload.rating);
+                }
+                sendState();
+                break;
+            case 'cycleRating':
+                if (payload.streamId) {
+                    PlexdStream.cycleRating(payload.streamId);
+                }
+                sendState();
+                break;
+
+            // Stream management
+            case 'removeStream':
+                if (payload.streamId) {
+                    PlexdStream.removeStream(payload.streamId);
+                    PlexdApp.saveCurrentStreams();
+                }
+                sendState();
+                break;
+            case 'addStream':
+                if (payload.url) {
+                    PlexdApp.addStream(payload.url);
+                }
+                sendState();
+                break;
+
+            // UI toggles
+            case 'toggleHeader':
+                PlexdApp.toggleHeader();
+                sendState();
+                break;
+            case 'toggleCleanMode':
+                PlexdApp.toggleCleanMode();
+                sendState();
+                break;
+            case 'toggleAudioFocus':
+                PlexdApp.toggleAudioFocus();
+                sendState();
+                break;
+
+            // State request
+            case 'getState':
+                sendState();
+                break;
+
+            default:
+                console.warn('Unknown remote command:', action);
+        }
+    }
+
+    /**
+     * Get current application state for remotes
+     */
+    function getState() {
+        const streams = PlexdStream.getAllStreams().map(s => ({
+            id: s.id,
+            url: s.url,
+            state: s.state,
+            paused: s.video ? s.video.paused : true,
+            muted: s.video ? s.video.muted : true,
+            currentTime: s.video ? s.video.currentTime : 0,
+            duration: s.video ? s.video.duration : 0,
+            aspectRatio: s.aspectRatio,
+            rating: PlexdStream.getRating(s.url),
+            fileName: s.fileName || null
+        }));
+
+        const selected = PlexdStream.getSelectedStream();
+        const fullscreenStream = PlexdStream.getFullscreenStream();
+
+        return {
+            streams,
+            selectedStreamId: selected ? selected.id : null,
+            fullscreenStreamId: fullscreenStream ? fullscreenStream.id : null,
+            fullscreenMode: PlexdStream.getFullscreenMode(),
+            viewMode: window.PlexdAppState?.viewMode || 'all',
+            tetrisMode: window.PlexdAppState?.tetrisMode || false,
+            headerVisible: window.PlexdAppState?.headerVisible || false,
+            cleanMode: PlexdStream.isCleanMode ? PlexdStream.isCleanMode() : false,
+            audioFocusMode: PlexdStream.getAudioFocusMode ? PlexdStream.getAudioFocusMode() !== 'off' : true,
+            timestamp: Date.now()
+        };
+    }
+
+    /**
+     * Send current state to all remotes
+     */
+    function sendState() {
+        if (!channel) return;
+        channel.postMessage({
+            action: 'stateUpdate',
+            payload: getState()
+        });
+    }
+
+    /**
+     * Start periodic state updates
+     */
+    function startStateUpdates() {
+        // Send state every 500ms for responsive UI
+        stateUpdateInterval = setInterval(sendState, 500);
+
+        // Also send on key events that might change state
+        document.addEventListener('keydown', () => setTimeout(sendState, 50));
+    }
+
+    /**
+     * Stop state updates (cleanup)
+     */
+    function stop() {
+        if (stateUpdateInterval) {
+            clearInterval(stateUpdateInterval);
+        }
+        if (channel) {
+            channel.close();
+        }
+    }
+
+    return {
+        init,
+        sendState,
+        getState,
+        stop
+    };
+})();
+
+// Expose state getters for remote
+window.PlexdAppState = {
+    get viewMode() {
+        // Access from closure - need to expose this
+        return window._plexdViewMode || 'all';
+    },
+    get tetrisMode() {
+        return window._plexdTetrisMode || false;
+    },
+    get headerVisible() {
+        return window._plexdHeaderVisible || false;
+    }
+};
+
+// Initialize remote listener when app is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', PlexdRemote.init);
+} else {
+    PlexdRemote.init();
+}
+
+window.PlexdRemote = PlexdRemote;

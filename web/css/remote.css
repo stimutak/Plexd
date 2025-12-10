@@ -1,0 +1,464 @@
+/**
+ * Plexd Remote Control Styles
+ * Mobile-optimized CSS for iPhone remote control
+ */
+
+/* ========================================
+   Reset & Base
+   ======================================== */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+    touch-action: manipulation; /* Prevent double-tap zoom */
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+    background: #0a0a0a;
+    color: #fff;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ========================================
+   Layout
+   ======================================== */
+
+.remote-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height for mobile */
+    width: 100vw;
+}
+
+/* ========================================
+   Header
+   ======================================== */
+
+.remote-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: #161616;
+    border-bottom: 1px solid #2a2a2a;
+    flex-shrink: 0;
+    /* Safe area for notch */
+    padding-top: max(12px, env(safe-area-inset-top));
+}
+
+.remote-logo {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: -0.5px;
+}
+
+.remote-logo span {
+    color: #888;
+}
+
+/* Connection Status */
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #888;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #666;
+    transition: background 0.3s;
+}
+
+.connection-status.connected .status-dot {
+    background: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.connection-status.disconnected .status-dot {
+    background: #ef4444;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ========================================
+   Main Content (Stream List)
+   ======================================== */
+
+.remote-main {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+.stream-list {
+    padding: 8px;
+}
+
+/* Empty State */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    padding: 32px 16px;
+    text-align: center;
+    color: #666;
+}
+
+.empty-state p {
+    margin-bottom: 8px;
+    font-size: 16px;
+}
+
+.empty-state .hint {
+    font-size: 13px;
+    color: #555;
+}
+
+.empty-state.error p {
+    color: #ef4444;
+}
+
+/* Stream Item */
+.stream-item {
+    background: #1a1a1a;
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
+    border: 2px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.stream-item:active {
+    transform: scale(0.98);
+    background: #252525;
+}
+
+.stream-item.selected {
+    border-color: #555;
+    background: #222;
+}
+
+.stream-item.fullscreen {
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
+}
+
+/* Rating colors */
+.stream-item.rating-1 { border-left: 3px solid #ef4444; }
+.stream-item.rating-2 { border-left: 3px solid #f97316; }
+.stream-item.rating-3 { border-left: 3px solid #eab308; }
+.stream-item.rating-4 { border-left: 3px solid #84cc16; }
+.stream-item.rating-5 { border-left: 3px solid #22c55e; }
+
+.stream-info {
+    margin-bottom: 8px;
+}
+
+.stream-name {
+    font-size: 15px;
+    font-weight: 500;
+    color: #fff;
+    margin-bottom: 4px;
+    word-break: break-word;
+}
+
+.stream-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #888;
+}
+
+.stream-state {
+    font-size: 12px;
+}
+
+.stream-state.playing {
+    color: #22c55e;
+}
+
+.stream-state.paused {
+    color: #888;
+}
+
+.stream-rating {
+    font-size: 11px;
+}
+
+.stream-rating.rating-1 { color: #ef4444; }
+.stream-rating.rating-2 { color: #f97316; }
+.stream-rating.rating-3 { color: #eab308; }
+.stream-rating.rating-4 { color: #84cc16; }
+.stream-rating.rating-5 { color: #22c55e; }
+
+.stream-audio {
+    font-size: 11px;
+}
+
+/* Progress Bar */
+.stream-progress {
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+    margin-bottom: 10px;
+    overflow: hidden;
+}
+
+.stream-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6, #6366f1);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* Stream Actions */
+.stream-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+}
+
+.stream-btn {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 10px;
+    background: #333;
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.stream-btn:active {
+    transform: scale(0.92);
+    background: #444;
+}
+
+.stream-btn.active {
+    background: #3b82f6;
+}
+
+.stream-btn.rating-btn.rating-1 { color: #ef4444; }
+.stream-btn.rating-btn.rating-2 { color: #f97316; }
+.stream-btn.rating-btn.rating-3 { color: #eab308; }
+.stream-btn.rating-btn.rating-4 { color: #84cc16; }
+.stream-btn.rating-btn.rating-5 { color: #22c55e; }
+
+/* ========================================
+   Footer Controls
+   ======================================== */
+
+.remote-controls {
+    background: #161616;
+    border-top: 1px solid #2a2a2a;
+    padding: 12px 16px;
+    /* Safe area for home indicator */
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    flex-shrink: 0;
+}
+
+.control-row {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.control-row:last-child {
+    margin-bottom: 0;
+}
+
+/* Control Buttons */
+.control-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 12px;
+    background: #2a2a2a;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.control-btn .icon {
+    font-size: 18px;
+}
+
+.control-btn:active {
+    transform: scale(0.92);
+    background: #3a3a3a;
+}
+
+.control-btn.active {
+    background: #3b82f6;
+}
+
+.control-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.control-btn:disabled:active {
+    transform: none;
+}
+
+/* Transport Controls (large) */
+.transport-controls .control-btn {
+    width: 60px;
+    height: 60px;
+}
+
+.transport-controls .large-btn {
+    width: 80px;
+    height: 80px;
+    border-radius: 40px;
+    background: #3b82f6;
+}
+
+.transport-controls .large-btn .icon {
+    font-size: 28px;
+}
+
+.transport-controls .large-btn:active {
+    background: #2563eb;
+}
+
+.transport-controls .nav-btn {
+    background: #333;
+}
+
+/* Seek Controls */
+.seek-controls .control-btn {
+    width: 60px;
+    height: 48px;
+}
+
+.seek-controls .control-btn .icon {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* View Controls */
+.view-controls .control-btn {
+    width: 56px;
+    height: 44px;
+}
+
+.view-controls .control-btn .icon {
+    font-size: 16px;
+}
+
+/* ========================================
+   Dark Mode Scrollbar (WebKit)
+   ======================================== */
+
+::-webkit-scrollbar {
+    width: 4px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 2px;
+}
+
+/* ========================================
+   Landscape Mode Adjustments
+   ======================================== */
+
+@media (orientation: landscape) and (max-height: 500px) {
+    .remote-header {
+        padding: 8px 16px;
+    }
+
+    .stream-list {
+        padding: 6px;
+    }
+
+    .stream-item {
+        padding: 10px;
+        margin-bottom: 6px;
+    }
+
+    .remote-controls {
+        padding: 8px 16px;
+    }
+
+    .control-row {
+        margin-bottom: 6px;
+        gap: 8px;
+    }
+
+    .transport-controls .control-btn {
+        width: 48px;
+        height: 48px;
+    }
+
+    .transport-controls .large-btn {
+        width: 64px;
+        height: 64px;
+    }
+
+    .seek-controls .control-btn,
+    .view-controls .control-btn {
+        width: 48px;
+        height: 40px;
+    }
+}
+
+/* ========================================
+   Large Screen Adjustments
+   ======================================== */
+
+@media (min-width: 768px) {
+    .remote-app {
+        max-width: 480px;
+        margin: 0 auto;
+        border-left: 1px solid #2a2a2a;
+        border-right: 1px solid #2a2a2a;
+    }
+}
+
+/* ========================================
+   Accessibility
+   ======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}

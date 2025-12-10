@@ -1118,13 +1118,18 @@ const PlexdApp = (function() {
             case 'Enter':
             case 'z':
             case 'Z':
+                e.preventDefault();
                 // Enter or Z for fullscreen (Z is left-hand friendly)
                 if (selected) {
                     PlexdStream.toggleFullscreen(selected.id);
+                } else if (fullscreenStream) {
+                    // Exit fullscreen if already in it
+                    PlexdStream.toggleFullscreen(fullscreenStream.id);
                 } else {
-                    // If no selection but there's a fullscreen stream, exit it
-                    if (fullscreenStream) {
-                        PlexdStream.toggleFullscreen(fullscreenStream.id);
+                    // No selection and no fullscreen - fullscreen the first stream
+                    const allStreams = PlexdStream.getAllStreams();
+                    if (allStreams.length > 0) {
+                        PlexdStream.toggleFullscreen(allStreams[0].id);
                     }
                 }
                 break;

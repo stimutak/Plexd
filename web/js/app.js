@@ -25,7 +25,11 @@ const PlexdApp = (function() {
     // View mode cycle order: all -> 1 -> 2 -> 3 -> 4 -> 5 -> all
     const viewModes = ['all', 1, 2, 3, 4, 5];
 
-    // Tetris layout mode
+    // Smart Layout mode (Tetris-like intelligent overlapping)
+    let smartLayoutMode = false;
+    window._plexdSmartLayoutMode = smartLayoutMode;
+
+    // Legacy alias for compatibility
     let tetrisMode = false;
     window._plexdTetrisMode = tetrisMode;
 
@@ -572,8 +576,9 @@ const PlexdApp = (function() {
         };
 
         let layout;
-        if (tetrisMode) {
-            layout = calculateTetrisLayout(container, streamsToShow);
+        if (smartLayoutMode) {
+            // Use the new intelligent Smart Layout algorithm
+            layout = PlexdGrid.calculateSmartLayout(container, streamsToShow);
         } else {
             layout = PlexdGrid.calculateLayout(container, streamsToShow);
         }
@@ -660,20 +665,38 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Toggle tetris layout mode
+     * Toggle Smart Layout mode (Tetris-like intelligent overlapping)
+     * This mode analyzes video aspect ratios and allows overlapping
+     * into letterbox (black bar) zones to maximize viewable area.
      */
-    function toggleTetrisMode() {
-        tetrisMode = !tetrisMode;
+    function toggleSmartLayoutMode() {
+        smartLayoutMode = !smartLayoutMode;
+        window._plexdSmartLayoutMode = smartLayoutMode;
+
+        // Keep legacy alias in sync
+        tetrisMode = smartLayoutMode;
         window._plexdTetrisMode = tetrisMode;
 
         const tetrisBtn = document.getElementById('tetris-btn');
+        const smartBtn = document.getElementById('smart-layout-btn');
         const app = document.querySelector('.plexd-app');
 
-        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode);
-        if (app) app.classList.toggle('tetris-mode', tetrisMode);
+        if (tetrisBtn) tetrisBtn.classList.toggle('active', smartLayoutMode);
+        if (smartBtn) smartBtn.classList.toggle('active', smartLayoutMode);
+        if (app) {
+            app.classList.toggle('tetris-mode', smartLayoutMode);
+            app.classList.toggle('smart-layout-mode', smartLayoutMode);
+        }
 
         updateLayout();
-        showMessage(`Tetris mode: ${tetrisMode ? 'ON' : 'OFF'}`, 'info');
+        showMessage(`Smart Layout: ${smartLayoutMode ? 'ON' : 'OFF'}`, 'info');
+    }
+
+    /**
+     * Legacy alias for backward compatibility
+     */
+    function toggleTetrisMode() {
+        toggleSmartLayoutMode();
     }
 
     /**
@@ -1252,6 +1275,28 @@ const PlexdApp = (function() {
                 const showInfo = PlexdStream.toggleAllStreamInfo();
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
+            case 'c':
+            case 'C':
+                // Copy stream URL(s) - Shift+C for all, C for selected/focused
+                if (e.shiftKey) {
+                    // Copy all stream URLs
+                    const count = PlexdStream.copyAllStreamUrls();
+                    if (count) {
+                        showMessage(`Copied ${count} stream URL(s)`, 'success');
+                    } else {
+                        showMessage('No streams to copy', 'info');
+                    }
+                } else {
+                    // Copy selected or focused stream URL
+                    const targetStream = PlexdStream.getFullscreenStream() || selected;
+                    if (targetStream) {
+                        PlexdStream.copyStreamUrl(targetStream.id);
+                        showMessage('URL copied to clipboard', 'success');
+                    } else {
+                        showMessage('Select a stream first (use arrow keys)', 'info');
+                    }
+                }
+                break;
             case 'p':
             case 'P':
                 if (selected) {
@@ -1384,6 +1429,11 @@ const PlexdApp = (function() {
                 break;
             case 't':
             case 'T':
+                // Toggle Smart Layout mode (Tetris-like intelligent window management)
+                toggleSmartLayoutMode();
+                break;
+            case 'h':
+            case 'H':
                 // Toggle header toolbar
                 toggleHeader();
                 break;
@@ -2221,6 +2271,7 @@ const PlexdApp = (function() {
         setViewMode,
         cycleViewMode,
         toggleTetrisMode,
+        toggleSmartLayoutMode,
         toggleHeader,
         // Global controls
         togglePauseAll,
@@ -2429,7 +2480,8 @@ const PlexdRemote = (function() {
                 sendState();
                 break;
             case 'toggleTetrisMode':
-                PlexdApp.toggleTetrisMode();
+            case 'toggleSmartLayoutMode':
+                PlexdApp.toggleSmartLayoutMode();
                 sendState();
                 break;
 
@@ -2588,6 +2640,9 @@ window.PlexdAppState = {
     },
     get tetrisMode() {
         return window._plexdTetrisMode || false;
+    },
+    get smartLayoutMode() {
+        return window._plexdSmartLayoutMode || false;
     },
     get headerVisible() {
         return window._plexdHeaderVisible || false;

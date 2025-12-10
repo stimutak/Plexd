@@ -1026,13 +1026,23 @@ const PlexdApp = (function() {
 
     /**
      * Switch fullscreen to next/prev stream in given direction
+     * Respects current viewMode filter (rating subgroups)
      */
     function switchFullscreenStream(direction) {
-        const streams = PlexdStream.getAllStreams();
+        // Get streams based on current view mode filter
+        let streams;
+        if (viewMode === 'all') {
+            streams = PlexdStream.getAllStreams();
+        } else {
+            streams = PlexdStream.getStreamsByRating(viewMode);
+        }
+
         const fullscreenStream = PlexdStream.getFullscreenStream();
         if (!fullscreenStream || streams.length <= 1) return;
 
         const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
+        if (currentIndex === -1) return; // Current stream not in filtered set
+
         let newIndex;
 
         if (direction === 'right' || direction === 'down') {

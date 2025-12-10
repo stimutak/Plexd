@@ -695,6 +695,7 @@ const PlexdStream = (function() {
         });
 
         // Keyboard handling on wrapper (for fullscreen mode)
+        // Note: Arrow keys are handled by app.js with K modifier support
         wrapper.addEventListener('keydown', (e) => {
             // Only handle when this element or fullscreen is active
             if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
@@ -702,22 +703,6 @@ const PlexdStream = (function() {
             }
 
             switch (e.key) {
-                case 'ArrowRight':
-                    e.preventDefault();
-                    seekRelative(stream.id, 10);
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    seekRelative(stream.id, -10);
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    seekRelative(stream.id, 60);
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    seekRelative(stream.id, -60);
-                    break;
                 case ' ':
                     e.preventDefault();
                     if (video.paused) {

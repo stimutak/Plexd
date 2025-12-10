@@ -62,10 +62,15 @@ const PlexdStream = (function() {
         // Create info overlay
         const infoOverlay = createInfoOverlay(url);
 
-        // Create rating indicator (always present, visibility controlled by CSS)
+        // Create rating indicator (tappable on touch devices)
         const ratingIndicator = document.createElement('div');
         ratingIndicator.className = 'plexd-rating-indicator';
-        ratingIndicator.innerHTML = ''; // Will be set based on rating
+        ratingIndicator.innerHTML = '☆'; // Show empty star initially
+        ratingIndicator.title = 'Tap to rate';
+        ratingIndicator.onclick = (e) => {
+            e.stopPropagation();
+            cycleRating(id);
+        };
 
         // Assemble
         wrapper.appendChild(video);
@@ -1484,11 +1489,11 @@ const PlexdStream = (function() {
             }
         }
 
-        // Update indicator - show ★N format to keep it compact
+        // Update indicator - always show on touch, tappable to rate
         const indicator = stream.wrapper.querySelector('.plexd-rating-indicator');
         if (indicator) {
             if (rating === 0) {
-                indicator.innerHTML = '';
+                indicator.innerHTML = '☆';
                 indicator.className = 'plexd-rating-indicator';
             } else {
                 indicator.innerHTML = `★${rating}`;

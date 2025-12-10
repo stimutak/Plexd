@@ -1043,24 +1043,29 @@ body {
    Rating System
    ======================================== */
 
-/* Rating indicator on stream */
+/* Rating indicator on stream - tappable */
 .plexd-rating-indicator {
     position: absolute;
     top: 8px;
     right: 8px;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 6px;
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 12px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 14px;
     z-index: 5;
     opacity: 0;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s, transform 0.1s;
     color: #fbbf24;
+    cursor: pointer;
+}
+
+.plexd-rating-indicator:active {
+    transform: scale(0.95);
 }
 
 .plexd-rating-indicator.rated {
@@ -1071,14 +1076,13 @@ body {
     opacity: 1;
 }
 
-/* Touch devices - always show rated indicators and rating controls */
+/* Touch devices - always show rating indicator (tappable) */
 @media (pointer: coarse) {
     .plexd-rating-indicator {
-        opacity: 1;
-    }
-
-    .plexd-rating-indicator:not(.rated) {
-        opacity: 0.5;
+        opacity: 0.7;
+        min-width: 36px;
+        height: 36px;
+        font-size: 16px;
     }
 
     .plexd-rating-indicator.rated {

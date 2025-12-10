@@ -1374,6 +1374,10 @@ const PlexdApp = (function() {
             case 'v':
             case 'V':
                 // Cycle view mode (all -> 1★ -> 2★ -> 3★ -> 4★ -> 5★ -> all)
+                // If in focus mode, exit first to show filtered grid
+                if (PlexdStream.getFullscreenMode() !== 'none') {
+                    PlexdStream.exitFocusedMode();
+                }
                 cycleViewMode();
                 break;
             case 'g':
@@ -1383,6 +1387,11 @@ const PlexdApp = (function() {
                     const newRating = PlexdStream.cycleRating(selected.id);
                     const stars = '★'.repeat(newRating);
                     showMessage(`Rated: ${stars}`, 'info');
+                    // If in focus mode with filter active and new rating doesn't match, exit
+                    const isFullscreen = PlexdStream.getFullscreenMode() !== 'none';
+                    if (isFullscreen && viewMode !== 'all' && newRating !== viewMode) {
+                        PlexdStream.exitFocusedMode();
+                    }
                 }
                 break;
             case '0':
@@ -1391,6 +1400,8 @@ const PlexdApp = (function() {
                 if (e.shiftKey) {
                     // Shift+0: opposite action
                     if (PlexdStream.getFullscreenMode() !== 'none') {
+                        // Filter action in focus mode - exit first to show filtered grid
+                        PlexdStream.exitFocusedMode();
                         setViewMode('all');
                     } else if (selected) {
                         PlexdStream.clearRating(selected.id);
@@ -1403,6 +1414,11 @@ const PlexdApp = (function() {
                         if (fsStream) {
                             PlexdStream.clearRating(fsStream.id);
                             showMessage('Rating cleared', 'info');
+                            // If a filter is active, clearing rating makes stream no longer match
+                            // Exit focus mode to avoid being stuck viewing a hidden stream
+                            if (viewMode !== 'all') {
+                                PlexdStream.exitFocusedMode();
+                            }
                         }
                     } else {
                         // Grid mode: show all streams
@@ -1432,9 +1448,17 @@ const PlexdApp = (function() {
                             PlexdStream.setRating(targetStream.id, rating);
                             const stars = '★'.repeat(rating);
                             showMessage(`Rated: ${stars}`, 'info');
+                            // If in focus mode with a filter active and new rating doesn't match,
+                            // exit focus mode to avoid being stuck viewing a hidden stream
+                            if (isFullscreen && viewMode !== 'all' && rating !== viewMode) {
+                                PlexdStream.exitFocusedMode();
+                            }
                         }
                     } else {
-                        // Filter action
+                        // Filter action - if in focus mode, exit first to show filtered grid
+                        if (isFullscreen) {
+                            PlexdStream.exitFocusedMode();
+                        }
                         const count = PlexdStream.getStreamsByRating(rating).length;
                         setViewMode(rating);
                         if (count === 0) {

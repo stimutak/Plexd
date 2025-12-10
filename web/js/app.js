@@ -434,27 +434,20 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
-        // F key for true fullscreen - works on fullscreen, selected, or first stream
+        // F key for true fullscreen - enters grid fullscreen or toggles
         document.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT') return;
 
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
-                const fullscreenStream = PlexdStream.getFullscreenStream && PlexdStream.getFullscreenStream();
-                if (fullscreenStream) {
-                    PlexdStream.toggleTrueFullscreen(fullscreenStream.id);
+                const mode = PlexdStream.getFullscreenMode();
+
+                if (mode === 'true-grid' || mode === 'true-focused') {
+                    // Already in true fullscreen - exit completely
+                    PlexdStream.exitTrueFullscreen();
                 } else {
-                    // If no fullscreen stream, try selected stream
-                    const selected = PlexdStream.getSelectedStream && PlexdStream.getSelectedStream();
-                    if (selected) {
-                        PlexdStream.toggleTrueFullscreen(selected.id);
-                    } else {
-                        // If no selection, use first stream
-                        const streams = PlexdStream.getAllStreams();
-                        if (streams.length > 0) {
-                            PlexdStream.toggleTrueFullscreen(streams[0].id);
-                        }
-                    }
+                    // Enter grid fullscreen (shows all streams in true fullscreen)
+                    PlexdStream.enterGridFullscreen();
                 }
             }
         });
@@ -681,10 +674,18 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Toggle global fullscreen
+     * Toggle global fullscreen (grid fullscreen mode)
+     * Enters true fullscreen with grid view (all streams visible)
      */
     function toggleGlobalFullscreen() {
-        PlexdStream.toggleGlobalFullscreen();
+        const mode = PlexdStream.getFullscreenMode();
+        if (mode === 'true-grid' || mode === 'true-focused') {
+            // Already in true fullscreen - exit
+            PlexdStream.exitTrueFullscreen();
+        } else {
+            // Enter grid fullscreen
+            PlexdStream.enterGridFullscreen();
+        }
     }
 
     /**
@@ -899,7 +900,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek forward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 10);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to next stream
+                    // In focused fullscreen: switch to next stream (stay in focused mode)
                     switchFullscreenStream('right');
                 } else {
                     PlexdStream.selectNextStream('right');
@@ -911,7 +912,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek backward 10 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -10);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to prev stream
+                    // In focused fullscreen: switch to prev stream (stay in focused mode)
                     switchFullscreenStream('left');
                 } else {
                     PlexdStream.selectNextStream('left');
@@ -923,7 +924,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek forward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, 60);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to stream above
+                    // In focused fullscreen: switch to stream above (stay in focused mode)
                     switchFullscreenStream('up');
                 } else {
                     PlexdStream.selectNextStream('up');
@@ -935,7 +936,7 @@ const PlexdApp = (function() {
                     // K+Arrow: seek backward 60 seconds
                     PlexdStream.seekRelative(fullscreenStream.id, -60);
                 } else if (fullscreenStream) {
-                    // In fullscreen: switch to stream below
+                    // In focused fullscreen: switch to stream below (stay in focused mode)
                     switchFullscreenStream('down');
                 } else {
                     PlexdStream.selectNextStream('down');
@@ -944,13 +945,23 @@ const PlexdApp = (function() {
             case 'Enter':
             case 'z':
             case 'Z':
-                // Enter or Z for fullscreen (Z is left-hand friendly)
-                if (selected) {
-                    PlexdStream.toggleFullscreen(selected.id);
-                } else {
-                    // If no selection but there's a fullscreen stream, exit it
-                    if (fullscreenStream) {
-                        PlexdStream.toggleFullscreen(fullscreenStream.id);
+                // Enter or Z: focus on selected stream (enter focused mode)
+                // In grid mode (normal or true-grid), this enters focused mode on selected stream
+                // In focused mode, this does nothing (stay focused, use arrows to switch)
+                {
+                    const mode = PlexdStream.getFullscreenMode();
+                    if (mode === 'true-focused' || mode === 'browser-fill') {
+                        // Already in focused mode - do nothing (stay focused)
+                        // User can use arrows to switch streams or Escape to exit
+                    } else if (selected) {
+                        // Enter focused mode on selected stream
+                        PlexdStream.enterFocusedMode(selected.id);
+                    } else if (mode === 'true-grid') {
+                        // In grid fullscreen but no selection - select first stream
+                        const streams = PlexdStream.getAllStreams();
+                        if (streams.length > 0) {
+                            PlexdStream.enterFocusedMode(streams[0].id);
+                        }
                     }
                 }
                 break;
@@ -970,13 +981,30 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'Escape':
-                // Exit fullscreen or deselect
-                if (fullscreenStream) {
-                    PlexdStream.toggleFullscreen(fullscreenStream.id);
-                } else {
-                    PlexdStream.selectStream(null);
+                // Escape behavior depends on current mode:
+                // - true-focused: return to true-grid (stay in true fullscreen)
+                // - true-grid: exit true fullscreen completely
+                // - browser-fill: exit to normal grid
+                // - none: deselect
+                {
+                    const mode = PlexdStream.getFullscreenMode();
+                    if (mode === 'true-focused') {
+                        // Return to grid view in true fullscreen
+                        PlexdStream.exitFocusedMode();
+                    } else if (mode === 'true-grid') {
+                        // Exit true fullscreen completely
+                        PlexdStream.exitTrueFullscreen();
+                    } else if (mode === 'browser-fill') {
+                        // Exit browser-fill fullscreen
+                        if (fullscreenStream) {
+                            PlexdStream.toggleFullscreen(fullscreenStream.id);
+                        }
+                    } else {
+                        // Normal mode - just deselect
+                        PlexdStream.selectStream(null);
+                    }
+                    if (inputEl) inputEl.blur();
                 }
-                if (inputEl) inputEl.blur();
                 break;
             case '?':
                 // Toggle keyboard shortcuts visibility
@@ -1026,6 +1054,7 @@ const PlexdApp = (function() {
 
     /**
      * Switch fullscreen to next/prev stream in given direction
+     * Stays in the current fullscreen mode (focused mode)
      * Respects current viewMode filter (rating subgroups)
      */
     function switchFullscreenStream(direction) {
@@ -1052,16 +1081,14 @@ const PlexdApp = (function() {
         }
 
         const newStream = streams[newIndex];
-        const wasInTrueFullscreen = !!document.fullscreenElement;
+        const mode = PlexdStream.getFullscreenMode();
 
-        // Exit current fullscreen
-        PlexdStream.toggleFullscreen(fullscreenStream.id);
-        // Enter fullscreen on new stream
-        PlexdStream.toggleFullscreen(newStream.id);
+        // Switch to new stream while staying in focused mode
+        PlexdStream.enterFocusedMode(newStream.id);
 
-        // If was in true fullscreen, re-enter true fullscreen on new stream
-        if (wasInTrueFullscreen) {
-            PlexdStream.toggleTrueFullscreen(newStream.id);
+        // If was in true-focused mode, ensure wrapper gets focus for keyboard events
+        if (mode === 'true-focused') {
+            newStream.wrapper.focus();
         }
     }
 

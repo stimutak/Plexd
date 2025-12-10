@@ -1291,6 +1291,8 @@ const PlexdApp = (function() {
                 break;
             case 'Delete':
             case 'Backspace':
+            case 'x':
+            case 'X':
                 if (selected) {
                     PlexdStream.removeStream(selected.id);
                     updateStreamCount();

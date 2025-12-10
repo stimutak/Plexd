@@ -646,6 +646,9 @@ const PlexdStream = (function() {
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
             fullscreenMode = 'true-grid';
+            // Focus container for keyboard events
+            const container = document.querySelector('.plexd-app');
+            if (container) container.focus();
         } else {
             fullscreenMode = 'none';
         }
@@ -709,6 +712,8 @@ const PlexdStream = (function() {
 
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-grid';
+            // Focus container for keyboard events
+            container.focus();
             triggerLayoutUpdate();
         }).catch(err => {
             console.log('Grid fullscreen request failed:', err);

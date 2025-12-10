@@ -283,15 +283,21 @@ const PlexdGrid = (function() {
         const count = streamData.length;
         const cells = [];
 
-        // Calculate base sizes - start with equal area distribution
+        // Calculate base sizes - give each video a reasonable share of container
+        // Use larger allocation to ensure videos are substantial
         const totalArea = container.width * container.height;
-        const areaPerStream = totalArea / count;
+        const areaPerStream = totalArea / Math.max(1, count * 0.7); // Allocate more area per stream
 
         // Sort by aspect ratio - place widest first, they set the horizontal structure
         const sorted = [...streamData].sort((a, b) => b.aspectRatio - a.aspectRatio);
 
         // Track occupied regions (with video content, not black bars)
         const occupiedRegions = [];
+
+        // Minimum size: ensure each video is at least this portion of container
+        const minSizeRatio = count <= 2 ? 0.4 : count <= 4 ? 0.3 : 0.25;
+        const minWidth = container.width * minSizeRatio;
+        const minHeight = container.height * minSizeRatio;
 
         for (let i = 0; i < sorted.length; i++) {
             const data = sorted[i];
@@ -301,17 +307,27 @@ const PlexdGrid = (function() {
             let targetHeight = Math.sqrt(areaPerStream / ar);
             let targetWidth = targetHeight * ar;
 
-            // Scale to fit container (allow some variation)
+            // Enforce minimum size
+            if (targetWidth < minWidth) {
+                targetWidth = minWidth;
+                targetHeight = targetWidth / ar;
+            }
+            if (targetHeight < minHeight) {
+                targetHeight = minHeight;
+                targetWidth = targetHeight * ar;
+            }
+
+            // Scale to fit container (allow some variation but maintain minimum)
             const maxScale = 1.3;
-            const minScale = 0.6;
+            const minScale = 0.8; // Don't go too small
 
             // Try different scales to find best fit
             let bestPlacement = null;
             let bestScore = -Infinity;
 
             for (let scale = maxScale; scale >= minScale; scale -= 0.1) {
-                const width = targetWidth * scale;
-                const height = targetHeight * scale;
+                const width = Math.max(targetWidth * scale, minWidth);
+                const height = Math.max(targetHeight * scale, minHeight);
 
                 // Find best position for this scaled size
                 const placement = findBestPosition(
@@ -324,15 +340,23 @@ const PlexdGrid = (function() {
                 }
             }
 
-            // Fallback if no good placement found
+            // Fallback if no good placement found - use a reasonable grid-like placement
             if (!bestPlacement) {
-                const width = Math.min(targetWidth * 0.8, container.width * 0.9);
-                const height = width / ar;
+                // Calculate reasonable fallback size
+                const cols = Math.ceil(Math.sqrt(count));
+                const rows = Math.ceil(count / cols);
+                const cellWidth = container.width / cols;
+                const cellHeight = container.height / rows;
+
+                const fit = fitToContainer({ width: cellWidth * 0.95, height: cellHeight * 0.95 }, ar);
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+
                 bestPlacement = {
-                    x: (container.width - width) / 2,
-                    y: (container.height - height) / 2 + (i * 20),
-                    width,
-                    height,
+                    x: col * cellWidth + (cellWidth - fit.width) / 2,
+                    y: row * cellHeight + (cellHeight - fit.height) / 2,
+                    width: fit.width,
+                    height: fit.height,
                     score: 0
                 };
             }
@@ -495,6 +519,7 @@ const PlexdGrid = (function() {
 
     /**
      * Scale the layout to better fill the container
+     * Ensures videos fill the available space properly
      */
     function scaleLayoutToFit(container, cells) {
         if (cells.length === 0) return cells;
@@ -510,9 +535,10 @@ const PlexdGrid = (function() {
         const currentWidth = maxX - minX;
         const currentHeight = maxY - minY;
 
+        // Scale to fill container - allow full scaling, no arbitrary cap
         const scaleX = container.width / currentWidth;
         const scaleY = container.height / currentHeight;
-        const scale = Math.min(scaleX, scaleY, 1.15);
+        const scale = Math.min(scaleX, scaleY);
 
         const scaledWidth = currentWidth * scale;
         const scaledHeight = currentHeight * scale;
@@ -663,17 +689,22 @@ const PlexdGrid = (function() {
         const count = streamData.length;
         const cells = [];
 
-        // Calculate size for each video - larger for fewer videos
-        const sizeMultiplier = Math.max(0.4, 0.9 - count * 0.1);
+        // Calculate size for each video - ensure reasonable minimum size
+        // Each video should be at least 40% of container for 2 videos, scaling down more gradually
+        const sizeMultiplier = Math.max(0.5, 0.85 - count * 0.07);
         const baseWidth = container.width * sizeMultiplier;
 
+        // Minimum size enforcement
+        const minWidth = container.width * (count <= 2 ? 0.4 : count <= 4 ? 0.3 : 0.25);
+        const effectiveWidth = Math.max(baseWidth, minWidth);
+
         // Calculate diagonal spacing
-        const diagStepX = (container.width - baseWidth) / Math.max(1, count - 1);
-        const diagStepY = (container.height - baseWidth * 0.6) / Math.max(1, count - 1);
+        const diagStepX = (container.width - effectiveWidth) / Math.max(1, count - 1);
+        const diagStepY = (container.height - effectiveWidth * 0.6) / Math.max(1, count - 1);
 
         streamData.forEach((data, i) => {
             const ar = data.aspectRatio;
-            const width = baseWidth;
+            const width = effectiveWidth;
             const height = width / ar;
 
             cells.push({
@@ -681,7 +712,7 @@ const PlexdGrid = (function() {
                 x: i * diagStepX,
                 y: i * diagStepY,
                 width,
-                height: Math.min(height, container.height * 0.8),
+                height: Math.min(height, container.height * 0.85),
                 zIndex: count - i // First video on top
             });
         });
@@ -698,24 +729,52 @@ const PlexdGrid = (function() {
 
     /**
      * Build final layout result for smart layouts
+     * Includes minimum size validation to prevent tiny videos
      */
     function buildSmartLayoutResult(container, cells, count) {
         const containerArea = container.width * container.height;
         let videoArea = 0;
 
+        // Minimum size: each video should be at least 15% of container in both dimensions
+        // For small counts, be more generous
+        const minWidthRatio = count <= 2 ? 0.3 : count <= 4 ? 0.2 : 0.15;
+        const minHeightRatio = count <= 2 ? 0.3 : count <= 4 ? 0.2 : 0.15;
+        const minWidth = container.width * minWidthRatio;
+        const minHeight = container.height * minHeightRatio;
+
+        let hasTinyVideo = false;
+        let smallestRatio = 1;
+
         for (const cell of cells) {
             videoArea += cell.width * cell.height;
+
+            // Check if this video is too small
+            const widthRatio = cell.width / container.width;
+            const heightRatio = cell.height / container.height;
+            const sizeRatio = Math.min(widthRatio, heightRatio);
+            smallestRatio = Math.min(smallestRatio, sizeRatio);
+
+            if (cell.width < minWidth || cell.height < minHeight) {
+                hasTinyVideo = true;
+            }
         }
 
         // Estimate actual visible area (accounting for overlaps)
         const overlapFactor = count > 1 ? Math.max(0.7, 1 - count * 0.05) : 1;
-        const visibleArea = Math.min(videoArea * overlapFactor, containerArea);
+        let visibleArea = Math.min(videoArea * overlapFactor, containerArea);
+
+        // Heavily penalize layouts with tiny videos
+        let efficiency = visibleArea / containerArea;
+        if (hasTinyVideo) {
+            // Reduce efficiency based on how small the smallest video is
+            efficiency *= smallestRatio * 0.5;
+        }
 
         return {
             cells,
             rows: Math.ceil(Math.sqrt(count)),
             cols: Math.ceil(count / Math.ceil(Math.sqrt(count))),
-            efficiency: visibleArea / containerArea,
+            efficiency,
             mode: 'smart'
         };
     }

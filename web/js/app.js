@@ -545,12 +545,18 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Calculate Tetris-like layout based on video aspect ratios
-     * Packs videos more efficiently by considering their actual proportions
+     * Improved Tetris Layout - Skyline bin-packing with gap filling
+     * Tries 4 strategies and picks the most efficient one:
+     * 1. Row-based packing (videos in horizontal rows)
+     * 2. Column-based packing (videos in vertical columns)
+     * 3. Skyline bin-packing (true tetris-style gap filling)
+     * 4. Balanced grid (uniform cells with aspect ratio fitting)
      */
     function calculateTetrisLayout(container, streams) {
         const count = streams.length;
-        if (count === 0) return { cells: [], rows: 0, cols: 0 };
+        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0 };
+
+        // Single stream - maximize it
         if (count === 1) {
             const fit = PlexdGrid.fitToContainer(container, streams[0].aspectRatio || 16/9);
             return {
@@ -567,89 +573,400 @@ const PlexdApp = (function() {
             };
         }
 
-        // Sort streams by aspect ratio (widest first for better packing)
-        const sorted = [...streams].sort((a, b) =>
-            (b.aspectRatio || 16/9) - (a.aspectRatio || 16/9)
-        );
+        // Try multiple layout strategies and pick the best one
+        const layouts = [
+            tryRowBasedLayout(container, streams),
+            tryColumnBasedLayout(container, streams),
+            trySkylineLayout(container, streams),
+            tryBalancedGridLayout(container, streams)
+        ];
 
-        // Use a bin-packing approach
+        // Pick layout with highest efficiency
+        let bestLayout = layouts[0];
+        for (const layout of layouts) {
+            if (layout.efficiency > bestLayout.efficiency) {
+                bestLayout = layout;
+            }
+        }
+
+        return bestLayout;
+    }
+
+    /**
+     * Row-based layout - pack videos in rows, varying heights
+     */
+    function tryRowBasedLayout(container, streams) {
+        const count = streams.length;
+        const targetRowHeight = container.height / Math.ceil(Math.sqrt(count));
         const cells = [];
-        const occupied = []; // Track occupied regions
 
-        // Calculate target cell sizes based on count
-        const targetArea = (container.width * container.height) / count;
-        const targetSize = Math.sqrt(targetArea);
-
-        // Track available rows
-        const rowHeights = [];
         let currentY = 0;
-        let currentX = 0;
-        let currentRowHeight = 0;
-        let maxRowWidth = 0;
+        let rowStart = 0;
 
-        sorted.forEach((stream, index) => {
-            const aspectRatio = stream.aspectRatio || 16/9;
+        while (rowStart < count) {
+            // Figure out how many videos fit in this row
+            let rowWidth = 0;
+            let rowEnd = rowStart;
+            const rowHeight = Math.min(targetRowHeight, container.height - currentY);
 
-            // Calculate size for this video
-            let width, height;
-            if (aspectRatio > 1) {
-                // Wide video
-                width = Math.min(targetSize * Math.sqrt(aspectRatio), container.width * 0.6);
-                height = width / aspectRatio;
-            } else {
-                // Tall video
-                height = Math.min(targetSize / Math.sqrt(aspectRatio), container.height * 0.6);
-                width = height * aspectRatio;
+            // Calculate widths for videos at this row height
+            const rowVideos = [];
+            for (let i = rowStart; i < count; i++) {
+                const ar = streams[i].aspectRatio || 16/9;
+                const videoWidth = rowHeight * ar;
+
+                if (rowWidth + videoWidth <= container.width * 1.1 || rowVideos.length === 0) {
+                    rowVideos.push({ stream: streams[i], width: videoWidth });
+                    rowWidth += videoWidth;
+                    rowEnd = i + 1;
+                } else {
+                    break;
+                }
             }
 
-            // Check if fits in current row
-            if (currentX + width > container.width) {
-                // Move to next row
-                currentY += currentRowHeight;
-                currentX = 0;
-                currentRowHeight = 0;
+            // Scale row to fit container width exactly
+            const scale = Math.min(container.width / rowWidth, 1);
+            const scaledHeight = rowHeight * scale;
+
+            // Center row horizontally if it doesn't fill width
+            const actualRowWidth = rowWidth * scale;
+            let x = (container.width - actualRowWidth) / 2;
+
+            for (const rv of rowVideos) {
+                const scaledWidth = rv.width * scale;
+                cells.push({
+                    streamId: rv.stream.id,
+                    x: x,
+                    y: currentY,
+                    width: scaledWidth,
+                    height: scaledHeight
+                });
+                x += scaledWidth;
             }
 
-            // Check if fits vertically
-            if (currentY + height > container.height) {
-                // Scale down remaining videos to fit
-                const remainingCount = count - index;
-                const remainingHeight = container.height - currentY;
-                const scaleFactor = Math.min(1, remainingHeight / height);
-                width *= scaleFactor;
-                height *= scaleFactor;
-            }
+            currentY += scaledHeight;
+            rowStart = rowEnd;
+        }
 
-            cells.push({
-                streamId: stream.id,
-                x: currentX,
-                y: currentY,
-                width: width,
-                height: height
-            });
-
-            currentX += width;
-            currentRowHeight = Math.max(currentRowHeight, height);
-            maxRowWidth = Math.max(maxRowWidth, currentX);
-        });
-
-        // Center the layout
-        const totalHeight = currentY + currentRowHeight;
-        const offsetX = (container.width - maxRowWidth) / 2;
+        // Center vertically
+        const totalHeight = currentY;
         const offsetY = (container.height - totalHeight) / 2;
+        if (offsetY > 0) {
+            cells.forEach(cell => cell.y += offsetY);
+        }
+
+        return buildLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Column-based layout - pack videos in columns, varying widths
+     */
+    function tryColumnBasedLayout(container, streams) {
+        const count = streams.length;
+        const targetColWidth = container.width / Math.ceil(Math.sqrt(count));
+        const cells = [];
+
+        let currentX = 0;
+        let colStart = 0;
+
+        while (colStart < count) {
+            let colHeight = 0;
+            let colEnd = colStart;
+            const colWidth = Math.min(targetColWidth, container.width - currentX);
+
+            const colVideos = [];
+            for (let i = colStart; i < count; i++) {
+                const ar = streams[i].aspectRatio || 16/9;
+                const videoHeight = colWidth / ar;
+
+                if (colHeight + videoHeight <= container.height * 1.1 || colVideos.length === 0) {
+                    colVideos.push({ stream: streams[i], height: videoHeight });
+                    colHeight += videoHeight;
+                    colEnd = i + 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Scale column to fit container height exactly
+            const scale = Math.min(container.height / colHeight, 1);
+            const scaledWidth = colWidth * scale;
+
+            // Center column vertically if it doesn't fill height
+            const actualColHeight = colHeight * scale;
+            let y = (container.height - actualColHeight) / 2;
+
+            for (const cv of colVideos) {
+                const scaledHeight = cv.height * scale;
+                cells.push({
+                    streamId: cv.stream.id,
+                    x: currentX,
+                    y: y,
+                    width: scaledWidth,
+                    height: scaledHeight
+                });
+                y += scaledHeight;
+            }
+
+            currentX += scaledWidth;
+            colStart = colEnd;
+        }
+
+        // Center horizontally
+        const totalWidth = currentX;
+        const offsetX = (container.width - totalWidth) / 2;
+        if (offsetX > 0) {
+            cells.forEach(cell => cell.x += offsetX);
+        }
+
+        return buildLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Skyline layout - place videos at lowest available point (true bin-packing)
+     */
+    function trySkylineLayout(container, streams) {
+        const count = streams.length;
+
+        // Calculate uniform size that would fit all videos
+        const targetArea = (container.width * container.height) / count;
+        const avgAspectRatio = streams.reduce((sum, s) => sum + (s.aspectRatio || 16/9), 0) / count;
+        const baseHeight = Math.sqrt(targetArea / avgAspectRatio);
+
+        // Skyline tracks the top edge at each x position
+        // Start with flat ground at y=0
+        let skyline = [{ x: 0, y: 0, width: container.width }];
+        const cells = [];
+
+        // Sort by height (tallest first for better packing)
+        const sorted = [...streams].map(s => ({
+            stream: s,
+            aspectRatio: s.aspectRatio || 16/9
+        })).sort((a, b) => (1/a.aspectRatio) - (1/b.aspectRatio));
+
+        for (const item of sorted) {
+            const ar = item.aspectRatio;
+            // Size based on target, but respect aspect ratio
+            let height = baseHeight;
+            let width = height * ar;
+
+            // Scale down if too wide
+            if (width > container.width * 0.6) {
+                width = container.width * 0.6;
+                height = width / ar;
+            }
+
+            // Find best position in skyline (lowest point that fits)
+            let bestPos = null;
+            let bestY = Infinity;
+
+            for (let i = 0; i < skyline.length; i++) {
+                const seg = skyline[i];
+                if (seg.width >= width) {
+                    // Check if this position works
+                    const y = seg.y;
+                    if (y + height <= container.height && y < bestY) {
+                        bestY = y;
+                        bestPos = { x: seg.x, y: y, segIndex: i };
+                    }
+                }
+                // Also try spanning multiple segments
+                if (i < skyline.length - 1) {
+                    let spanWidth = seg.width;
+                    let maxY = seg.y;
+                    for (let j = i + 1; j < skyline.length && spanWidth < width; j++) {
+                        spanWidth += skyline[j].width;
+                        maxY = Math.max(maxY, skyline[j].y);
+                    }
+                    if (spanWidth >= width && maxY + height <= container.height && maxY < bestY) {
+                        bestY = maxY;
+                        bestPos = { x: seg.x, y: maxY, segIndex: i };
+                    }
+                }
+            }
+
+            if (!bestPos) {
+                // Fallback: scale down to fit
+                const availableHeight = container.height - skyline.reduce((max, s) => Math.max(max, s.y), 0);
+                if (availableHeight > 0) {
+                    height = Math.min(height, availableHeight);
+                    width = height * ar;
+                    bestPos = { x: 0, y: container.height - height, segIndex: 0 };
+                }
+            }
+
+            if (bestPos) {
+                cells.push({
+                    streamId: item.stream.id,
+                    x: bestPos.x,
+                    y: bestPos.y,
+                    width: width,
+                    height: height
+                });
+
+                // Update skyline
+                skyline = updateSkyline(skyline, bestPos.x, bestPos.y + height, width);
+            }
+        }
+
+        // Scale and center the layout
+        const bounds = getCellBounds(cells);
+        const scaleX = container.width / bounds.width;
+        const scaleY = container.height / bounds.height;
+        const scale = Math.min(scaleX, scaleY, 1.2); // Allow slight upscale
 
         cells.forEach(cell => {
-            cell.x += Math.max(0, offsetX);
-            cell.y += Math.max(0, offsetY);
+            cell.x = (cell.x - bounds.minX) * scale;
+            cell.y = (cell.y - bounds.minY) * scale;
+            cell.width *= scale;
+            cell.height *= scale;
         });
 
-        // Calculate efficiency
+        // Center
+        const newBounds = getCellBounds(cells);
+        const offsetX = (container.width - newBounds.width) / 2;
+        const offsetY = (container.height - newBounds.height) / 2;
+        cells.forEach(cell => {
+            cell.x += offsetX;
+            cell.y += offsetY;
+        });
+
+        return buildLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Balanced grid layout - equal sized cells but respecting aspect ratios
+     */
+    function tryBalancedGridLayout(container, streams) {
+        const count = streams.length;
+
+        // Find best grid dimensions
+        let bestGrid = { rows: 1, cols: count, score: -Infinity };
+        for (let rows = 1; rows <= count; rows++) {
+            const cols = Math.ceil(count / rows);
+            const cellWidth = container.width / cols;
+            const cellHeight = container.height / rows;
+            const cellRatio = cellWidth / cellHeight;
+
+            // Score based on how close to 16:9 and fill efficiency
+            const targetRatio = 16/9;
+            const ratioScore = 1 - Math.abs(cellRatio - targetRatio) / targetRatio;
+            const fillScore = count / (rows * cols);
+            const score = ratioScore * 0.4 + fillScore * 0.6;
+
+            if (score > bestGrid.score) {
+                bestGrid = { rows, cols, score };
+            }
+        }
+
+        const { rows, cols } = bestGrid;
+        const cellWidth = container.width / cols;
+        const cellHeight = container.height / rows;
+        const cells = [];
+
+        // Place videos in grid, fitting each to its cell
+        let streamIndex = 0;
+        for (let row = 0; row < rows && streamIndex < count; row++) {
+            // Center partial rows
+            const videosInRow = Math.min(cols, count - streamIndex);
+            const rowOffset = (cols - videosInRow) * cellWidth / 2;
+
+            for (let col = 0; col < videosInRow; col++) {
+                const stream = streams[streamIndex];
+                const ar = stream.aspectRatio || 16/9;
+
+                // Fit video in cell
+                const fit = PlexdGrid.fitToContainer({ width: cellWidth, height: cellHeight }, ar);
+
+                cells.push({
+                    streamId: stream.id,
+                    x: col * cellWidth + rowOffset + (cellWidth - fit.width) / 2,
+                    y: row * cellHeight + (cellHeight - fit.height) / 2,
+                    width: fit.width,
+                    height: fit.height
+                });
+
+                streamIndex++;
+            }
+        }
+
+        return buildLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Update skyline after placing a rectangle
+     */
+    function updateSkyline(skyline, x, newY, width) {
+        const newSkyline = [];
+        const endX = x + width;
+
+        for (const seg of skyline) {
+            const segEnd = seg.x + seg.width;
+
+            if (segEnd <= x || seg.x >= endX) {
+                // Segment doesn't overlap with placed rect
+                newSkyline.push(seg);
+            } else {
+                // Segment overlaps - split it
+                if (seg.x < x) {
+                    newSkyline.push({ x: seg.x, y: seg.y, width: x - seg.x });
+                }
+                if (segEnd > endX) {
+                    newSkyline.push({ x: endX, y: seg.y, width: segEnd - endX });
+                }
+            }
+        }
+
+        // Add new segment for placed rect
+        newSkyline.push({ x: x, y: newY, width: width });
+
+        // Sort by x and merge adjacent segments at same height
+        newSkyline.sort((a, b) => a.x - b.x);
+
+        const merged = [];
+        for (const seg of newSkyline) {
+            if (merged.length > 0) {
+                const last = merged[merged.length - 1];
+                if (Math.abs(last.x + last.width - seg.x) < 1 && Math.abs(last.y - seg.y) < 1) {
+                    last.width += seg.width;
+                    continue;
+                }
+            }
+            merged.push({ ...seg });
+        }
+
+        return merged;
+    }
+
+    /**
+     * Get bounding box of all cells
+     */
+    function getCellBounds(cells) {
+        if (cells.length === 0) return { minX: 0, minY: 0, width: 0, height: 0 };
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const cell of cells) {
+            minX = Math.min(minX, cell.x);
+            minY = Math.min(minY, cell.y);
+            maxX = Math.max(maxX, cell.x + cell.width);
+            maxY = Math.max(maxY, cell.y + cell.height);
+        }
+
+        return { minX, minY, width: maxX - minX, height: maxY - minY };
+    }
+
+    /**
+     * Build final layout result with efficiency metrics
+     */
+    function buildLayoutResult(container, cells, count) {
         const videoArea = cells.reduce((sum, cell) => sum + (cell.width * cell.height), 0);
         const efficiency = videoArea / (container.width * container.height);
 
-        // Estimate cols for keyboard nav
-        const avgWidth = cells.reduce((sum, cell) => sum + cell.width, 0) / cells.length;
-        const cols = Math.round(container.width / avgWidth);
+        // Estimate grid dimensions for keyboard nav
+        const avgWidth = cells.length > 0 ?
+            cells.reduce((sum, cell) => sum + cell.width, 0) / cells.length :
+            container.width;
+        const cols = Math.max(1, Math.round(container.width / avgWidth));
 
         return {
             cells,

@@ -1,7 +1,8 @@
 /**
  * Plexd Remote Control
  *
- * Mobile-optimized remote control for Plexd via BroadcastChannel
+ * Mobile-optimized remote control for Plexd via BroadcastChannel + localStorage
+ * Works both same-device (BroadcastChannel) and cross-device (localStorage)
  */
 
 const PlexdRemoteClient = (function() {
@@ -12,7 +13,11 @@ const PlexdRemoteClient = (function() {
     let connected = false;
     let lastStateTime = 0;
     let connectionCheckInterval = null;
+    let statePollInterval = null;
     let selectedStreamId = null;
+
+    const COMMAND_KEY = 'plexd_remote_command';
+    const STATE_KEY = 'plexd_remote_state';
 
     // DOM elements
     const elements = {};
@@ -21,24 +26,33 @@ const PlexdRemoteClient = (function() {
      * Initialize the remote control
      */
     function init() {
-        // Check BroadcastChannel support
-        if (typeof BroadcastChannel === 'undefined') {
-            showError('BroadcastChannel not supported in this browser');
-            return;
-        }
-
         // Cache DOM elements
         cacheElements();
 
-        // Set up BroadcastChannel
-        channel = new BroadcastChannel('plexd-remote');
+        // Set up BroadcastChannel for same-browser communication
+        if (typeof BroadcastChannel !== 'undefined') {
+            channel = new BroadcastChannel('plexd-remote');
+            channel.onmessage = (event) => {
+                const { action, payload } = event.data;
+                if (action === 'stateUpdate') {
+                    handleStateUpdate(payload);
+                }
+            };
+        }
 
-        channel.onmessage = (event) => {
-            const { action, payload } = event.data;
-            if (action === 'stateUpdate') {
-                handleStateUpdate(payload);
+        // Set up localStorage polling for cross-device
+        startStatePoll();
+
+        // Listen for storage events (cross-tab on same device)
+        window.addEventListener('storage', (e) => {
+            if (e.key === STATE_KEY && e.newValue) {
+                try {
+                    handleStateUpdate(JSON.parse(e.newValue));
+                } catch (err) {
+                    // ignore parse errors
+                }
             }
-        };
+        });
 
         // Set up event listeners
         setupEventListeners();
@@ -50,6 +64,40 @@ const PlexdRemoteClient = (function() {
         connectionCheckInterval = setInterval(checkConnection, 1000);
 
         console.log('Plexd remote client initialized');
+    }
+
+    /**
+     * Poll for state updates (HTTP API + localStorage fallback)
+     */
+    function startStatePoll() {
+        statePollInterval = setInterval(async () => {
+            try {
+                // Try HTTP API first (for cross-device)
+                const res = await fetch('/api/remote/state');
+                if (res.ok) {
+                    const newState = await res.json();
+                    if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                        handleStateUpdate(newState);
+                    }
+                    return;
+                }
+            } catch (e) {
+                // API not available, fall back to localStorage
+            }
+
+            // localStorage fallback (same device)
+            const stateData = localStorage.getItem(STATE_KEY);
+            if (stateData) {
+                try {
+                    const newState = JSON.parse(stateData);
+                    if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                        handleStateUpdate(newState);
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            }
+        }, 300);
     }
 
     /**
@@ -140,8 +188,30 @@ const PlexdRemoteClient = (function() {
      * Send a command to the main display
      */
     function send(action, payload = {}) {
-        if (!channel) return;
-        channel.postMessage({ action, payload });
+        const command = {
+            action,
+            payload,
+            timestamp: Date.now()
+        };
+
+        // BroadcastChannel for same-browser
+        if (channel) {
+            channel.postMessage(command);
+        }
+
+        // HTTP API for cross-device (iPhone to MBP)
+        fetch('/api/remote/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(command)
+        }).catch(() => {
+            // API not available, fall back to localStorage
+            try {
+                localStorage.setItem(COMMAND_KEY, JSON.stringify(command));
+            } catch (e) {
+                console.warn('Could not write command');
+            }
+        });
     }
 
     /**

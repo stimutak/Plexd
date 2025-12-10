@@ -1354,10 +1354,17 @@ const PlexdApp = (function() {
                 }
                 break;
             case '0':
-                // Clear rating on selected stream
-                if (selected) {
-                    PlexdStream.clearRating(selected.id);
-                    showMessage('Rating cleared', 'info');
+                // Context-aware: fullscreen = clear rating, grid = show all
+                if (PlexdStream.getFullscreenMode() !== 'none') {
+                    // Fullscreen mode: clear rating on current stream
+                    const fsStream = PlexdStream.getFullscreenStream();
+                    if (fsStream) {
+                        PlexdStream.clearRating(fsStream.id);
+                        showMessage('Rating cleared', 'info');
+                    }
+                } else {
+                    // Grid mode: show all streams
+                    setViewMode('all');
                 }
                 break;
             case '1':
@@ -1365,12 +1372,26 @@ const PlexdApp = (function() {
             case '3':
             case '4':
             case '5':
-                // Set specific rating on selected stream
-                if (selected && !e.ctrlKey && !e.metaKey) {
+                // Context-aware: fullscreen = rate, grid = filter by rating
+                if (!e.ctrlKey && !e.metaKey) {
                     const rating = parseInt(e.key);
-                    PlexdStream.setRating(selected.id, rating);
-                    const stars = '★'.repeat(rating);
-                    showMessage(`Rated: ${stars}`, 'info');
+                    if (PlexdStream.getFullscreenMode() !== 'none') {
+                        // Fullscreen mode: rate the current fullscreen stream
+                        const fsStream = PlexdStream.getFullscreenStream();
+                        if (fsStream) {
+                            PlexdStream.setRating(fsStream.id, rating);
+                            const stars = '★'.repeat(rating);
+                            showMessage(`Rated: ${stars}`, 'info');
+                        }
+                    } else {
+                        // Grid mode: filter view to show only streams with this rating
+                        const count = PlexdStream.getStreamsByRating(rating).length;
+                        setViewMode(rating);
+                        if (count === 0) {
+                            const stars = '★'.repeat(rating);
+                            showMessage(`No ${stars} streams`, 'warning');
+                        }
+                    }
                 }
                 break;
         }

@@ -1230,7 +1230,7 @@ const PlexdStream = (function() {
                 case 'z':
                 case 'Z':
                 case 'Enter':
-                    // Z or Enter in focused mode: toggle back to grid
+                    // Z/Enter in focused mode: exit focus mode (toggle behavior)
                     e.preventDefault();
                     exitFocusedMode();
                     break;

@@ -62,6 +62,7 @@ const PlexdStream = (function() {
         const wrapper = document.createElement('div');
         wrapper.className = 'plexd-stream';
         wrapper.id = id;
+        wrapper.tabIndex = -1; // Make focusable for keyboard events in fullscreen modes
 
         // Create video element
         const video = document.createElement('video');
@@ -955,11 +956,11 @@ const PlexdStream = (function() {
         // If we're in true fullscreen grid mode, switch to focused mode
         if (document.fullscreenElement) {
             fullscreenMode = 'true-focused';
-            // Focus wrapper for keyboard events
-            stream.wrapper.focus();
         } else {
             fullscreenMode = 'browser-fill';
         }
+        // Focus wrapper for keyboard events (Z/Enter to exit, etc.)
+        stream.wrapper.focus();
 
         // Select this stream
         selectStream(streamId);
@@ -1219,13 +1220,12 @@ const PlexdStream = (function() {
                     break;
                 case 'Escape':
                     e.preventDefault();
-                    // Escape in true-focused mode: return to grid view (stay in true fullscreen)
+                    // Escape only handles true fullscreen modes
                     if (fullscreenMode === 'true-focused') {
+                        // Return to grid view (stay in true fullscreen)
                         exitFocusedMode();
-                    } else {
-                        // In browser-fill mode: exit completely
-                        toggleFullscreen(stream.id);
                     }
+                    // In browser-fill mode: do nothing (use Z/Enter to exit)
                     break;
                 case 'f':
                 case 'F':

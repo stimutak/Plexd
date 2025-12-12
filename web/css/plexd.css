@@ -599,6 +599,11 @@ body {
    Stream Selection
    ======================================== */
 
+/* Hide focus outline on stream wrapper - selection shown via plexd-selected class */
+.plexd-stream:focus {
+    outline: none;
+}
+
 .plexd-stream.plexd-selected {
     outline: 3px solid #555;
     outline-offset: -3px;

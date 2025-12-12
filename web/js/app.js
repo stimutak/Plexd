@@ -1447,10 +1447,10 @@ const PlexdApp = (function() {
                 // Plain S does nothing (use Enter/Z for focus toggle)
                 break;
             case 'Escape':
-                // Escape behavior depends on current mode:
+                // Escape only handles true fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
                 // - true-grid: exit true fullscreen completely
-                // - browser-fill: exit to normal grid
+                // - browser-fill: do nothing (use Z/Enter to exit)
                 // - none: deselect
                 {
                     const mode = PlexdStream.getFullscreenMode();
@@ -1461,10 +1461,7 @@ const PlexdApp = (function() {
                         // Exit true fullscreen completely
                         PlexdStream.exitTrueFullscreen();
                     } else if (mode === 'browser-fill') {
-                        // Exit browser-fill fullscreen
-                        if (fullscreenStream) {
-                            PlexdStream.toggleFullscreen(fullscreenStream.id);
-                        }
+                        // Do nothing - use Z/Enter to exit browser-fill mode
                     } else {
                         // Normal mode - just deselect
                         PlexdStream.selectStream(null);

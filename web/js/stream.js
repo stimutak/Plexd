@@ -941,6 +941,11 @@ const PlexdStream = (function() {
         const stream = streams.get(streamId);
         if (!stream) return;
 
+        // Blur any focused input to enable keyboard shortcuts
+        if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+            document.activeElement.blur();
+        }
+
         // Exit any existing browser-fill fullscreen
         if (fullscreenStreamId && fullscreenStreamId !== streamId) {
             const prevStream = streams.get(fullscreenStreamId);
@@ -1033,6 +1038,11 @@ const PlexdStream = (function() {
     function enterGridFullscreen() {
         const container = document.querySelector('.plexd-app');
         if (!container) return;
+
+        // Blur any focused input to enable keyboard shortcuts
+        if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+            document.activeElement.blur();
+        }
 
         // Exit any focused stream first
         if (fullscreenStreamId) {
@@ -1183,9 +1193,10 @@ const PlexdStream = (function() {
             }
         });
 
-        // Click to select stream
+        // Click to select stream and focus for keyboard events
         wrapper.addEventListener('click', () => {
             selectStream(stream.id);
+            wrapper.focus();
         });
 
         // Double-click to toggle fullscreen

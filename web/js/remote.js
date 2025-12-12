@@ -117,6 +117,7 @@ const PlexdRemoteClient = (function() {
         elements.btnFullscreen = document.getElementById('btn-fullscreen');
         elements.btnViewMode = document.getElementById('btn-view-mode');
         elements.btnTetris = document.getElementById('btn-tetris');
+        elements.btnCoverflow = document.getElementById('btn-coverflow');
         elements.btnClean = document.getElementById('btn-clean');
     }
 
@@ -148,6 +149,7 @@ const PlexdRemoteClient = (function() {
         elements.btnFullscreen?.addEventListener('click', () => send('toggleGlobalFullscreen'));
         elements.btnViewMode?.addEventListener('click', () => send('cycleViewMode'));
         elements.btnTetris?.addEventListener('click', () => send('toggleTetrisMode'));
+        elements.btnCoverflow?.addEventListener('click', () => send('toggleCoverflowMode'));
         elements.btnClean?.addEventListener('click', () => send('toggleCleanMode'));
 
         // Swipe gestures on stream list

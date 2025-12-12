@@ -25,13 +25,18 @@ const PlexdApp = (function() {
     // View mode cycle order: all -> 1 -> 2 -> 3 -> 4 -> 5 -> all
     const viewModes = ['all', 1, 2, 3, 4, 5];
 
-    // Smart Layout mode (Tetris-like intelligent overlapping)
-    let smartLayoutMode = false;
-    window._plexdSmartLayoutMode = smartLayoutMode;
-
-    // Legacy alias for compatibility
+    // Layout modes
+    // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
     let tetrisMode = false;
     window._plexdTetrisMode = tetrisMode;
+
+    // Coverflow mode: Z-depth overlapping with hover-to-front effects
+    let coverflowMode = false;
+    window._plexdCoverflowMode = coverflowMode;
+
+    // Legacy alias for compatibility (maps to coverflow)
+    let smartLayoutMode = false;
+    window._plexdSmartLayoutMode = smartLayoutMode;
 
     // Header visibility (starts hidden)
     let headerVisible = false;
@@ -577,10 +582,14 @@ const PlexdApp = (function() {
         };
 
         let layout;
-        if (smartLayoutMode) {
-            // Use the new intelligent Smart Layout algorithm
-            layout = PlexdGrid.calculateSmartLayout(container, streamsToShow);
+        if (tetrisMode) {
+            // Tetris mode: Intelligent bin-packing that eliminates black bars
+            layout = PlexdGrid.calculateTetrisLayout(container, streamsToShow);
+        } else if (coverflowMode) {
+            // Coverflow mode: Z-depth overlapping with hover effects
+            layout = PlexdGrid.calculateCoverflowLayout(container, streamsToShow);
         } else {
+            // Standard grid layout
             layout = PlexdGrid.calculateLayout(container, streamsToShow);
         }
 
@@ -666,38 +675,76 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Toggle Smart Layout mode (Tetris-like intelligent overlapping)
-     * This mode analyzes video aspect ratios and allows overlapping
-     * into letterbox (black bar) zones to maximize viewable area.
+     * Toggle Tetris mode - Intelligent bin-packing that eliminates black bars
+     * Uses object-fit: cover to crop videos and fill their allocated space completely
      */
-    function toggleSmartLayoutMode() {
-        smartLayoutMode = !smartLayoutMode;
-        window._plexdSmartLayoutMode = smartLayoutMode;
+    function toggleTetrisMode() {
+        // Turn off coverflow if it's on
+        if (coverflowMode) {
+            coverflowMode = false;
+            window._plexdCoverflowMode = false;
+            const coverflowBtn = document.getElementById('coverflow-btn');
+            if (coverflowBtn) coverflowBtn.classList.remove('active');
+        }
 
-        // Keep legacy alias in sync
-        tetrisMode = smartLayoutMode;
+        tetrisMode = !tetrisMode;
         window._plexdTetrisMode = tetrisMode;
 
         const tetrisBtn = document.getElementById('tetris-btn');
-        const smartBtn = document.getElementById('smart-layout-btn');
         const app = document.querySelector('.plexd-app');
 
-        if (tetrisBtn) tetrisBtn.classList.toggle('active', smartLayoutMode);
-        if (smartBtn) smartBtn.classList.toggle('active', smartLayoutMode);
+        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode);
         if (app) {
-            app.classList.toggle('tetris-mode', smartLayoutMode);
-            app.classList.toggle('smart-layout-mode', smartLayoutMode);
+            app.classList.toggle('tetris-mode', tetrisMode);
+            app.classList.remove('coverflow-mode');
+            app.classList.remove('smart-layout-mode');
         }
 
         updateLayout();
-        showMessage(`Smart Layout: ${smartLayoutMode ? 'ON' : 'OFF'}`, 'info');
+        showMessage(`Tetris Mode: ${tetrisMode ? 'ON' : 'OFF'}`, 'info');
     }
 
     /**
-     * Legacy alias for backward compatibility
+     * Toggle Coverflow mode - Z-depth overlapping with hover-to-front effects
+     * Videos can overlap into each other's letterbox zones with visual layering
      */
-    function toggleTetrisMode() {
-        toggleSmartLayoutMode();
+    function toggleCoverflowMode() {
+        // Turn off tetris if it's on
+        if (tetrisMode) {
+            tetrisMode = false;
+            window._plexdTetrisMode = false;
+            const tetrisBtn = document.getElementById('tetris-btn');
+            if (tetrisBtn) tetrisBtn.classList.remove('active');
+        }
+
+        coverflowMode = !coverflowMode;
+        window._plexdCoverflowMode = coverflowMode;
+
+        // Keep legacy alias in sync
+        smartLayoutMode = coverflowMode;
+        window._plexdSmartLayoutMode = smartLayoutMode;
+
+        const coverflowBtn = document.getElementById('coverflow-btn');
+        const smartBtn = document.getElementById('smart-layout-btn');
+        const app = document.querySelector('.plexd-app');
+
+        if (coverflowBtn) coverflowBtn.classList.toggle('active', coverflowMode);
+        if (smartBtn) smartBtn.classList.toggle('active', coverflowMode);
+        if (app) {
+            app.classList.toggle('coverflow-mode', coverflowMode);
+            app.classList.toggle('smart-layout-mode', coverflowMode); // Legacy class
+            app.classList.remove('tetris-mode');
+        }
+
+        updateLayout();
+        showMessage(`Coverflow Mode: ${coverflowMode ? 'ON' : 'OFF'}`, 'info');
+    }
+
+    /**
+     * Legacy alias for backward compatibility - maps to Coverflow
+     */
+    function toggleSmartLayoutMode() {
+        toggleCoverflowMode();
     }
 
     /**
@@ -1431,8 +1478,8 @@ const PlexdApp = (function() {
                 break;
             case 't':
             case 'T':
-                // Toggle Smart Layout mode (Tetris-like intelligent window management)
-                toggleSmartLayoutMode();
+                // Toggle Tetris mode (intelligent bin-packing, eliminates black bars)
+                toggleTetrisMode();
                 break;
             case 'h':
             case 'H':
@@ -2272,8 +2319,10 @@ const PlexdApp = (function() {
         // View modes
         setViewMode,
         cycleViewMode,
+        // Layout modes
         toggleTetrisMode,
-        toggleSmartLayoutMode,
+        toggleCoverflowMode,
+        toggleSmartLayoutMode, // Legacy alias for Coverflow
         toggleHeader,
         // Global controls
         togglePauseAll,
@@ -2482,8 +2531,12 @@ const PlexdRemote = (function() {
                 sendState();
                 break;
             case 'toggleTetrisMode':
-            case 'toggleSmartLayoutMode':
-                PlexdApp.toggleSmartLayoutMode();
+                PlexdApp.toggleTetrisMode();
+                sendState();
+                break;
+            case 'toggleCoverflowMode':
+            case 'toggleSmartLayoutMode': // Legacy alias
+                PlexdApp.toggleCoverflowMode();
                 sendState();
                 break;
 
@@ -2643,7 +2696,11 @@ window.PlexdAppState = {
     get tetrisMode() {
         return window._plexdTetrisMode || false;
     },
+    get coverflowMode() {
+        return window._plexdCoverflowMode || false;
+    },
     get smartLayoutMode() {
+        // Legacy alias for coverflowMode
         return window._plexdSmartLayoutMode || false;
     },
     get headerVisible() {

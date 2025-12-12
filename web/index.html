@@ -56,8 +56,9 @@
                     <button id="view-5-btn" class="plexd-view-btn rating-5" onclick="PlexdApp.setViewMode(5)" title="5-star">5</button>
                 </div>
 
-                <!-- Layout & Actions -->
-                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout">T</button>
+                <!-- Layout Modes -->
+                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout (T) - eliminates black bars">T</button>
+                <button id="coverflow-btn" class="plexd-button plexd-button-secondary plexd-coverflow-btn" onclick="PlexdApp.toggleCoverflowMode()" title="Coverflow layout - z-depth overlapping">C</button>
 
                 <!-- Global Controls -->
                 <button id="pause-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePauseAll()" title="Pause/Play all">⏸</button>
@@ -127,9 +128,9 @@
             <kbd>Z</kbd> Fullscreen &nbsp;
             <kbd>Space</kbd> Play/Pause &nbsp;
             <kbd>M</kbd> Mute &nbsp;
-            <kbd>T</kbd> Toolbar &nbsp;
+            <kbd>T</kbd> Tetris &nbsp;
+            <kbd>H</kbd> Header &nbsp;
             <kbd>1-5</kbd> Filter (grid) / Rate (fullscreen) &nbsp;
-            <kbd>Shift+1-5</kbd> Opposite &nbsp;
             <kbd>G</kbd> Cycle Rating &nbsp;
             <kbd>?</kbd> Hide
         </div>

@@ -203,37 +203,51 @@ const PlexdGrid = (function() {
                 videoWrapper.style.width = cell.width + 'px';
                 videoWrapper.style.height = cell.height + 'px';
 
-                // Apply z-index if specified (for smart layout overlapping)
+                // Apply z-index if specified (for coverflow layout overlapping)
                 if (cell.zIndex !== undefined) {
                     videoWrapper.style.zIndex = cell.zIndex;
+                } else {
+                    videoWrapper.style.zIndex = '';
+                }
+
+                // Apply object-fit to the video element (for Tetris mode)
+                const video = videoWrapper.querySelector('video');
+                if (video) {
+                    if (cell.objectFit === 'cover') {
+                        video.style.objectFit = 'cover';
+                        videoWrapper.classList.add('plexd-tetris-cell');
+                    } else {
+                        video.style.objectFit = 'contain';
+                        videoWrapper.classList.remove('plexd-tetris-cell');
+                    }
                 }
             }
         });
     }
 
     // =========================================================================
-    // Smart Stream Layout - Tetris-like intelligent window management
+    // Coverflow Layout - Z-depth overlapping window management
     // =========================================================================
 
     /**
-     * Smart Stream Layout - Maximizes viewable video area by:
+     * Coverflow Layout - Creates a cascading, overlapping display by:
      * 1. Detecting letterboxing (black bars) on each video
      * 2. Allowing streams to overlap into each other's black bar zones
-     * 3. Scaling and positioning to maximize screen usage
+     * 3. Using z-depth for visual layering with hover-to-front effects
      * 4. Trying multiple layout strategies and picking the best
      *
      * @param {Object} container - {width, height} of the container
      * @param {Array} streams - Array of stream objects with aspect ratios
      * @returns {Object} Layout configuration with overlapping positions
      */
-    function calculateSmartLayout(container, streams) {
+    function calculateCoverflowLayout(container, streams) {
         const count = streams.length;
-        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'smart' };
+        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'coverflow' };
 
         // Single stream - just maximize it
         if (count === 1) {
             const layout = singleStreamLayout(container, streams[0]);
-            layout.mode = 'smart';
+            layout.mode = 'coverflow';
             return layout;
         }
 
@@ -257,7 +271,7 @@ const PlexdGrid = (function() {
 
         // Try multiple layout strategies and pick the best
         const layouts = [
-            trySmartOverlapLayout(container, streamData),
+            tryCoverflowOverlapLayout(container, streamData),
             tryHorizontalStackLayout(container, streamData),
             tryVerticalStackLayout(container, streamData),
             tryMosaicLayout(container, streamData),
@@ -276,10 +290,10 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Smart overlap layout - the core "Tetris-like" algorithm
-     * Places videos so they overlap into each other's letterbox zones
+     * Coverflow overlap layout - the core algorithm
+     * Places videos so they overlap into each other's letterbox zones with z-depth
      */
-    function trySmartOverlapLayout(container, streamData) {
+    function tryCoverflowOverlapLayout(container, streamData) {
         const count = streamData.length;
         const cells = [];
 
@@ -397,7 +411,7 @@ const PlexdGrid = (function() {
         // Scale layout to fill container
         const scaledCells = scaleLayoutToFit(container, cells);
 
-        return buildSmartLayoutResult(container, scaledCells, count);
+        return buildCoverflowLayoutResult(container, scaledCells, count);
     }
 
     /**
@@ -718,7 +732,7 @@ const PlexdGrid = (function() {
         const offsetX = (container.width - totalUsedWidth) / 2;
         cells.forEach(cell => cell.x += offsetX);
 
-        return buildSmartLayoutResult(container, cells, count);
+        return buildCoverflowLayoutResult(container, cells, count);
     }
 
     /**
@@ -757,7 +771,7 @@ const PlexdGrid = (function() {
         const offsetY = (container.height - totalUsedHeight) / 2;
         cells.forEach(cell => cell.y += offsetY);
 
-        return buildSmartLayoutResult(container, cells, count);
+        return buildCoverflowLayoutResult(container, cells, count);
     }
 
     /**
@@ -813,7 +827,7 @@ const PlexdGrid = (function() {
             });
         });
 
-        return buildSmartLayoutResult(container, cells, count);
+        return buildCoverflowLayoutResult(container, cells, count);
     }
 
     /**
@@ -866,14 +880,14 @@ const PlexdGrid = (function() {
             y: Math.max(0, Math.min(container.height - cell.height, cell.y))
         }));
 
-        return buildSmartLayoutResult(container, clampedCells, count);
+        return buildCoverflowLayoutResult(container, clampedCells, count);
     }
 
     /**
-     * Build final layout result for smart layouts
+     * Build final layout result for coverflow layouts
      * Includes minimum size validation to prevent tiny videos
      */
-    function buildSmartLayoutResult(container, cells, count) {
+    function buildCoverflowLayoutResult(container, cells, count) {
         const containerArea = container.width * container.height;
         let videoArea = 0;
 
@@ -917,14 +931,519 @@ const PlexdGrid = (function() {
             rows: Math.ceil(Math.sqrt(count)),
             cols: Math.ceil(count / Math.ceil(Math.sqrt(count))),
             efficiency,
-            mode: 'smart'
+            mode: 'coverflow'
+        };
+    }
+
+    // =========================================================================
+    // Tetris Layout - Intelligent bin-packing to eliminate black bars
+    // =========================================================================
+
+    /**
+     * Tetris Layout - Maximizes visible video content by:
+     * 1. Intelligently packing videos to fill the container
+     * 2. Cropping/zooming into videos to eliminate letterboxing
+     * 3. Using smart overlap where letterbox zones would be
+     * 4. No z-depth layering - all videos at same level
+     *
+     * @param {Object} container - {width, height} of the container
+     * @param {Array} streams - Array of stream objects with aspect ratios
+     * @returns {Object} Layout configuration with tight-packed positions
+     */
+    function calculateTetrisLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
+
+        // Single stream - maximize and crop to fill
+        if (count === 1) {
+            const stream = streams[0];
+            const ar = stream.aspectRatio || 16/9;
+            const containerAR = container.width / container.height;
+
+            // Crop to fill (no black bars) using object-fit: cover logic
+            let width, height;
+            if (ar > containerAR) {
+                // Video is wider - fit to height, crop sides
+                height = container.height;
+                width = height * ar;
+            } else {
+                // Video is taller - fit to width, crop top/bottom
+                width = container.width;
+                height = width / ar;
+            }
+
+            return {
+                cells: [{
+                    streamId: stream.id,
+                    x: (container.width - width) / 2,
+                    y: (container.height - height) / 2,
+                    width,
+                    height,
+                    objectFit: 'cover' // Signal to use cover mode
+                }],
+                rows: 1,
+                cols: 1,
+                efficiency: 1.0,
+                mode: 'tetris'
+            };
+        }
+
+        // Analyze streams and try multiple intelligent packing strategies
+        const streamData = streams.map((stream, index) => ({
+            stream,
+            index,
+            aspectRatio: stream.aspectRatio || 16/9
+        }));
+
+        // Try multiple layout strategies optimized for Tetris-style packing
+        const layouts = [
+            tryTetrisBinPack(container, streamData),
+            tryTetrisRowPack(container, streamData),
+            tryTetrisColumnPack(container, streamData),
+            tryTetrisSplitPack(container, streamData)
+        ];
+
+        // Pick the layout with highest efficiency (most screen coverage)
+        let bestLayout = layouts[0];
+        for (const layout of layouts) {
+            if (layout && layout.efficiency > bestLayout.efficiency) {
+                bestLayout = layout;
+            }
+        }
+
+        return bestLayout;
+    }
+
+    /**
+     * Tetris Bin-Pack - Uses a skyline algorithm to pack videos tightly
+     * Videos are scaled and positioned to fill gaps like Tetris blocks
+     */
+    function tryTetrisBinPack(container, streamData) {
+        const count = streamData.length;
+        const cells = [];
+
+        // Initialize skyline (tracks the "top" of placed items at each x position)
+        const skyline = [{ x: 0, y: 0, width: container.width }];
+
+        // Sort by aspect ratio to pack similar shapes together
+        const sorted = [...streamData].sort((a, b) => b.aspectRatio - a.aspectRatio);
+
+        // Calculate target size per video to fill container
+        const targetAreaPerVideo = (container.width * container.height) / count;
+
+        for (const data of sorted) {
+            const ar = data.aspectRatio;
+
+            // Calculate ideal dimensions based on target area
+            let height = Math.sqrt(targetAreaPerVideo / ar);
+            let width = height * ar;
+
+            // Scale to reasonable size (30-60% of container dimension)
+            const maxWidth = container.width * 0.65;
+            const maxHeight = container.height * 0.65;
+            const minWidth = container.width * 0.25;
+            const minHeight = container.height * 0.25;
+
+            if (width > maxWidth) {
+                width = maxWidth;
+                height = width / ar;
+            }
+            if (height > maxHeight) {
+                height = maxHeight;
+                width = height * ar;
+            }
+            if (width < minWidth) {
+                width = minWidth;
+                height = width / ar;
+            }
+            if (height < minHeight) {
+                height = minHeight;
+                width = height * ar;
+            }
+
+            // Find best position using skyline algorithm
+            const pos = findTetrisPosition(skyline, width, height, container);
+
+            if (pos) {
+                cells.push({
+                    streamId: data.stream.id,
+                    x: pos.x,
+                    y: pos.y,
+                    width,
+                    height,
+                    objectFit: 'cover' // Use cover to eliminate black bars
+                });
+
+                // Update skyline
+                updateTetrisSkyline(skyline, pos.x, pos.y + height, width, container);
+            }
+        }
+
+        // Scale and center the layout to fill container
+        return scaleTetrisLayout(container, cells, count);
+    }
+
+    /**
+     * Find the best position for a Tetris block using skyline algorithm
+     */
+    function findTetrisPosition(skyline, width, height, container) {
+        let bestPos = null;
+        let bestWaste = Infinity;
+
+        for (let i = 0; i < skyline.length; i++) {
+            const seg = skyline[i];
+
+            // Check if block fits starting at this segment
+            if (seg.x + width <= container.width && seg.y + height <= container.height) {
+                // Calculate "waste" - how much empty space this creates
+                let maxY = seg.y;
+                let spanWidth = 0;
+
+                // Find the actual height needed (max of all spanned segments)
+                for (let j = i; j < skyline.length && spanWidth < width; j++) {
+                    const s = skyline[j];
+                    if (s.x >= seg.x + width) break;
+                    maxY = Math.max(maxY, s.y);
+                    spanWidth = s.x + s.width - seg.x;
+                }
+
+                if (maxY + height <= container.height) {
+                    // Waste = how much we have to go above the skyline
+                    const waste = maxY - seg.y + (maxY * 0.1); // Prefer lower positions
+
+                    if (waste < bestWaste) {
+                        bestWaste = waste;
+                        bestPos = { x: seg.x, y: maxY };
+                    }
+                }
+            }
+        }
+
+        return bestPos;
+    }
+
+    /**
+     * Update skyline after placing a Tetris block
+     */
+    function updateTetrisSkyline(skyline, x, newY, width, container) {
+        const endX = x + width;
+        const newSegments = [];
+
+        for (const seg of skyline) {
+            const segEnd = seg.x + seg.width;
+
+            if (segEnd <= x || seg.x >= endX) {
+                // No overlap - keep segment
+                newSegments.push(seg);
+            } else {
+                // Overlap - split segment
+                if (seg.x < x) {
+                    newSegments.push({ x: seg.x, y: seg.y, width: x - seg.x });
+                }
+                if (segEnd > endX) {
+                    newSegments.push({ x: endX, y: seg.y, width: segEnd - endX });
+                }
+            }
+        }
+
+        // Add new segment for placed block
+        newSegments.push({ x, y: newY, width });
+
+        // Sort and merge adjacent segments at same height
+        newSegments.sort((a, b) => a.x - b.x);
+
+        // Clear and refill skyline
+        skyline.length = 0;
+        for (const seg of newSegments) {
+            const last = skyline[skyline.length - 1];
+            if (last && Math.abs(last.x + last.width - seg.x) < 1 && Math.abs(last.y - seg.y) < 1) {
+                last.width += seg.width;
+            } else {
+                skyline.push({ ...seg });
+            }
+        }
+    }
+
+    /**
+     * Tetris Row Pack - Pack videos in rows with variable heights
+     * Eliminates horizontal gaps by stretching to fill width
+     */
+    function tryTetrisRowPack(container, streamData) {
+        const count = streamData.length;
+        const cells = [];
+
+        // Calculate optimal number of rows
+        const numRows = Math.ceil(Math.sqrt(count * (container.height / container.width)));
+        const videosPerRow = Math.ceil(count / numRows);
+
+        let streamIndex = 0;
+        let currentY = 0;
+        const rowHeights = [];
+
+        // First pass: calculate row heights
+        for (let row = 0; row < numRows && streamIndex < count; row++) {
+            const rowStreams = [];
+            const rowEnd = Math.min(streamIndex + videosPerRow, count);
+
+            for (let i = streamIndex; i < rowEnd; i++) {
+                rowStreams.push(streamData[i]);
+            }
+
+            // Calculate row height to fill width exactly
+            const totalAR = rowStreams.reduce((sum, d) => sum + d.aspectRatio, 0);
+            const rowHeight = container.width / totalAR;
+            rowHeights.push({ height: rowHeight, streams: rowStreams });
+
+            streamIndex = rowEnd;
+        }
+
+        // Scale row heights to fit container
+        const totalHeight = rowHeights.reduce((sum, r) => sum + r.height, 0);
+        const scale = container.height / totalHeight;
+
+        // Second pass: position cells
+        currentY = 0;
+        for (const row of rowHeights) {
+            const scaledHeight = row.height * scale;
+            let currentX = 0;
+
+            for (const data of row.streams) {
+                const width = scaledHeight * data.aspectRatio;
+
+                cells.push({
+                    streamId: data.stream.id,
+                    x: currentX,
+                    y: currentY,
+                    width,
+                    height: scaledHeight,
+                    objectFit: 'cover'
+                });
+
+                currentX += width;
+            }
+
+            currentY += scaledHeight;
+        }
+
+        return buildTetrisLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Tetris Column Pack - Pack videos in columns with variable widths
+     */
+    function tryTetrisColumnPack(container, streamData) {
+        const count = streamData.length;
+        const cells = [];
+
+        // Calculate optimal number of columns
+        const numCols = Math.ceil(Math.sqrt(count * (container.width / container.height)));
+        const videosPerCol = Math.ceil(count / numCols);
+
+        let streamIndex = 0;
+        const colWidths = [];
+
+        // First pass: calculate column widths
+        for (let col = 0; col < numCols && streamIndex < count; col++) {
+            const colStreams = [];
+            const colEnd = Math.min(streamIndex + videosPerCol, count);
+
+            for (let i = streamIndex; i < colEnd; i++) {
+                colStreams.push(streamData[i]);
+            }
+
+            // Calculate column width to fill height exactly
+            const totalInvAR = colStreams.reduce((sum, d) => sum + 1/d.aspectRatio, 0);
+            const colWidth = container.height / totalInvAR;
+            colWidths.push({ width: colWidth, streams: colStreams });
+
+            streamIndex = colEnd;
+        }
+
+        // Scale column widths to fit container
+        const totalWidth = colWidths.reduce((sum, c) => sum + c.width, 0);
+        const scale = container.width / totalWidth;
+
+        // Second pass: position cells
+        let currentX = 0;
+        for (const col of colWidths) {
+            const scaledWidth = col.width * scale;
+            let currentY = 0;
+
+            for (const data of col.streams) {
+                const height = scaledWidth / data.aspectRatio;
+
+                cells.push({
+                    streamId: data.stream.id,
+                    x: currentX,
+                    y: currentY,
+                    width: scaledWidth,
+                    height,
+                    objectFit: 'cover'
+                });
+
+                currentY += height;
+            }
+
+            currentX += scaledWidth;
+        }
+
+        return buildTetrisLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Tetris Split Pack - Recursively splits container for optimal packing
+     * Similar to treemap algorithm
+     */
+    function tryTetrisSplitPack(container, streamData) {
+        const count = streamData.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
+
+        const cells = [];
+
+        // Assign weights based on aspect ratio (wider videos get more area)
+        const totalWeight = streamData.reduce((sum, d) => sum + Math.sqrt(d.aspectRatio), 0);
+        const dataWithWeights = streamData.map(d => ({
+            ...d,
+            weight: Math.sqrt(d.aspectRatio) / totalWeight
+        }));
+
+        // Recursive split function
+        function splitLayout(rect, items) {
+            if (items.length === 0) return;
+
+            if (items.length === 1) {
+                const data = items[0];
+                cells.push({
+                    streamId: data.stream.id,
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    objectFit: 'cover'
+                });
+                return;
+            }
+
+            // Determine split direction based on rect shape
+            const splitHorizontal = rect.width > rect.height;
+
+            // Find optimal split point (around 50% by weight)
+            let splitWeight = 0;
+            let splitIndex = 0;
+            const targetWeight = items.reduce((sum, d) => sum + d.weight, 0) / 2;
+
+            for (let i = 0; i < items.length; i++) {
+                splitWeight += items[i].weight;
+                if (splitWeight >= targetWeight) {
+                    splitIndex = i + 1;
+                    break;
+                }
+            }
+
+            if (splitIndex === 0) splitIndex = 1;
+            if (splitIndex >= items.length) splitIndex = items.length - 1;
+
+            const firstItems = items.slice(0, splitIndex);
+            const secondItems = items.slice(splitIndex);
+
+            const firstWeight = firstItems.reduce((sum, d) => sum + d.weight, 0);
+            const totalItemWeight = items.reduce((sum, d) => sum + d.weight, 0);
+            const splitRatio = firstWeight / totalItemWeight;
+
+            if (splitHorizontal) {
+                const splitX = rect.x + rect.width * splitRatio;
+                splitLayout({ x: rect.x, y: rect.y, width: splitX - rect.x, height: rect.height }, firstItems);
+                splitLayout({ x: splitX, y: rect.y, width: rect.x + rect.width - splitX, height: rect.height }, secondItems);
+            } else {
+                const splitY = rect.y + rect.height * splitRatio;
+                splitLayout({ x: rect.x, y: rect.y, width: rect.width, height: splitY - rect.y }, firstItems);
+                splitLayout({ x: rect.x, y: splitY, width: rect.width, height: rect.y + rect.height - splitY }, secondItems);
+            }
+        }
+
+        splitLayout({ x: 0, y: 0, width: container.width, height: container.height }, dataWithWeights);
+
+        return buildTetrisLayoutResult(container, cells, count);
+    }
+
+    /**
+     * Scale Tetris layout to fill container and center it
+     */
+    function scaleTetrisLayout(container, cells, count) {
+        if (cells.length === 0) {
+            return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
+        }
+
+        // Find bounds
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const cell of cells) {
+            minX = Math.min(minX, cell.x);
+            minY = Math.min(minY, cell.y);
+            maxX = Math.max(maxX, cell.x + cell.width);
+            maxY = Math.max(maxY, cell.y + cell.height);
+        }
+
+        const currentWidth = maxX - minX;
+        const currentHeight = maxY - minY;
+
+        // Scale to fill container
+        const scaleX = container.width / currentWidth;
+        const scaleY = container.height / currentHeight;
+        const scale = Math.min(scaleX, scaleY);
+
+        const scaledWidth = currentWidth * scale;
+        const scaledHeight = currentHeight * scale;
+
+        // Center in container
+        const offsetX = (container.width - scaledWidth) / 2;
+        const offsetY = (container.height - scaledHeight) / 2;
+
+        const scaledCells = cells.map(cell => ({
+            ...cell,
+            x: (cell.x - minX) * scale + offsetX,
+            y: (cell.y - minY) * scale + offsetY,
+            width: cell.width * scale,
+            height: cell.height * scale
+        }));
+
+        return buildTetrisLayoutResult(container, scaledCells, count);
+    }
+
+    /**
+     * Build final layout result for Tetris mode
+     */
+    function buildTetrisLayoutResult(container, cells, count) {
+        const containerArea = container.width * container.height;
+        let totalCellArea = 0;
+
+        for (const cell of cells) {
+            totalCellArea += cell.width * cell.height;
+        }
+
+        // Efficiency is how much of the container is covered
+        // With object-fit: cover, cells fill their bounds completely
+        const efficiency = Math.min(totalCellArea / containerArea, 1.0);
+
+        // Estimate grid dimensions
+        const avgWidth = cells.length > 0
+            ? cells.reduce((sum, c) => sum + c.width, 0) / cells.length
+            : container.width;
+        const cols = Math.max(1, Math.round(container.width / avgWidth));
+
+        return {
+            cells,
+            rows: Math.ceil(count / cols),
+            cols,
+            efficiency,
+            mode: 'tetris'
         };
     }
 
     // Public API
     return {
         calculateLayout,
-        calculateSmartLayout,
+        calculateCoverflowLayout,
+        calculateTetrisLayout,
         applyLayout,
         onContainerResize,
         fitToContainer,

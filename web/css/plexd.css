@@ -1230,10 +1230,11 @@ body {
 .plexd-stream.plexd-rated-5 { outline: 2px solid rgba(34, 197, 94, 0.5); }
 
 /* ========================================
-   Tetris Layout Mode
+   Layout Mode Buttons
    ======================================== */
 
-.plexd-tetris-btn {
+.plexd-tetris-btn,
+.plexd-coverflow-btn {
     background: #333;
 }
 
@@ -1242,14 +1243,23 @@ body {
     color: #fff;
 }
 
-/* Tetris mode indicator - legacy */
+.plexd-coverflow-btn.active {
+    background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+    color: #fff;
+}
+
+/* ========================================
+   Tetris Mode - Intelligent bin-packing
+   ======================================== */
+
+/* Tetris mode indicator */
 .plexd-app.tetris-mode #plexd-container::before {
-    content: 'SMART LAYOUT';
+    content: 'TETRIS';
     position: absolute;
     top: 8px;
     left: 50%;
     transform: translateX(-50%);
-    background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
     color: #fff;
     padding: 4px 14px;
     border-radius: 16px;
@@ -1257,13 +1267,48 @@ body {
     font-weight: 700;
     z-index: 50;
     letter-spacing: 1px;
-    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
-    animation: smartLayoutPulse 2s ease-in-out infinite;
+    box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+    animation: tetrisPulse 2s ease-in-out infinite;
 }
 
-/* Smart Layout mode indicator */
+@keyframes tetrisPulse {
+    0%, 100% {
+        box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+    }
+    50% {
+        box-shadow: 0 2px 16px rgba(22, 163, 74, 0.6);
+    }
+}
+
+/* Tetris mode stream styling - clean edges, tight packing */
+.plexd-app.tetris-mode .plexd-stream {
+    transition: all 0.3s ease;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+/* Tetris cells use object-fit: cover to eliminate black bars */
+.plexd-tetris-cell .plexd-video {
+    object-fit: cover !important;
+}
+
+/* Subtle gap between tetris cells */
+.plexd-app.tetris-mode .plexd-stream {
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+.plexd-app.tetris-mode .plexd-stream:hover {
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.5);
+}
+
+/* ========================================
+   Coverflow Mode - Z-depth overlapping
+   ======================================== */
+
+/* Coverflow mode indicator */
+.plexd-app.coverflow-mode #plexd-container::before,
 .plexd-app.smart-layout-mode #plexd-container::before {
-    content: 'SMART LAYOUT';
+    content: 'COVERFLOW';
     position: absolute;
     top: 8px;
     left: 50%;
@@ -1277,10 +1322,10 @@ body {
     z-index: 50;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
-    animation: smartLayoutPulse 2s ease-in-out infinite;
+    animation: coverflowPulse 2s ease-in-out infinite;
 }
 
-@keyframes smartLayoutPulse {
+@keyframes coverflowPulse {
     0%, 100% {
         box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
     }
@@ -1289,20 +1334,23 @@ body {
     }
 }
 
-/* Smart Layout stream styling - smooth transitions and overlaps */
+/* Coverflow stream styling - smooth transitions and overlaps with z-depth */
+.plexd-app.coverflow-mode .plexd-stream,
 .plexd-app.smart-layout-mode .plexd-stream {
     transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
     border-radius: 4px;
 }
 
+.plexd-app.coverflow-mode .plexd-stream:hover,
 .plexd-app.smart-layout-mode .plexd-stream:hover {
     z-index: 100 !important;
     box-shadow: 0 8px 32px rgba(139, 92, 246, 0.3);
     transform: scale(1.02);
 }
 
-/* Add subtle border glow for smart layout streams */
+/* Add subtle border glow for coverflow streams */
+.plexd-app.coverflow-mode .plexd-stream::after,
 .plexd-app.smart-layout-mode .plexd-stream::after {
     content: '';
     position: absolute;
@@ -1312,10 +1360,16 @@ body {
     pointer-events: none;
 }
 
-/* Smart Layout button styling */
-.plexd-btn[id="tetris-btn"].active,
+/* Coverflow button styling */
+.plexd-btn[id="coverflow-btn"].active,
 .plexd-btn[id="smart-layout-btn"].active {
     background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+    color: #fff;
+}
+
+/* Tetris button styling */
+.plexd-btn[id="tetris-btn"].active {
+    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
     color: #fff;
 }
 

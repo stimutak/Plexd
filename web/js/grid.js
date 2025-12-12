@@ -289,10 +289,12 @@ const PlexdGrid = (function() {
         const areaPerStream = totalArea / Math.max(1, count * 0.7); // Allocate more area per stream
 
         // Sort by aspect ratio - place widest first, they set the horizontal structure
+        // But preserve original index for z-index assignment
         const sorted = [...streamData].sort((a, b) => b.aspectRatio - a.aspectRatio);
 
-        // Track occupied regions (with video content, not black bars)
+        // Track occupied regions - both video content AND full cell bounds for visual separation
         const occupiedRegions = [];
+        const occupiedCells = []; // Full cell bounds including letterbox
 
         // Minimum size: ensure each video is at least this portion of container
         const minSizeRatio = count <= 2 ? 0.4 : count <= 4 ? 0.3 : 0.25;
@@ -331,7 +333,7 @@ const PlexdGrid = (function() {
 
                 // Find best position for this scaled size
                 const placement = findBestPosition(
-                    container, width, height, ar, occupiedRegions
+                    container, width, height, ar, occupiedRegions, occupiedCells
                 );
 
                 if (placement && placement.score > bestScore) {
@@ -361,22 +363,35 @@ const PlexdGrid = (function() {
                 };
             }
 
+            const cellX = Math.max(0, Math.min(container.width - bestPlacement.width, bestPlacement.x));
+            const cellY = Math.max(0, Math.min(container.height - bestPlacement.height, bestPlacement.y));
+
             cells.push({
                 streamId: data.stream.id,
-                x: Math.max(0, Math.min(container.width - bestPlacement.width, bestPlacement.x)),
-                y: Math.max(0, Math.min(container.height - bestPlacement.height, bestPlacement.y)),
+                x: cellX,
+                y: cellY,
                 width: bestPlacement.width,
                 height: bestPlacement.height,
-                zIndex: count - i
+                // Use original stream index for z-index (higher index = placed later = on top)
+                // Add base of 10 to ensure clear separation from other elements
+                zIndex: 10 + count - data.index
             });
 
             // Add video content region to occupied list
             const videoRegion = getVideoContentRegion(
-                bestPlacement.x, bestPlacement.y,
+                cellX, cellY,
                 bestPlacement.width, bestPlacement.height,
                 ar
             );
             occupiedRegions.push(videoRegion);
+
+            // Also track full cell bounds for visual separation
+            occupiedCells.push({
+                x: cellX,
+                y: cellY,
+                width: bestPlacement.width,
+                height: bestPlacement.height
+            });
         }
 
         // Scale layout to fill container
@@ -387,19 +402,25 @@ const PlexdGrid = (function() {
 
     /**
      * Find the best position for a video, considering existing occupied regions
+     * @param {Object} container - Container dimensions
+     * @param {number} width - Video width
+     * @param {number} height - Video height
+     * @param {number} aspectRatio - Video aspect ratio
+     * @param {Array} occupiedRegions - Video content regions (excluding letterbox)
+     * @param {Array} occupiedCells - Full cell bounds (including letterbox)
      */
-    function findBestPosition(container, width, height, aspectRatio, occupiedRegions) {
+    function findBestPosition(container, width, height, aspectRatio, occupiedRegions, occupiedCells) {
         let bestPos = null;
         let bestScore = -Infinity;
 
-        // Grid of candidate positions
-        const stepX = container.width / 10;
-        const stepY = container.height / 10;
+        // Grid of candidate positions - use finer grid for better placement
+        const stepX = container.width / 12;
+        const stepY = container.height / 12;
 
         for (let x = 0; x <= container.width - width; x += stepX) {
             for (let y = 0; y <= container.height - height; y += stepY) {
                 const score = evaluatePosition(
-                    container, x, y, width, height, aspectRatio, occupiedRegions
+                    container, x, y, width, height, aspectRatio, occupiedRegions, occupiedCells
                 );
 
                 if (score > bestScore) {
@@ -409,7 +430,7 @@ const PlexdGrid = (function() {
             }
         }
 
-        // Also try strategic positions
+        // Also try strategic positions (corners, edges, center)
         const strategicPositions = [
             { x: 0, y: 0 },
             { x: container.width - width, y: 0 },
@@ -425,7 +446,7 @@ const PlexdGrid = (function() {
         for (const pos of strategicPositions) {
             if (pos.x < 0 || pos.y < 0) continue;
             const score = evaluatePosition(
-                container, pos.x, pos.y, width, height, aspectRatio, occupiedRegions
+                container, pos.x, pos.y, width, height, aspectRatio, occupiedRegions, occupiedCells
             );
             if (score > bestScore) {
                 bestScore = score;
@@ -438,12 +459,26 @@ const PlexdGrid = (function() {
 
     /**
      * Evaluate how good a position is for placing a video
+     * Now checks both video content regions AND full cell bounds for visual separation
+     * @param {Object} container - Container dimensions
+     * @param {number} x - X position
+     * @param {number} y - Y position
+     * @param {number} width - Video width
+     * @param {number} height - Video height
+     * @param {number} aspectRatio - Video aspect ratio
+     * @param {Array} occupiedRegions - Video content regions
+     * @param {Array} occupiedCells - Full cell bounds
      */
-    function evaluatePosition(container, x, y, width, height, aspectRatio, occupiedRegions) {
+    function evaluatePosition(container, x, y, width, height, aspectRatio, occupiedRegions, occupiedCells) {
         const videoRegion = getVideoContentRegion(x, y, width, height, aspectRatio);
+        const cellRegion = { x, y, width, height };
         let score = 100;
 
-        // Penalize overlap with existing video content regions
+        // Maximum allowed overlap percentages - these are HARD LIMITS
+        const MAX_CONTENT_OVERLAP = 0.15; // Only allow 15% overlap of actual video content
+        const MAX_CELL_OVERLAP = 0.35;    // Allow 35% overlap of cells (letterbox areas can overlap)
+
+        // Check content overlap (actual video, not letterbox)
         for (const occupied of occupiedRegions) {
             const overlap = getRegionOverlap(videoRegion, occupied);
             const overlapArea = overlap.width * overlap.height;
@@ -451,18 +486,52 @@ const PlexdGrid = (function() {
             if (overlapArea > 0) {
                 const videoArea = videoRegion.width * videoRegion.height;
                 const overlapPercent = overlapArea / videoArea;
-                score -= overlapPercent * 200;
+
+                // Hard rejection for too much content overlap
+                if (overlapPercent > MAX_CONTENT_OVERLAP) {
+                    return -Infinity;
+                }
+
+                // Heavy penalty for any content overlap (exponential penalty)
+                score -= overlapPercent * overlapPercent * 1000;
+            }
+        }
+
+        // Check visual cell overlap (including letterbox areas)
+        for (const occupied of occupiedCells) {
+            const overlap = getRegionOverlap(cellRegion, occupied);
+            const overlapArea = overlap.width * overlap.height;
+
+            if (overlapArea > 0) {
+                const cellArea = width * height;
+                const overlapPercent = overlapArea / cellArea;
+
+                // Hard rejection for too much visual overlap
+                if (overlapPercent > MAX_CELL_OVERLAP) {
+                    return -Infinity;
+                }
+
+                // Moderate penalty for visual overlap (letterbox overlap is okay-ish)
+                score -= overlapPercent * 150;
             }
         }
 
         // Bonus for being fully on-screen
         if (x >= 0 && y >= 0 && x + width <= container.width && y + height <= container.height) {
-            score += 25;
+            score += 30;
         }
 
-        // Bonus for utilizing edges (more organized look)
-        if (x < 10 || x + width > container.width - 10) score += 5;
-        if (y < 10 || y + height > container.height - 10) score += 5;
+        // Bonus for utilizing corners (more organized, less chaotic look)
+        const atLeft = x < 20;
+        const atRight = x + width > container.width - 20;
+        const atTop = y < 20;
+        const atBottom = y + height > container.height - 20;
+
+        if ((atLeft || atRight) && (atTop || atBottom)) {
+            score += 15; // Corner bonus
+        } else if (atLeft || atRight || atTop || atBottom) {
+            score += 8; // Edge bonus
+        }
 
         // Bonus for larger sizes
         const sizeBonus = (width * height) / (container.width * container.height) * 20;
@@ -519,10 +588,20 @@ const PlexdGrid = (function() {
 
     /**
      * Scale the layout to better fill the container
-     * Ensures videos fill the available space properly
+     * More conservative scaling to avoid introducing overlaps
+     * Ensures videos fill the available space properly without excessive overlap
      */
     function scaleLayoutToFit(container, cells) {
         if (cells.length === 0) return cells;
+        if (cells.length === 1) {
+            // Single cell - just center it without scaling
+            const cell = cells[0];
+            return [{
+                ...cell,
+                x: (container.width - cell.width) / 2,
+                y: (container.height - cell.height) / 2
+            }];
+        }
 
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const cell of cells) {
@@ -535,23 +614,72 @@ const PlexdGrid = (function() {
         const currentWidth = maxX - minX;
         const currentHeight = maxY - minY;
 
-        // Scale to fill container - allow full scaling, no arbitrary cap
+        // Calculate scale to fill container, but cap it to avoid excessive overlap
         const scaleX = container.width / currentWidth;
         const scaleY = container.height / currentHeight;
-        const scale = Math.min(scaleX, scaleY);
+
+        // Use more conservative scaling - don't scale up too aggressively
+        // This prevents small layouts from being blown up and causing overlap
+        const rawScale = Math.min(scaleX, scaleY);
+        const maxAllowedScale = 1.3; // Cap at 130% to prevent overlap issues
+        const scale = Math.min(rawScale, maxAllowedScale);
 
         const scaledWidth = currentWidth * scale;
         const scaledHeight = currentHeight * scale;
         const offsetX = (container.width - scaledWidth) / 2;
         const offsetY = (container.height - scaledHeight) / 2;
 
-        return cells.map(cell => ({
+        const scaledCells = cells.map(cell => ({
             ...cell,
             x: (cell.x - minX) * scale + offsetX,
             y: (cell.y - minY) * scale + offsetY,
             width: cell.width * scale,
             height: cell.height * scale
         }));
+
+        // Verify no excessive overlaps were introduced by scaling
+        // If so, fall back to unscaled layout centered in container
+        const hasExcessiveOverlap = checkForExcessiveOverlap(scaledCells, 0.4);
+        if (hasExcessiveOverlap) {
+            // Fall back to just centering without scaling
+            const unscaledOffsetX = (container.width - currentWidth) / 2 - minX;
+            const unscaledOffsetY = (container.height - currentHeight) / 2 - minY;
+            return cells.map(cell => ({
+                ...cell,
+                x: cell.x + unscaledOffsetX,
+                y: cell.y + unscaledOffsetY
+            }));
+        }
+
+        return scaledCells;
+    }
+
+    /**
+     * Check if cells have excessive overlap
+     * @param {Array} cells - Array of cell positions
+     * @param {number} threshold - Maximum allowed overlap ratio (0-1)
+     * @returns {boolean} True if excessive overlap exists
+     */
+    function checkForExcessiveOverlap(cells, threshold) {
+        for (let i = 0; i < cells.length; i++) {
+            for (let j = i + 1; j < cells.length; j++) {
+                const overlap = getRegionOverlap(cells[i], cells[j]);
+                const overlapArea = overlap.width * overlap.height;
+
+                if (overlapArea > 0) {
+                    const smallerArea = Math.min(
+                        cells[i].width * cells[i].height,
+                        cells[j].width * cells[j].height
+                    );
+                    const overlapRatio = overlapArea / smallerArea;
+
+                    if (overlapRatio > threshold) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -579,7 +707,9 @@ const PlexdGrid = (function() {
                 x,
                 y: (container.height - scaledHeight) / 2,
                 width,
-                height: scaledHeight
+                height: scaledHeight,
+                // Consistent z-index based on stream index
+                zIndex: 10 + data.index
             });
             x += width;
         }
@@ -616,7 +746,9 @@ const PlexdGrid = (function() {
                 x: (container.width - scaledWidth) / 2,
                 y,
                 width: scaledWidth,
-                height
+                height,
+                // Consistent z-index based on stream index
+                zIndex: 10 + data.index
             });
             y += height;
         }
@@ -657,10 +789,11 @@ const PlexdGrid = (function() {
             y: (container.height - featuredHeight) / 2,
             width: adjustedFeaturedWidth,
             height: featuredHeight,
-            zIndex: 1
+            // Featured video gets highest z-index (on top) with base offset
+            zIndex: 10 + count
         });
 
-        // Stack other videos on the right
+        // Stack other videos on the right - no overlap in this layout
         const sideWidth = container.width - adjustedFeaturedWidth;
         const sideHeight = container.height / others.length;
 
@@ -675,7 +808,8 @@ const PlexdGrid = (function() {
                 y: i * sideHeight + (sideHeight - videoHeight) / 2,
                 width: videoWidth,
                 height: videoHeight,
-                zIndex: i + 2
+                // Use original stream index for consistent z-ordering
+                zIndex: 10 + data.index
             });
         });
 
@@ -683,37 +817,45 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Diagonal layout - videos arranged diagonally with overlap
+     * Diagonal layout - videos arranged diagonally with controlled overlap
+     * Reduces overlap compared to before by using smaller video sizes and better spacing
      */
     function tryDiagonalLayout(container, streamData) {
         const count = streamData.length;
         const cells = [];
 
-        // Calculate size for each video - ensure reasonable minimum size
-        // Each video should be at least 40% of container for 2 videos, scaling down more gradually
-        const sizeMultiplier = Math.max(0.5, 0.85 - count * 0.07);
+        // Calculate size for each video - smaller sizes to reduce overlap
+        // Reduce size more aggressively as video count increases
+        const sizeMultiplier = Math.max(0.35, 0.7 - count * 0.1);
         const baseWidth = container.width * sizeMultiplier;
 
-        // Minimum size enforcement
-        const minWidth = container.width * (count <= 2 ? 0.4 : count <= 4 ? 0.3 : 0.25);
+        // Minimum size enforcement - but not as aggressive for diagonal
+        const minWidth = container.width * (count <= 2 ? 0.35 : count <= 4 ? 0.25 : 0.2);
         const effectiveWidth = Math.max(baseWidth, minWidth);
 
-        // Calculate diagonal spacing
-        const diagStepX = (container.width - effectiveWidth) / Math.max(1, count - 1);
-        const diagStepY = (container.height - effectiveWidth * 0.6) / Math.max(1, count - 1);
+        // Calculate diagonal spacing - spread videos more to reduce overlap
+        // Leave margin at edges
+        const margin = effectiveWidth * 0.1;
+        const availableWidth = container.width - effectiveWidth - margin * 2;
+        const availableHeight = container.height - effectiveWidth * 0.6 - margin * 2;
+
+        const diagStepX = availableWidth / Math.max(1, count - 1);
+        const diagStepY = availableHeight / Math.max(1, count - 1);
 
         streamData.forEach((data, i) => {
             const ar = data.aspectRatio;
             const width = effectiveWidth;
-            const height = width / ar;
+            const height = Math.min(width / ar, container.height * 0.7);
 
             cells.push({
                 streamId: data.stream.id,
-                x: i * diagStepX,
-                y: i * diagStepY,
+                x: margin + i * diagStepX,
+                y: margin + i * diagStepY,
                 width,
-                height: Math.min(height, container.height * 0.85),
-                zIndex: count - i // First video on top
+                height,
+                // Use original stream index for z-ordering, first stream on top
+                // Add base offset for clear z-depth separation
+                zIndex: 10 + count - data.index
             });
         });
 

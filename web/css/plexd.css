@@ -1433,3 +1433,48 @@ body {
     font-size: 14px;
     color: #888;
 }
+
+/* ========================================
+   Focus Indicator
+   ======================================== */
+
+/* Show focus indicator when keyboard shortcuts won't work */
+.plexd-focus-warning {
+    position: fixed;
+    bottom: 24px;
+    left: 24px;
+    padding: 10px 16px;
+    background: rgba(239, 68, 68, 0.9);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #fff;
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+}
+
+.plexd-focus-warning.visible {
+    opacity: 1;
+}
+
+/* Visual indicator when app container has proper focus for shortcuts */
+.plexd-app:focus-visible {
+    outline: 2px solid rgba(59, 130, 246, 0.5);
+    outline-offset: -2px;
+}
+
+/* Hide focus ring when using mouse */
+.plexd-app:focus:not(:focus-visible) {
+    outline: none;
+}
+
+/* Stream wrapper focus indicator */
+.plexd-stream:focus {
+    outline: 2px solid rgba(59, 130, 246, 0.7);
+    outline-offset: 2px;
+}
+
+.plexd-stream:focus:not(:focus-visible) {
+    outline: none;
+}

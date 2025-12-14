@@ -27,7 +27,9 @@ const PlexdApp = (function() {
 
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
-    let tetrisMode = false;
+    // 0 = off, 1 = row-pack (rows with varying heights), 2 = column-pack (columns with varying widths),
+    // 3 = split-pack (treemap-style recursive splitting)
+    let tetrisMode = 0;
     window._plexdTetrisMode = tetrisMode;
 
     // Coverflow mode: Z-depth overlapping with hover-to-front effects
@@ -93,7 +95,66 @@ const PlexdApp = (function() {
         // Sync rating status for loaded streams
         setTimeout(() => PlexdStream.syncRatingStatus(), 100);
 
+        // Set up focus handling
+        setupFocusHandling();
+
         console.log('Plexd initialized');
+    }
+
+    /**
+     * Set up focus handling to ensure keyboard shortcuts work
+     * Shows a warning when focus is in an input field
+     */
+    function setupFocusHandling() {
+        const app = document.querySelector('.plexd-app');
+
+        // Make the app focusable
+        if (app) {
+            app.tabIndex = -1;
+        }
+
+        // Create focus warning element
+        const focusWarning = document.createElement('div');
+        focusWarning.className = 'plexd-focus-warning';
+        focusWarning.innerHTML = 'Press <kbd>Esc</kbd> or click here to enable shortcuts';
+        focusWarning.onclick = () => {
+            // Reset focus to app container
+            if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+                document.activeElement.blur();
+            }
+            if (app) app.focus();
+            focusWarning.classList.remove('visible');
+        };
+        document.body.appendChild(focusWarning);
+
+        // Monitor focus changes
+        document.addEventListener('focusin', (e) => {
+            if (e.target.tagName === 'INPUT') {
+                // Show warning that shortcuts won't work while typing
+                focusWarning.classList.add('visible');
+            } else {
+                focusWarning.classList.remove('visible');
+            }
+        });
+
+        document.addEventListener('focusout', () => {
+            // Small delay to check if focus moved to another input
+            setTimeout(() => {
+                if (document.activeElement.tagName !== 'INPUT') {
+                    focusWarning.classList.remove('visible');
+                }
+            }, 50);
+        });
+
+        // Click on container (not on streams) should reset focus
+        if (containerEl) {
+            containerEl.addEventListener('click', (e) => {
+                // Only if click wasn't on a stream
+                if (e.target === containerEl || e.target.id === 'empty-state') {
+                    if (app) app.focus();
+                }
+            });
+        }
     }
 
     /**
@@ -582,9 +643,10 @@ const PlexdApp = (function() {
         };
 
         let layout;
-        if (tetrisMode) {
+        if (tetrisMode > 0) {
             // Tetris mode: Intelligent bin-packing that eliminates black bars
-            layout = PlexdGrid.calculateTetrisLayout(container, streamsToShow);
+            // Pass the specific mode (1=rows, 2=columns, 3=treemap)
+            layout = PlexdGrid.calculateTetrisLayout(container, streamsToShow, tetrisMode);
         } else if (coverflowMode) {
             // Coverflow mode: Z-depth overlapping with hover effects
             layout = PlexdGrid.calculateCoverflowLayout(container, streamsToShow);
@@ -675,10 +737,16 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Toggle Tetris mode - Intelligent bin-packing that eliminates black bars
+     * Tetris mode names for display
+     */
+    const tetrisModeNames = ['OFF', 'Rows', 'Columns', 'Treemap'];
+
+    /**
+     * Cycle Tetris mode - Intelligent bin-packing that eliminates black bars
+     * Cycles through: 0 (off) -> 1 (rows) -> 2 (columns) -> 3 (treemap) -> 0 (off)
      * Uses object-fit: cover to crop videos and fill their allocated space completely
      */
-    function toggleTetrisMode() {
+    function cycleTetrisMode() {
         // Turn off coverflow if it's on
         if (coverflowMode) {
             coverflowMode = false;
@@ -687,21 +755,34 @@ const PlexdApp = (function() {
             if (coverflowBtn) coverflowBtn.classList.remove('active');
         }
 
-        tetrisMode = !tetrisMode;
+        // Cycle through modes: 0 -> 1 -> 2 -> 3 -> 0
+        tetrisMode = (tetrisMode + 1) % 4;
         window._plexdTetrisMode = tetrisMode;
 
         const tetrisBtn = document.getElementById('tetris-btn');
         const app = document.querySelector('.plexd-app');
 
-        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode);
+        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode > 0);
         if (app) {
-            app.classList.toggle('tetris-mode', tetrisMode);
+            app.classList.toggle('tetris-mode', tetrisMode > 0);
+            // Add specific mode class for CSS targeting
+            app.classList.remove('tetris-mode-1', 'tetris-mode-2', 'tetris-mode-3');
+            if (tetrisMode > 0) {
+                app.classList.add(`tetris-mode-${tetrisMode}`);
+            }
             app.classList.remove('coverflow-mode');
             app.classList.remove('smart-layout-mode');
         }
 
         updateLayout();
-        showMessage(`Tetris Mode: ${tetrisMode ? 'ON' : 'OFF'}`, 'info');
+        showMessage(`Tetris: ${tetrisModeNames[tetrisMode]}`, 'info');
+    }
+
+    /**
+     * Legacy toggle function for compatibility - cycles to next mode or off
+     */
+    function toggleTetrisMode() {
+        cycleTetrisMode();
     }
 
     /**
@@ -1475,8 +1556,13 @@ const PlexdApp = (function() {
                 break;
             case 't':
             case 'T':
-                // Toggle Tetris mode (intelligent bin-packing, eliminates black bars)
-                toggleTetrisMode();
+                // Cycle Tetris mode (off -> mode 1 -> mode 2 -> mode 3 -> off)
+                cycleTetrisMode();
+                break;
+            case 'o':
+            case 'O':
+                // Toggle Coverflow mode (Z-depth overlapping with hover effects)
+                toggleCoverflowMode();
                 break;
             case 'h':
             case 'H':
@@ -2318,6 +2404,7 @@ const PlexdApp = (function() {
         cycleViewMode,
         // Layout modes
         toggleTetrisMode,
+        cycleTetrisMode,
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
         toggleHeader,

@@ -948,9 +948,10 @@ const PlexdGrid = (function() {
      *
      * @param {Object} container - {width, height} of the container
      * @param {Array} streams - Array of stream objects with aspect ratios
+     * @param {number} mode - Layout mode: 1=rows, 2=columns, 3=treemap (0 or undefined = auto-best)
      * @returns {Object} Layout configuration with tight-packed positions
      */
-    function calculateTetrisLayout(container, streams) {
+    function calculateTetrisLayout(container, streams, mode = 0) {
         const count = streams.length;
         if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
 
@@ -988,14 +989,26 @@ const PlexdGrid = (function() {
             };
         }
 
-        // Analyze streams and try multiple intelligent packing strategies
+        // Analyze streams
         const streamData = streams.map((stream, index) => ({
             stream,
             index,
             aspectRatio: stream.aspectRatio || 16/9
         }));
 
-        // Try multiple layout strategies optimized for Tetris-style packing
+        // If a specific mode is requested, use only that algorithm
+        if (mode === 1) {
+            // Mode 1: Row-based packing (videos in horizontal rows)
+            return tryTetrisRowPack(container, streamData);
+        } else if (mode === 2) {
+            // Mode 2: Column-based packing (videos in vertical columns)
+            return tryTetrisColumnPack(container, streamData);
+        } else if (mode === 3) {
+            // Mode 3: Treemap-style recursive splitting
+            return tryTetrisSplitPack(container, streamData);
+        }
+
+        // Auto mode (mode 0): Try all strategies and pick the best
         const layouts = [
             tryTetrisBinPack(container, streamData),
             tryTetrisRowPack(container, streamData),

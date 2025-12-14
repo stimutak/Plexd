@@ -980,6 +980,8 @@ const PlexdStream = (function() {
             const stream = streams.get(fullscreenStreamId);
             if (stream) {
                 stream.wrapper.classList.remove('plexd-fullscreen');
+                // Blur wrapper so focus returns to document for keyboard handling
+                stream.wrapper.blur();
             }
             fullscreenStreamId = null;
         }
@@ -1204,12 +1206,14 @@ const PlexdStream = (function() {
             toggleFullscreen(stream.id);
         });
 
-        // Keyboard handling on wrapper (for fullscreen mode)
+        // Keyboard handling on wrapper (for fullscreen mode only)
         // Note: Arrow keys and most keys are handled by app.js
-        // This handler catches keys when the wrapper has focus (in true-focused mode)
+        // This handler only catches keys when actually in a fullscreen mode
         wrapper.addEventListener('keydown', (e) => {
-            // Only handle when this element is the fullscreen element or has focus
-            if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
+            // Only handle when in true fullscreen or browser-fill mode
+            const inTrueFullscreen = document.fullscreenElement === wrapper;
+            const inBrowserFill = wrapper.classList.contains('plexd-fullscreen');
+            if (!inTrueFullscreen && !inBrowserFill) {
                 return;
             }
 

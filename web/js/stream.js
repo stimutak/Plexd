@@ -1216,6 +1216,7 @@ const PlexdStream = (function() {
             switch (e.key) {
                 case ' ':
                     e.preventDefault();
+                    e.stopPropagation();
                     if (video.paused) {
                         video.play().catch(() => {});
                     } else {
@@ -1227,10 +1228,12 @@ const PlexdStream = (function() {
                 case 'Enter':
                     // Z or Enter in focused mode: toggle back to grid
                     e.preventDefault();
+                    e.stopPropagation(); // Prevent app.js from re-entering focused mode
                     exitFocusedMode();
                     break;
                 case 'Escape':
                     e.preventDefault();
+                    e.stopPropagation();
                     // Escape only handles true fullscreen modes
                     if (fullscreenMode === 'true-focused') {
                         // Return to grid view (stay in true fullscreen)
@@ -1241,11 +1244,13 @@ const PlexdStream = (function() {
                 case 'f':
                 case 'F':
                     e.preventDefault();
+                    e.stopPropagation();
                     toggleTrueFullscreen(stream.id);
                     break;
                 case 'm':
                 case 'M':
                     e.preventDefault();
+                    e.stopPropagation();
                     toggleMute(stream.id);
                     break;
             }

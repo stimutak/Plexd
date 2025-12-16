@@ -1313,7 +1313,7 @@ body {
 /* Coverflow mode indicator - Stream Selector Carousel */
 .plexd-app.coverflow-mode #plexd-container::before,
 .plexd-app.smart-layout-mode #plexd-container::before {
-    content: 'SELECTOR';
+    content: 'COVERFLOW';
     position: absolute;
     top: 8px;
     left: 50%;

@@ -738,13 +738,16 @@ const PlexdApp = (function() {
 
     /**
      * Tetris mode names for display
+     * Mode 4 is the special "Content Visible" mode that shows all content without cropping
      */
-    const tetrisModeNames = ['OFF', 'Rows', 'Columns', 'Treemap'];
+    const tetrisModeNames = ['OFF', 'Rows', 'Columns', 'Treemap', 'Content Visible'];
 
     /**
-     * Cycle Tetris mode - Intelligent bin-packing that eliminates black bars
-     * Cycles through: 0 (off) -> 1 (rows) -> 2 (columns) -> 3 (treemap) -> 0 (off)
-     * Uses object-fit: cover to crop videos and fill their allocated space completely
+     * Cycle Tetris mode - Intelligent bin-packing layouts
+     * Cycles through: 0 (off) -> 1 (rows) -> 2 (columns) -> 3 (treemap) -> 4 (content-visible) -> 0 (off)
+     *
+     * Modes 1-3: Use object-fit: cover to crop videos and fill space (eliminates black bars)
+     * Mode 4: Shows ALL video content without cropping, allows smart overlap of black bars
      */
     function cycleTetrisMode() {
         // Turn off coverflow if it's on
@@ -755,8 +758,8 @@ const PlexdApp = (function() {
             if (coverflowBtn) coverflowBtn.classList.remove('active');
         }
 
-        // Cycle through modes: 0 -> 1 -> 2 -> 3 -> 0
-        tetrisMode = (tetrisMode + 1) % 4;
+        // Cycle through modes: 0 -> 1 -> 2 -> 3 -> 4 -> 0
+        tetrisMode = (tetrisMode + 1) % 5;
         window._plexdTetrisMode = tetrisMode;
 
         const tetrisBtn = document.getElementById('tetris-btn');
@@ -766,10 +769,12 @@ const PlexdApp = (function() {
         if (app) {
             app.classList.toggle('tetris-mode', tetrisMode > 0);
             // Add specific mode class for CSS targeting
-            app.classList.remove('tetris-mode-1', 'tetris-mode-2', 'tetris-mode-3');
+            app.classList.remove('tetris-mode-1', 'tetris-mode-2', 'tetris-mode-3', 'tetris-mode-4');
             if (tetrisMode > 0) {
                 app.classList.add(`tetris-mode-${tetrisMode}`);
             }
+            // Special class for content visible mode
+            app.classList.toggle('tetris-content-visible', tetrisMode === 4);
             app.classList.remove('coverflow-mode');
             app.classList.remove('smart-layout-mode');
         }
@@ -818,7 +823,11 @@ const PlexdApp = (function() {
         }
 
         updateLayout();
-        showMessage(`Coverflow Mode: ${coverflowMode ? 'ON' : 'OFF'}`, 'info');
+        if (coverflowMode) {
+            showMessage('Selector: ON (← → to browse, Enter to focus)', 'info');
+        } else {
+            showMessage('Selector: OFF', 'info');
+        }
     }
 
     /**
@@ -1440,6 +1449,14 @@ const PlexdApp = (function() {
                 } else if (fullscreenStream) {
                     // In focused fullscreen: switch to next stream (stay in focused mode)
                     switchFullscreenStream('right');
+                } else if (coverflowMode) {
+                    // Coverflow mode: navigate carousel to next stream
+                    const streams = getFilteredStreams();
+                    if (streams.length > 0) {
+                        PlexdGrid.coverflowNavigate('next', streams.length);
+                        updateLayout();
+                        showCoverflowPosition();
+                    }
                 } else {
                     PlexdStream.selectNextStream('right');
                 }
@@ -1452,6 +1469,14 @@ const PlexdApp = (function() {
                 } else if (fullscreenStream) {
                     // In focused fullscreen: switch to prev stream (stay in focused mode)
                     switchFullscreenStream('left');
+                } else if (coverflowMode) {
+                    // Coverflow mode: navigate carousel to previous stream
+                    const streams = getFilteredStreams();
+                    if (streams.length > 0) {
+                        PlexdGrid.coverflowNavigate('prev', streams.length);
+                        updateLayout();
+                        showCoverflowPosition();
+                    }
                 } else {
                     PlexdStream.selectNextStream('left');
                 }
@@ -1464,6 +1489,14 @@ const PlexdApp = (function() {
                 } else if (fullscreenStream) {
                     // In focused fullscreen: switch to stream above (stay in focused mode)
                     switchFullscreenStream('up');
+                } else if (coverflowMode) {
+                    // Coverflow mode: navigate carousel to previous stream (same as left)
+                    const streams = getFilteredStreams();
+                    if (streams.length > 0) {
+                        PlexdGrid.coverflowNavigate('prev', streams.length);
+                        updateLayout();
+                        showCoverflowPosition();
+                    }
                 } else {
                     PlexdStream.selectNextStream('up');
                 }
@@ -1476,6 +1509,14 @@ const PlexdApp = (function() {
                 } else if (fullscreenStream) {
                     // In focused fullscreen: switch to stream below (stay in focused mode)
                     switchFullscreenStream('down');
+                } else if (coverflowMode) {
+                    // Coverflow mode: navigate carousel to next stream (same as right)
+                    const streams = getFilteredStreams();
+                    if (streams.length > 0) {
+                        PlexdGrid.coverflowNavigate('next', streams.length);
+                        updateLayout();
+                        showCoverflowPosition();
+                    }
                 } else {
                     PlexdStream.selectNextStream('down');
                 }
@@ -1485,6 +1526,7 @@ const PlexdApp = (function() {
             case 'Z':
                 e.preventDefault();
                 // Enter or Z: toggle between grid and focused view (browser-fill)
+                // In coverflow mode: enter focused mode on the center-selected stream
                 // In grid mode: enter focused mode on selected stream
                 // In focused mode: exit back to grid
                 {
@@ -1492,6 +1534,15 @@ const PlexdApp = (function() {
                     if (mode === 'true-focused' || mode === 'browser-fill') {
                         // In focused mode - exit back to grid
                         PlexdStream.exitFocusedMode();
+                    } else if (coverflowMode) {
+                        // In coverflow mode - enter focused mode on the carousel-selected stream
+                        const streams = getFilteredStreams();
+                        const selectedIdx = PlexdGrid.getCoverflowSelectedIndex();
+                        if (streams.length > 0 && selectedIdx < streams.length) {
+                            const targetStream = streams[selectedIdx];
+                            PlexdStream.enterFocusedMode(targetStream.id);
+                            showMessage('Focused on selected stream', 'info');
+                        }
                     } else {
                         // In grid mode - enter focused mode
                         if (selected) {
@@ -1592,6 +1643,38 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case 'r':
+            case 'R':
+                // Reload stream - useful for frozen streams or stuck loading
+                {
+                    const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
+                    if (targetStream) {
+                        PlexdStream.reloadStream(targetStream.id);
+                        showMessage('Reloading stream...', 'info');
+                    } else {
+                        showMessage('Select a stream first (use arrow keys)', 'info');
+                    }
+                }
+                break;
+            case 'x':
+            case 'X':
+                // Close/remove stream
+                {
+                    const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
+                    if (targetStream) {
+                        // If in fullscreen, exit first
+                        if (fullscreenStream) {
+                            PlexdStream.exitFocusedMode();
+                        }
+                        PlexdStream.removeStream(targetStream.id);
+                        updateStreamCount();
+                        saveCurrentStreams();
+                        showMessage('Stream closed', 'info');
+                    } else {
+                        showMessage('Select a stream first (use arrow keys)', 'info');
+                    }
+                }
+                break;
             case '0':
                 // Context-aware: fullscreen = clear rating, grid = show all
                 // Shift+0: opposite action (grid = clear rating on selected, fullscreen = show all)
@@ -1670,9 +1753,10 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Switch fullscreen to next/prev stream in given direction
+     * Switch fullscreen to stream in given direction using spatial grid navigation
      * Stays in the current fullscreen mode (focused mode)
      * Respects current viewMode filter (rating subgroups)
+     * Uses actual grid positions for true up/down/left/right navigation
      */
     function switchFullscreenStream(direction) {
         // Get streams based on current view mode filter
@@ -1689,13 +1773,68 @@ const PlexdApp = (function() {
         const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
         if (currentIndex === -1) return; // Current stream not in filtered set
 
-        let newIndex;
+        // Calculate grid dimensions based on number of streams
+        const count = streams.length;
+        const cols = PlexdStream.getGridCols() || Math.ceil(Math.sqrt(count));
+        const rows = Math.ceil(count / cols);
 
-        if (direction === 'right' || direction === 'down') {
-            newIndex = (currentIndex + 1) % streams.length;
-        } else {
-            newIndex = (currentIndex - 1 + streams.length) % streams.length;
+        // Get current row and column
+        const currentRow = Math.floor(currentIndex / cols);
+        const currentCol = currentIndex % cols;
+
+        let newRow = currentRow;
+        let newCol = currentCol;
+
+        // Calculate new position based on direction
+        switch (direction) {
+            case 'right':
+                newCol = (currentCol + 1) % cols;
+                // If we wrapped and that position doesn't exist, go to first of next row
+                if (newRow * cols + newCol >= count) {
+                    newRow = (currentRow + 1) % rows;
+                    newCol = 0;
+                }
+                break;
+            case 'left':
+                newCol = currentCol - 1;
+                if (newCol < 0) {
+                    newCol = cols - 1;
+                    newRow = (currentRow - 1 + rows) % rows;
+                }
+                // Make sure position exists
+                while (newRow * cols + newCol >= count && newCol > 0) {
+                    newCol--;
+                }
+                break;
+            case 'down':
+                newRow = (currentRow + 1) % rows;
+                // If that position doesn't exist (incomplete last row), wrap to top
+                if (newRow * cols + newCol >= count) {
+                    newRow = 0;
+                }
+                break;
+            case 'up':
+                newRow = currentRow - 1;
+                if (newRow < 0) {
+                    // Go to last row
+                    newRow = rows - 1;
+                    // Make sure position exists in last row
+                    if (newRow * cols + newCol >= count) {
+                        newRow = Math.floor((count - 1) / cols);
+                        newCol = Math.min(newCol, (count - 1) % cols);
+                    }
+                }
+                break;
         }
+
+        // Calculate new index
+        let newIndex = newRow * cols + newCol;
+
+        // Safety clamp
+        newIndex = Math.max(0, Math.min(count - 1, newIndex));
+
+        // Don't switch if same stream
+        if (newIndex === currentIndex) return;
 
         const newStream = streams[newIndex];
         const mode = PlexdStream.getFullscreenMode();
@@ -1749,6 +1888,40 @@ const PlexdApp = (function() {
             PlexdStream.playAll();
             showMessage('All streams playing', 'info');
         }
+    }
+
+    /**
+     * Get streams filtered by current view mode
+     */
+    function getFilteredStreams() {
+        if (viewMode === 'all') {
+            return PlexdStream.getAllStreams();
+        }
+        return PlexdStream.getStreamsByRating(viewMode);
+    }
+
+    /**
+     * Show coverflow position message (e.g., "Stream 2 of 5")
+     */
+    function showCoverflowPosition() {
+        const streams = getFilteredStreams();
+        const idx = PlexdGrid.getCoverflowSelectedIndex();
+        if (streams.length > 0) {
+            showMessage(`Stream ${idx + 1} of ${streams.length}`, 'info');
+        }
+    }
+
+    /**
+     * Get the stream currently selected in coverflow mode
+     */
+    function getCoverflowSelectedStream() {
+        if (!coverflowMode) return null;
+        const streams = getFilteredStreams();
+        const idx = PlexdGrid.getCoverflowSelectedIndex();
+        if (streams.length > 0 && idx < streams.length) {
+            return streams[idx];
+        }
+        return null;
     }
 
     /**

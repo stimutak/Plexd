@@ -1307,13 +1307,13 @@ body {
 }
 
 /* ========================================
-   Coverflow Mode - Z-depth overlapping
+   Coverflow Mode - Stream Selector Carousel
    ======================================== */
 
-/* Coverflow mode indicator */
+/* Coverflow mode indicator - Stream Selector Carousel */
 .plexd-app.coverflow-mode #plexd-container::before,
 .plexd-app.smart-layout-mode #plexd-container::before {
-    content: 'COVERFLOW';
+    content: 'SELECTOR';
     position: absolute;
     top: 8px;
     left: 50%;
@@ -1324,7 +1324,7 @@ body {
     border-radius: 16px;
     font-size: 11px;
     font-weight: 700;
-    z-index: 50;
+    z-index: 200;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
     animation: coverflowPulse 2s ease-in-out infinite;
@@ -1339,19 +1339,77 @@ body {
     }
 }
 
-/* Coverflow stream styling - smooth transitions and overlaps with z-depth */
+/* Coverflow stream styling - smooth transitions for carousel effect */
 .plexd-app.coverflow-mode .plexd-stream,
 .plexd-app.smart-layout-mode .plexd-stream {
-    transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-    border-radius: 4px;
+    border-radius: 8px;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
 }
 
-.plexd-app.coverflow-mode .plexd-stream:hover,
-.plexd-app.smart-layout-mode .plexd-stream:hover {
+/* Selected stream in center - prominent display */
+.plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-selected {
     z-index: 100 !important;
-    box-shadow: 0 8px 32px rgba(139, 92, 246, 0.3);
-    transform: scale(1.02);
+    box-shadow:
+        0 0 0 3px rgba(139, 92, 246, 0.8),
+        0 20px 60px rgba(0, 0, 0, 0.6),
+        0 0 80px rgba(139, 92, 246, 0.3);
+    transform: none !important;
+    opacity: 1 !important;
+}
+
+/* Add glow ring to selected stream */
+.plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-selected::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.5), rgba(236, 72, 153, 0.5));
+    z-index: -1;
+    animation: selectedGlow 2s ease-in-out infinite;
+}
+
+@keyframes selectedGlow {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+/* Side streams - smaller, rotated, faded */
+.plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-side {
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+/* Side stream hover - brighten slightly */
+.plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-side:hover {
+    filter: brightness(1.1);
+    box-shadow: 0 8px 40px rgba(139, 92, 246, 0.4);
+}
+
+/* Navigation hint at bottom */
+.plexd-app.coverflow-mode #plexd-container::after {
+    content: '← → Navigate • Enter to Focus';
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: rgba(255, 255, 255, 0.8);
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    z-index: 200;
+    backdrop-filter: blur(4px);
+}
+
+/* Hide controls on side streams in coverflow */
+.plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-side .plexd-controls {
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* Add subtle border glow for coverflow streams */
@@ -1361,7 +1419,7 @@ body {
     position: absolute;
     inset: 0;
     border: 1px solid rgba(139, 92, 246, 0.2);
-    border-radius: 4px;
+    border-radius: 8px;
     pointer-events: none;
 }
 
@@ -1376,6 +1434,45 @@ body {
 .plexd-btn[id="tetris-btn"].active {
     background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
     color: #fff;
+}
+
+/* ========================================
+   Tetris Mode 4 - Content Visible
+   ======================================== */
+
+/* Content Visible mode indicator */
+.plexd-app.tetris-mode-4 #plexd-container::before {
+    content: 'CONTENT VISIBLE';
+    background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
+    animation: contentVisiblePulse 2s ease-in-out infinite;
+}
+
+@keyframes contentVisiblePulse {
+    0%, 100% {
+        box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
+    }
+    50% {
+        box-shadow: 0 2px 16px rgba(59, 130, 246, 0.6);
+    }
+}
+
+/* Content Visible streams - show complete content */
+.plexd-app.tetris-content-visible .plexd-stream {
+    transition: all 0.4s ease;
+    border-radius: 4px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* Content Visible uses contain to show all content */
+.plexd-app.tetris-content-visible .plexd-video {
+    object-fit: contain !important;
+}
+
+/* Highlight effect for content visible mode */
+.plexd-app.tetris-content-visible .plexd-stream:hover {
+    box-shadow: 0 0 0 2px rgba(6, 182, 212, 0.5);
+    z-index: 50;
 }
 
 /* ========================================

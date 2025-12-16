@@ -210,6 +210,39 @@ const PlexdGrid = (function() {
                     videoWrapper.style.zIndex = '';
                 }
 
+                // Apply transform if specified (for coverflow carousel effect)
+                if (cell.transform && cell.transform !== 'none') {
+                    videoWrapper.style.transform = cell.transform;
+                    videoWrapper.style.transformOrigin = 'center center';
+                } else {
+                    videoWrapper.style.transform = '';
+                    videoWrapper.style.transformOrigin = '';
+                }
+
+                // Apply opacity if specified (for coverflow fade effect)
+                if (cell.opacity !== undefined && cell.opacity < 1) {
+                    videoWrapper.style.opacity = cell.opacity;
+                } else {
+                    videoWrapper.style.opacity = '';
+                }
+
+                // Handle coverflow selected state
+                if (cell.isSelected !== undefined) {
+                    videoWrapper.classList.toggle('plexd-coverflow-selected', cell.isSelected);
+                    videoWrapper.classList.toggle('plexd-coverflow-side', !cell.isSelected && !cell.hidden);
+                } else {
+                    videoWrapper.classList.remove('plexd-coverflow-selected', 'plexd-coverflow-side');
+                }
+
+                // Handle hidden state (for off-screen coverflow items)
+                if (cell.hidden) {
+                    videoWrapper.style.visibility = 'hidden';
+                    videoWrapper.style.pointerEvents = 'none';
+                } else {
+                    videoWrapper.style.visibility = '';
+                    videoWrapper.style.pointerEvents = '';
+                }
+
                 // Apply object-fit to the video element (for Tetris mode)
                 const video = videoWrapper.querySelector('video');
                 if (video) {
@@ -226,67 +259,209 @@ const PlexdGrid = (function() {
     }
 
     // =========================================================================
-    // Coverflow Layout - Z-depth overlapping window management
+    // Coverflow Layout - Stream Selector Carousel Mode
     // =========================================================================
 
+    // Track the currently selected index in coverflow mode
+    let coverflowSelectedIndex = 0;
+
     /**
-     * Coverflow Layout - Creates a cascading, overlapping display by:
-     * 1. Detecting letterboxing (black bars) on each video
-     * 2. Allowing streams to overlap into each other's black bar zones
-     * 3. Using z-depth for visual layering with hover-to-front effects
-     * 4. Trying multiple layout strategies and picking the best
+     * Coverflow Layout - Stream Selector Carousel
+     *
+     * PURPOSE: Select one stream from many while maintaining visual context of others.
+     * Perfect for browsing through multiple streams and choosing which one to focus on.
+     *
+     * Features:
+     * 1. Selected stream displayed prominently in the center at large size
+     * 2. Adjacent streams visible on sides with 3D perspective effect
+     * 3. Streams further away appear smaller, rotated, and faded
+     * 4. Arrow keys cycle through selection
+     * 5. Enter/Z enters focused view on selected stream
      *
      * @param {Object} container - {width, height} of the container
      * @param {Array} streams - Array of stream objects with aspect ratios
-     * @returns {Object} Layout configuration with overlapping positions
+     * @param {number} selectedIdx - Index of the selected/focused stream (optional)
+     * @returns {Object} Layout configuration with carousel positions
      */
-    function calculateCoverflowLayout(container, streams) {
+    function calculateCoverflowLayout(container, streams, selectedIdx) {
         const count = streams.length;
-        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'coverflow' };
+        if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'coverflow', selectedIndex: 0 };
+
+        // Use provided index or tracked index, clamped to valid range
+        if (selectedIdx !== undefined) {
+            coverflowSelectedIndex = Math.max(0, Math.min(count - 1, selectedIdx));
+        } else {
+            coverflowSelectedIndex = Math.max(0, Math.min(count - 1, coverflowSelectedIndex));
+        }
 
         // Single stream - just maximize it
         if (count === 1) {
             const layout = singleStreamLayout(container, streams[0]);
             layout.mode = 'coverflow';
+            layout.selectedIndex = 0;
             return layout;
         }
 
-        // Container aspect ratio
-        const containerAR = container.width / container.height;
+        // Build carousel layout
+        return buildCarouselLayout(container, streams, coverflowSelectedIndex);
+    }
 
-        // Analyze each stream's characteristics
-        const streamData = streams.map((stream, index) => {
+    /**
+     * Build the carousel/coverflow layout with center-focused stream
+     */
+    function buildCarouselLayout(container, streams, selectedIndex) {
+        const count = streams.length;
+        const cells = [];
+
+        // Layout parameters
+        const centerWidth = container.width * 0.55;  // Selected stream takes 55% width
+        const centerHeight = container.height * 0.85; // 85% height
+        const sideWidth = container.width * 0.25;    // Side streams are 25% width
+        const sideHeight = container.height * 0.5;   // 50% height
+
+        // Maximum visible streams on each side (beyond this they're off-screen)
+        const maxVisibleSide = 3;
+
+        // Center position
+        const centerX = (container.width - centerWidth) / 2;
+        const centerY = (container.height - centerHeight) / 2;
+
+        // Calculate positions for each stream
+        for (let i = 0; i < count; i++) {
+            const stream = streams[i];
             const ar = stream.aspectRatio || 16/9;
-            return {
-                stream,
-                index,
-                aspectRatio: ar,
-                // Determine if this is a wide video (has top/bottom bars) or tall (has side bars)
-                isWide: ar > containerAR,
-                letterboxRatio: ar > containerAR
-                    ? (1 - containerAR / ar) // Percentage of height that's black bars
-                    : (1 - ar / containerAR)  // Percentage of width that's black bars
-            };
-        });
+            const relativePos = i - selectedIndex; // Position relative to selected (-2, -1, 0, 1, 2, etc.)
 
-        // Try multiple layout strategies and pick the best
-        const layouts = [
-            tryCoverflowOverlapLayout(container, streamData),
-            tryHorizontalStackLayout(container, streamData),
-            tryVerticalStackLayout(container, streamData),
-            tryMosaicLayout(container, streamData),
-            tryDiagonalLayout(container, streamData)
-        ];
+            let cell;
 
-        // Pick the layout with highest efficiency
-        let bestLayout = layouts[0];
-        for (const layout of layouts) {
-            if (layout.efficiency > bestLayout.efficiency) {
-                bestLayout = layout;
+            if (relativePos === 0) {
+                // Selected stream - center, large, no transform
+                const fit = fitToContainer({ width: centerWidth, height: centerHeight }, ar);
+                cell = {
+                    streamId: stream.id,
+                    x: centerX + (centerWidth - fit.width) / 2,
+                    y: centerY + (centerHeight - fit.height) / 2,
+                    width: fit.width,
+                    height: fit.height,
+                    zIndex: 100,
+                    transform: 'none',
+                    opacity: 1,
+                    isSelected: true
+                };
+            } else {
+                // Side streams - smaller, with perspective
+                const absPos = Math.abs(relativePos);
+                const direction = relativePos > 0 ? 1 : -1; // 1 = right, -1 = left
+
+                // Streams too far away are hidden
+                if (absPos > maxVisibleSide) {
+                    cell = {
+                        streamId: stream.id,
+                        x: direction > 0 ? container.width + 100 : -sideWidth - 100,
+                        y: container.height / 2 - sideHeight / 2,
+                        width: sideWidth,
+                        height: sideHeight,
+                        zIndex: 1,
+                        transform: 'none',
+                        opacity: 0,
+                        isSelected: false,
+                        hidden: true
+                    };
+                } else {
+                    // Calculate progressive scaling and positioning
+                    const scale = Math.max(0.4, 1 - absPos * 0.2); // Scale down by 20% per position
+                    const scaledWidth = sideWidth * scale;
+                    const scaledHeight = sideHeight * scale;
+
+                    // Fit video to the scaled cell
+                    const fit = fitToContainer({ width: scaledWidth, height: scaledHeight }, ar);
+
+                    // X position: spread out from center
+                    let xOffset;
+                    if (direction > 0) {
+                        // Right side
+                        xOffset = centerX + centerWidth + 20 + (absPos - 1) * (scaledWidth * 0.7);
+                    } else {
+                        // Left side
+                        xOffset = centerX - scaledWidth - 20 - (absPos - 1) * (scaledWidth * 0.7);
+                    }
+
+                    // Y position: center vertically with slight offset for depth
+                    const yOffset = (container.height - fit.height) / 2 + absPos * 10;
+
+                    // Rotation angle for 3D effect
+                    const rotateY = direction * (15 + absPos * 5); // Rotate towards center
+
+                    // Opacity fades with distance
+                    const opacity = Math.max(0.3, 1 - absPos * 0.25);
+
+                    // Z-index decreases with distance from center
+                    const zIndex = 50 - absPos * 10;
+
+                    cell = {
+                        streamId: stream.id,
+                        x: xOffset,
+                        y: yOffset,
+                        width: fit.width,
+                        height: fit.height,
+                        zIndex: zIndex,
+                        transform: `perspective(1000px) rotateY(${rotateY}deg) scale(${scale})`,
+                        opacity: opacity,
+                        isSelected: false,
+                        relativePosition: relativePos
+                    };
+                }
             }
+
+            cells.push(cell);
         }
 
-        return bestLayout;
+        // Calculate efficiency (visible video area / container area)
+        const containerArea = container.width * container.height;
+        let visibleArea = 0;
+        cells.forEach(cell => {
+            if (!cell.hidden) {
+                visibleArea += cell.width * cell.height * (cell.opacity || 1);
+            }
+        });
+
+        return {
+            cells,
+            rows: 1,
+            cols: count,
+            efficiency: Math.min(visibleArea / containerArea, 1),
+            mode: 'coverflow',
+            selectedIndex: selectedIndex
+        };
+    }
+
+    /**
+     * Navigate coverflow selection (called from app.js)
+     * @param {string} direction - 'next' or 'prev'
+     * @param {number} count - Total number of streams
+     * @returns {number} New selected index
+     */
+    function coverflowNavigate(direction, count) {
+        if (direction === 'next') {
+            coverflowSelectedIndex = (coverflowSelectedIndex + 1) % count;
+        } else if (direction === 'prev') {
+            coverflowSelectedIndex = (coverflowSelectedIndex - 1 + count) % count;
+        }
+        return coverflowSelectedIndex;
+    }
+
+    /**
+     * Get current coverflow selected index
+     */
+    function getCoverflowSelectedIndex() {
+        return coverflowSelectedIndex;
+    }
+
+    /**
+     * Set coverflow selected index
+     */
+    function setCoverflowSelectedIndex(index) {
+        coverflowSelectedIndex = index;
     }
 
     /**
@@ -936,30 +1111,119 @@ const PlexdGrid = (function() {
     }
 
     // =========================================================================
+    // Helper Functions for Video Content Region Detection
+    // =========================================================================
+
+    /**
+     * Get the actual video content region within a cell (excluding letterbox)
+     * Used for overlap detection in Content Visible mode
+     *
+     * @param {number} x - Cell x position
+     * @param {number} y - Cell y position
+     * @param {number} width - Cell width
+     * @param {number} height - Cell height
+     * @param {number} aspectRatio - Video aspect ratio
+     * @returns {Object} Content region {x, y, width, height}
+     */
+    function getVideoContentRegion(x, y, width, height, aspectRatio) {
+        const cellAR = width / height;
+
+        if (aspectRatio > cellAR) {
+            // Video is wider - has top/bottom letterbox
+            const contentHeight = width / aspectRatio;
+            const letterboxHeight = (height - contentHeight) / 2;
+            return {
+                x: x,
+                y: y + letterboxHeight,
+                width: width,
+                height: contentHeight
+            };
+        } else {
+            // Video is taller - has left/right letterbox
+            const contentWidth = height * aspectRatio;
+            const letterboxWidth = (width - contentWidth) / 2;
+            return {
+                x: x + letterboxWidth,
+                y: y,
+                width: contentWidth,
+                height: height
+            };
+        }
+    }
+
+    /**
+     * Calculate the overlap region between two rectangles
+     *
+     * @param {Object} r1 - First region {x, y, width, height}
+     * @param {Object} r2 - Second region {x, y, width, height}
+     * @returns {Object} Overlap region {x, y, width, height}
+     */
+    function getRegionOverlap(r1, r2) {
+        const overlapX = Math.max(r1.x, r2.x);
+        const overlapY = Math.max(r1.y, r2.y);
+        const overlapRight = Math.min(r1.x + r1.width, r2.x + r2.width);
+        const overlapBottom = Math.min(r1.y + r1.height, r2.y + r2.height);
+
+        return {
+            x: overlapX,
+            y: overlapY,
+            width: Math.max(0, overlapRight - overlapX),
+            height: Math.max(0, overlapBottom - overlapY)
+        };
+    }
+
+    // =========================================================================
     // Tetris Layout - Intelligent bin-packing to eliminate black bars
     // =========================================================================
 
     /**
      * Tetris Layout - Maximizes visible video content by:
      * 1. Intelligently packing videos to fill the container
-     * 2. Cropping/zooming into videos to eliminate letterboxing
-     * 3. Using smart overlap where letterbox zones would be
+     * 2. Mode 1-3: Cropping/zooming into videos to eliminate letterboxing (object-fit: cover)
+     * 3. Mode 4: Content Visible - shows ALL video content, overlaps only black bars
      * 4. No z-depth layering - all videos at same level
+     *
+     * Modes:
+     * 0 = auto-best (picks from modes 1-3)
+     * 1 = rows - videos in horizontal rows with cover
+     * 2 = columns - videos in vertical columns with cover
+     * 3 = treemap - recursive splitting with cover
+     * 4 = content visible - show ALL content, smart overlap of black bars only
      *
      * @param {Object} container - {width, height} of the container
      * @param {Array} streams - Array of stream objects with aspect ratios
-     * @param {number} mode - Layout mode: 1=rows, 2=columns, 3=treemap (0 or undefined = auto-best)
+     * @param {number} mode - Layout mode: 1=rows, 2=columns, 3=treemap, 4=content-visible (0 = auto)
      * @returns {Object} Layout configuration with tight-packed positions
      */
     function calculateTetrisLayout(container, streams, mode = 0) {
         const count = streams.length;
         if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
 
-        // Single stream - maximize and crop to fill
+        // Single stream - maximize and crop to fill (or contain for mode 4)
         if (count === 1) {
             const stream = streams[0];
             const ar = stream.aspectRatio || 16/9;
             const containerAR = container.width / container.height;
+
+            if (mode === 4) {
+                // Content Visible mode - use contain (no cropping)
+                const fit = fitToContainer(container, ar);
+                return {
+                    cells: [{
+                        streamId: stream.id,
+                        x: (container.width - fit.width) / 2,
+                        y: (container.height - fit.height) / 2,
+                        width: fit.width,
+                        height: fit.height,
+                        objectFit: 'contain'
+                    }],
+                    rows: 1,
+                    cols: 1,
+                    efficiency: (fit.width * fit.height) / (container.width * container.height),
+                    mode: 'tetris',
+                    subMode: 'content-visible'
+                };
+            }
 
             // Crop to fill (no black bars) using object-fit: cover logic
             let width, height;
@@ -1006,6 +1270,9 @@ const PlexdGrid = (function() {
         } else if (mode === 3) {
             // Mode 3: Treemap-style recursive splitting
             return tryTetrisSplitPack(container, streamData);
+        } else if (mode === 4) {
+            // Mode 4: Content Visible - show ALL content, smart overlap
+            return tryTetrisContentVisible(container, streamData);
         }
 
         // Auto mode (mode 0): Try all strategies and pick the best
@@ -1380,6 +1647,145 @@ const PlexdGrid = (function() {
     }
 
     /**
+     * Tetris Content Visible Mode - Show ALL video content without cropping
+     *
+     * PURPOSE: Display all streams with maximum visible content where:
+     * - NO video content is cropped
+     * - Black bars (letterboxing) can overlap/hide behind other videos
+     * - Videos are scaled and positioned to maximize screen usage
+     * - Intelligently stacks videos so content areas don't overlap
+     *
+     * Perfect for when you want to see everything happening in all streams simultaneously.
+     */
+    function tryTetrisContentVisible(container, streamData) {
+        const count = streamData.length;
+        const cells = [];
+        const containerAR = container.width / container.height;
+
+        // Calculate optimal grid to fit all videos
+        // We want to maximize the size of each video while fitting them all
+        const cols = Math.ceil(Math.sqrt(count * containerAR / 1.78)); // Bias towards 16:9
+        const rows = Math.ceil(count / cols);
+
+        // Calculate base cell size
+        const baseCellWidth = container.width / cols;
+        const baseCellHeight = container.height / rows;
+
+        // For Content Visible mode, we position videos with intelligent overlap
+        // Videos are placed so their actual content doesn't overlap, but letterbox areas can
+
+        // Sort by aspect ratio to group similar shapes
+        const sorted = [...streamData].sort((a, b) => a.aspectRatio - b.aspectRatio);
+
+        // Track actual video content regions for overlap detection
+        const contentRegions = [];
+
+        // First pass: calculate ideal positions in a grid
+        for (let i = 0; i < sorted.length; i++) {
+            const data = sorted[i];
+            const ar = data.aspectRatio;
+
+            // Calculate row and column
+            const row = Math.floor(i / cols);
+            const col = i % cols;
+
+            // Allow videos to be larger than their grid cell to fill more space
+            // Scale factor based on how many neighbors
+            const hasLeft = col > 0;
+            const hasRight = col < cols - 1 && i + 1 < count;
+            const hasTop = row > 0;
+            const hasBottom = row < rows - 1 && i + cols < count;
+
+            // Expand size to utilize neighboring letterbox space
+            let expandFactor = 1.15;
+            if (count <= 2) expandFactor = 1.3;
+            else if (count <= 4) expandFactor = 1.2;
+
+            const cellWidth = baseCellWidth * expandFactor;
+            const cellHeight = baseCellHeight * expandFactor;
+
+            // Fit video to cell while maintaining aspect ratio
+            const fit = fitToContainer({ width: cellWidth, height: cellHeight }, ar);
+
+            // Position: start at grid cell center, then adjust
+            const centerX = (col + 0.5) * baseCellWidth;
+            const centerY = (row + 0.5) * baseCellHeight;
+
+            let x = centerX - fit.width / 2;
+            let y = centerY - fit.height / 2;
+
+            // Clamp to container bounds
+            x = Math.max(0, Math.min(container.width - fit.width, x));
+            y = Math.max(0, Math.min(container.height - fit.height, y));
+
+            // Calculate actual video content region (excluding letterbox)
+            const videoContent = getVideoContentRegion(x, y, fit.width, fit.height, ar);
+
+            // Check for content overlap with already placed videos
+            let needsAdjustment = false;
+            for (const existing of contentRegions) {
+                const overlap = getRegionOverlap(videoContent, existing);
+                if (overlap.width > 5 && overlap.height > 5) {
+                    needsAdjustment = true;
+                    // Shift away from overlap
+                    if (videoContent.x < existing.x) {
+                        x -= overlap.width * 0.5;
+                    } else {
+                        x += overlap.width * 0.5;
+                    }
+                    if (videoContent.y < existing.y) {
+                        y -= overlap.height * 0.5;
+                    } else {
+                        y += overlap.height * 0.5;
+                    }
+                }
+            }
+
+            // Re-clamp after adjustment
+            x = Math.max(0, Math.min(container.width - fit.width, x));
+            y = Math.max(0, Math.min(container.height - fit.height, y));
+
+            // Store the cell
+            cells.push({
+                streamId: data.stream.id,
+                x: x,
+                y: y,
+                width: fit.width,
+                height: fit.height,
+                objectFit: 'contain', // No cropping
+                zIndex: 10 + count - i // Later items on top
+            });
+
+            // Track content region
+            contentRegions.push(getVideoContentRegion(x, y, fit.width, fit.height, ar));
+        }
+
+        // Calculate efficiency based on actual video content coverage
+        const containerArea = container.width * container.height;
+        let contentArea = 0;
+        for (const cell of cells) {
+            const data = sorted.find(d => d.stream.id === cell.streamId);
+            if (data) {
+                const videoContent = getVideoContentRegion(cell.x, cell.y, cell.width, cell.height, data.aspectRatio);
+                contentArea += videoContent.width * videoContent.height;
+            }
+        }
+
+        // Account for overlaps in letterbox areas
+        const overlapFactor = count > 1 ? 0.85 : 1;
+        const efficiency = Math.min((contentArea * overlapFactor) / containerArea, 1);
+
+        return {
+            cells,
+            rows,
+            cols,
+            efficiency,
+            mode: 'tetris',
+            subMode: 'content-visible'
+        };
+    }
+
+    /**
      * Scale Tetris layout to fill container and center it
      */
     function scaleTetrisLayout(container, cells, count) {
@@ -1460,7 +1866,11 @@ const PlexdGrid = (function() {
         applyLayout,
         onContainerResize,
         fitToContainer,
-        calculateEfficiency
+        calculateEfficiency,
+        // Coverflow navigation
+        coverflowNavigate,
+        getCoverflowSelectedIndex,
+        setCoverflowSelectedIndex
     };
 })();
 

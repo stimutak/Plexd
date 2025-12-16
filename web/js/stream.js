@@ -1658,6 +1658,13 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Get grid columns for navigation
+     */
+    function getGridCols() {
+        return gridCols;
+    }
+
+    /**
      * Compute grid columns from actual DOM positions
      */
     function computeGridCols() {
@@ -2302,6 +2309,7 @@ const PlexdStream = (function() {
         getSelectedStream,
         selectNextStream,
         setGridCols,
+        getGridCols,
         reorderStreams,
         seekRelative,
         seekTo,

@@ -1753,9 +1753,10 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Switch fullscreen to next/prev stream in given direction
+     * Switch fullscreen to stream in given direction using spatial grid navigation
      * Stays in the current fullscreen mode (focused mode)
      * Respects current viewMode filter (rating subgroups)
+     * Uses actual grid positions for true up/down/left/right navigation
      */
     function switchFullscreenStream(direction) {
         // Get streams based on current view mode filter
@@ -1772,13 +1773,68 @@ const PlexdApp = (function() {
         const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
         if (currentIndex === -1) return; // Current stream not in filtered set
 
-        let newIndex;
+        // Calculate grid dimensions based on number of streams
+        const count = streams.length;
+        const cols = PlexdStream.getGridCols() || Math.ceil(Math.sqrt(count));
+        const rows = Math.ceil(count / cols);
 
-        if (direction === 'right' || direction === 'down') {
-            newIndex = (currentIndex + 1) % streams.length;
-        } else {
-            newIndex = (currentIndex - 1 + streams.length) % streams.length;
+        // Get current row and column
+        const currentRow = Math.floor(currentIndex / cols);
+        const currentCol = currentIndex % cols;
+
+        let newRow = currentRow;
+        let newCol = currentCol;
+
+        // Calculate new position based on direction
+        switch (direction) {
+            case 'right':
+                newCol = (currentCol + 1) % cols;
+                // If we wrapped and that position doesn't exist, go to first of next row
+                if (newRow * cols + newCol >= count) {
+                    newRow = (currentRow + 1) % rows;
+                    newCol = 0;
+                }
+                break;
+            case 'left':
+                newCol = currentCol - 1;
+                if (newCol < 0) {
+                    newCol = cols - 1;
+                    newRow = (currentRow - 1 + rows) % rows;
+                }
+                // Make sure position exists
+                while (newRow * cols + newCol >= count && newCol > 0) {
+                    newCol--;
+                }
+                break;
+            case 'down':
+                newRow = (currentRow + 1) % rows;
+                // If that position doesn't exist (incomplete last row), wrap to top
+                if (newRow * cols + newCol >= count) {
+                    newRow = 0;
+                }
+                break;
+            case 'up':
+                newRow = currentRow - 1;
+                if (newRow < 0) {
+                    // Go to last row
+                    newRow = rows - 1;
+                    // Make sure position exists in last row
+                    if (newRow * cols + newCol >= count) {
+                        newRow = Math.floor((count - 1) / cols);
+                        newCol = Math.min(newCol, (count - 1) % cols);
+                    }
+                }
+                break;
         }
+
+        // Calculate new index
+        let newIndex = newRow * cols + newCol;
+
+        // Safety clamp
+        newIndex = Math.max(0, Math.min(count - 1, newIndex));
+
+        // Don't switch if same stream
+        if (newIndex === currentIndex) return;
 
         const newStream = streams[newIndex];
         const mode = PlexdStream.getFullscreenMode();

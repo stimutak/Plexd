@@ -824,9 +824,9 @@ const PlexdApp = (function() {
 
         updateLayout();
         if (coverflowMode) {
-            showMessage('Coverflow: ON (← → to browse, Enter to focus)', 'info');
+            showMessage('Selector: ON (← → to browse, Enter to focus)', 'info');
         } else {
-            showMessage('Coverflow: OFF', 'info');
+            showMessage('Selector: OFF', 'info');
         }
     }
 

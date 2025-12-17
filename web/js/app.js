@@ -1994,9 +1994,20 @@ const PlexdApp = (function() {
     const MIN_STREAM_DURATION = 30;
 
     /**
-     * Check if a stream should be saved (has sufficient duration)
+     * Check if a URL is a local blob URL (from dropped files)
+     * Blob URLs are temporary and become invalid after browser session
+     */
+    function isBlobUrl(url) {
+        return url && url.startsWith('blob:');
+    }
+
+    /**
+     * Check if a stream should be saved (has sufficient duration and is not a blob URL)
      */
     function shouldSaveStream(stream) {
+        // Exclude blob URLs - they're temporary and won't work after browser restarts
+        if (isBlobUrl(stream.url)) return false;
+
         const duration = stream.video && stream.video.duration;
         // Save if duration is unknown (not loaded yet) or meets minimum
         if (!duration || !isFinite(duration)) return true;
@@ -2004,7 +2015,7 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Save current streams to localStorage (excludes short videos)
+     * Save current streams to localStorage (excludes local files and short videos)
      */
     function saveCurrentStreams() {
         const streams = PlexdStream.getAllStreams();
@@ -2058,10 +2069,17 @@ const PlexdApp = (function() {
             return;
         }
 
-        // Filter out short videos
+        // Count exclusions by type
+        const localFiles = streams.filter(s => isBlobUrl(s.url)).length;
+        const shortVideos = streams.filter(s => !isBlobUrl(s.url) && !shouldSaveStream(s)).length;
+
+        // Filter out local files and short videos
         const validStreams = streams.filter(s => shouldSaveStream(s));
         if (validStreams.length === 0) {
-            showMessage('No valid streams to save (all too short)', 'error');
+            const reasons = [];
+            if (localFiles > 0) reasons.push('local files cannot be saved');
+            if (shortVideos > 0) reasons.push('videos too short');
+            showMessage(`No valid streams to save (${reasons.join(', ')})`, 'error');
             return;
         }
 
@@ -2079,10 +2097,13 @@ const PlexdApp = (function() {
         };
         localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
 
-        const skipped = streams.length - validStreams.length;
+        // Build informative message
         let msg = `Saved: ${name} (${urls.length} streams)`;
-        if (skipped > 0) {
-            msg += ` - ${skipped} short video(s) excluded`;
+        const exclusions = [];
+        if (localFiles > 0) exclusions.push(`${localFiles} local file(s)`);
+        if (shortVideos > 0) exclusions.push(`${shortVideos} short video(s)`);
+        if (exclusions.length > 0) {
+            msg += ` - excluded: ${exclusions.join(', ')}`;
         }
         if (loginDomains.length > 0) {
             msg += ` | Login: ${loginDomains.join(', ')}`;

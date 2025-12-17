@@ -1478,14 +1478,23 @@ const PlexdGrid = (function() {
         }
 
         // Scale row heights to fit container
+        // Cap scale to 1.0 to prevent rows from exceeding container width
         const totalHeight = rowHeights.reduce((sum, r) => sum + r.height, 0);
-        const scale = container.height / totalHeight;
+        const scale = Math.min(1.0, container.height / totalHeight);
+
+        // Calculate total layout dimensions after scaling
+        const scaledTotalHeight = totalHeight * scale;
+        const scaledTotalWidth = container.width * scale; // Row width scales with height
+
+        // Center the layout in the container
+        const offsetX = (container.width - scaledTotalWidth) / 2;
+        const offsetY = (container.height - scaledTotalHeight) / 2;
 
         // Second pass: position cells
-        currentY = 0;
+        currentY = offsetY;
         for (const row of rowHeights) {
             const scaledHeight = row.height * scale;
-            let currentX = 0;
+            let currentX = offsetX;
 
             for (const data of row.streams) {
                 const width = scaledHeight * data.aspectRatio;
@@ -1540,14 +1549,23 @@ const PlexdGrid = (function() {
         }
 
         // Scale column widths to fit container
+        // Cap scale to 1.0 to prevent columns from exceeding container height
         const totalWidth = colWidths.reduce((sum, c) => sum + c.width, 0);
-        const scale = container.width / totalWidth;
+        const scale = Math.min(1.0, container.width / totalWidth);
+
+        // Calculate total layout dimensions after scaling
+        const scaledTotalWidth = totalWidth * scale;
+        const scaledTotalHeight = container.height * scale; // Column height scales with width
+
+        // Center the layout in the container
+        const offsetX = (container.width - scaledTotalWidth) / 2;
+        const offsetY = (container.height - scaledTotalHeight) / 2;
 
         // Second pass: position cells
-        let currentX = 0;
+        let currentX = offsetX;
         for (const col of colWidths) {
             const scaledWidth = col.width * scale;
-            let currentY = 0;
+            let currentY = offsetY;
 
             for (const data of col.streams) {
                 const height = scaledWidth / data.aspectRatio;

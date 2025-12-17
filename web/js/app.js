@@ -615,13 +615,26 @@ const PlexdApp = (function() {
             streamsToShow = PlexdStream.getStreamsByRating(viewMode);
         }
 
-        // Handle visibility of streams based on view mode
+        // Handle visibility and playback of streams based on view mode
+        // When filtering by rating, pause hidden streams to save bandwidth
+        const isGloballyPaused = PlexdStream.isGloballyPaused();
         allStreams.forEach(stream => {
             if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
+                // Resume playback for all streams when viewing all (if not globally paused)
+                if (!isGloballyPaused) {
+                    stream.video.play().catch(() => {});
+                }
             } else {
                 const rating = PlexdStream.getRating(stream.url);
-                stream.wrapper.style.display = (rating === viewMode) ? '' : 'none';
+                const isVisible = (rating === viewMode);
+                stream.wrapper.style.display = isVisible ? '' : 'none';
+                // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
+                if (isVisible && !isGloballyPaused) {
+                    stream.video.play().catch(() => {});
+                } else if (!isVisible) {
+                    stream.video.pause();
+                }
             }
         });
 

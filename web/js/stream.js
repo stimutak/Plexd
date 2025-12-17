@@ -608,7 +608,7 @@ const PlexdStream = (function() {
         removeBtn.title = 'Remove stream';
         removeBtn.onclick = (e) => {
             e.stopPropagation();
-            removeStream(streamId);
+            removeStreamAndFocusNext(streamId);
         };
 
         buttonRow.appendChild(skipBackBtn);
@@ -1473,6 +1473,44 @@ const PlexdStream = (function() {
 
         triggerLayoutUpdate();
         return true;
+    }
+
+    /**
+     * Remove a stream and focus the next stream's remove button for quick sequential closing
+     */
+    function removeStreamAndFocusNext(streamId) {
+        const streamList = Array.from(streams.keys());
+        const currentIndex = streamList.indexOf(streamId);
+
+        // Find next stream to focus (or previous if at end)
+        let nextStreamId = null;
+        if (streamList.length > 1) {
+            if (currentIndex < streamList.length - 1) {
+                nextStreamId = streamList[currentIndex + 1];
+            } else if (currentIndex > 0) {
+                nextStreamId = streamList[currentIndex - 1];
+            }
+        }
+
+        // Remove the current stream
+        removeStream(streamId);
+
+        // Focus the next stream's remove button for quick sequential closing
+        if (nextStreamId) {
+            const nextStream = streams.get(nextStreamId);
+            if (nextStream) {
+                // Select the next stream
+                selectStream(nextStreamId);
+
+                // Focus its remove button after a short delay (for DOM update)
+                setTimeout(() => {
+                    const removeBtn = nextStream.controls.querySelector('.plexd-remove-btn');
+                    if (removeBtn) {
+                        removeBtn.focus();
+                    }
+                }, 50);
+            }
+        }
     }
 
     /**

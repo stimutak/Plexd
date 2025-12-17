@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=18">
+    <link rel="stylesheet" href="css/plexd.css?v=19">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -67,7 +67,8 @@
                 <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls">👁</button>
                 <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="True fullscreen (F key)">⛶</button>
 
-                <!-- Sets & History -->
+                <!-- Panels -->
+                <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list (S)">Strms</button>
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
             </div>
@@ -117,6 +118,21 @@
             </div>
         </aside>
 
+        <!-- Streams Panel (slide-out list of all active streams) -->
+        <aside id="streams-panel" class="plexd-panel plexd-streams-panel">
+            <div class="plexd-panel-header">
+                <h3>Streams</h3>
+                <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.reloadAllStreams()" class="plexd-button-small" title="Reload all streams">↻ All</button>
+                    <button onclick="PlexdApp.closeAllStreams()" class="plexd-button-small plexd-btn-danger" title="Close all streams">✕ All</button>
+                    <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-panel-close">&times;</button>
+                </div>
+            </div>
+            <div id="streams-list" class="plexd-panel-content">
+                <div class="plexd-panel-empty">No active streams</div>
+            </div>
+        </aside>
+
         <!-- Video Grid Container -->
         <main id="plexd-container">
             <!-- Streams are added here dynamically -->
@@ -131,7 +147,7 @@
             <kbd>Space</kbd> Play/Pause &nbsp;
             <kbd>M</kbd> Mute &nbsp;
             <kbd>T</kbd> Tetris (modes) &nbsp;
-            <kbd>O</kbd> Overlap &nbsp;
+            <kbd>S</kbd> Streams &nbsp;
             <kbd>H</kbd> Header &nbsp;
             <kbd>C</kbd> Copy URL &nbsp;
             <kbd>1-5</kbd> Filter/Rate &nbsp;
@@ -144,8 +160,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=18"></script>
-    <script src="js/stream.js?v=18"></script>
-    <script src="js/app.js?v=18"></script>
+    <script src="js/grid.js?v=19"></script>
+    <script src="js/stream.js?v=19"></script>
+    <script src="js/app.js?v=19"></script>
 </body>
 </html>

@@ -698,6 +698,9 @@ const PlexdApp = (function() {
 
         // Update ratings UI
         updateRatingsUI();
+
+        // Update streams panel UI
+        updateStreamsPanelUI();
     }
 
     /**
@@ -1600,8 +1603,11 @@ const PlexdApp = (function() {
                 if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
                     saveStreamCombination();
+                } else {
+                    // Plain S toggles streams panel
+                    e.preventDefault();
+                    togglePanel('streams-panel');
                 }
-                // Plain S does nothing (use Enter/Z for focus toggle)
                 break;
             case 'Escape':
                 // Escape only handles true fullscreen modes:
@@ -2609,6 +2615,172 @@ const PlexdApp = (function() {
         }
     }
 
+    // ========================================
+    // Streams Panel Management
+    // ========================================
+
+    /**
+     * Update streams panel UI with list of all active streams
+     */
+    function updateStreamsPanelUI() {
+        const streamsList = document.getElementById('streams-list');
+        if (!streamsList) return;
+
+        const allStreams = PlexdStream.getAllStreams();
+        const selectedStream = PlexdStream.getSelectedStream();
+
+        if (allStreams.length === 0) {
+            streamsList.innerHTML = '<div class="plexd-panel-empty">No active streams</div>';
+            return;
+        }
+
+        streamsList.innerHTML = allStreams.map((stream, index) => {
+            const isLocal = stream.url.startsWith('blob:');
+            const isSelected = selectedStream && selectedStream.id === stream.id;
+            const rating = PlexdStream.getRating(stream.url);
+            const displayName = stream.fileName || getStreamDisplayName(stream.url);
+            const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
+            const stateClass = stream.state === 'playing' ? 'playing' :
+                              stream.state === 'error' ? 'error' :
+                              stream.state === 'buffering' || stream.state === 'loading' ? 'buffering' : '';
+            const stateIcon = stream.state === 'playing' ? '▶' :
+                             stream.state === 'paused' ? '⏸' :
+                             stream.state === 'error' ? '⚠' :
+                             stream.state === 'buffering' || stream.state === 'loading' ? '⏳' : '●';
+            const ratingDisplay = rating > 0 ? `<span class="plexd-stream-rating rated-${rating}">★${rating}</span>` : '';
+
+            return `
+                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''}"
+                     data-stream-id="${stream.id}"
+                     onclick="PlexdApp.selectAndFocusStream('${stream.id}')">
+                    <span class="plexd-stream-type ${isLocal ? 'local' : 'stream'}">${isLocal ? 'FILE' : 'URL'}</span>
+                    <div class="plexd-stream-info">
+                        <div class="plexd-stream-name">${escapeHtml(displayName)}${ratingDisplay}</div>
+                        <div class="plexd-stream-url">${escapeHtml(displayUrl)}</div>
+                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}</div>
+                    </div>
+                    <div class="plexd-stream-actions">
+                        <button class="plexd-stream-btn reload"
+                                onclick="event.stopPropagation(); PlexdApp.reloadStreamFromPanel('${stream.id}')"
+                                title="Reload stream">↻</button>
+                        <button class="plexd-stream-btn close"
+                                onclick="event.stopPropagation(); PlexdApp.closeStreamFromPanel('${stream.id}')"
+                                title="Close stream">✕</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    /**
+     * Get display name from URL (extracts filename or domain)
+     */
+    function getStreamDisplayName(url) {
+        try {
+            const urlObj = new URL(url);
+            // Try to get filename from path
+            const pathParts = urlObj.pathname.split('/').filter(p => p);
+            if (pathParts.length > 0) {
+                const lastPart = pathParts[pathParts.length - 1];
+                // Remove query parameters and decode
+                const filename = decodeURIComponent(lastPart.split('?')[0]);
+                if (filename && filename.length > 3) {
+                    return filename;
+                }
+            }
+            // Fallback to hostname
+            return urlObj.hostname;
+        } catch (e) {
+            return url.substring(0, 30);
+        }
+    }
+
+    /**
+     * Select a stream and focus on it in the grid
+     */
+    function selectAndFocusStream(streamId) {
+        PlexdStream.selectStream(streamId);
+        const stream = PlexdStream.getStream(streamId);
+        if (stream) {
+            stream.wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            stream.wrapper.focus();
+        }
+        updateStreamsPanelUI();
+    }
+
+    /**
+     * Close a stream from the streams panel and focus next
+     */
+    function closeStreamFromPanel(streamId) {
+        const allStreams = PlexdStream.getAllStreams();
+        const currentIndex = allStreams.findIndex(s => s.id === streamId);
+
+        // Find next stream to focus (or previous if at end)
+        let nextStreamId = null;
+        if (allStreams.length > 1) {
+            if (currentIndex < allStreams.length - 1) {
+                nextStreamId = allStreams[currentIndex + 1].id;
+            } else if (currentIndex > 0) {
+                nextStreamId = allStreams[currentIndex - 1].id;
+            }
+        }
+
+        // Remove the stream
+        PlexdStream.removeStream(streamId);
+        updateStreamCount();
+        saveCurrentStreams();
+        updateStreamsPanelUI();
+        showMessage('Stream closed', 'info');
+
+        // Focus the next close button in the panel for quick sequential closing
+        if (nextStreamId) {
+            PlexdStream.selectStream(nextStreamId);
+            setTimeout(() => {
+                const nextItem = document.querySelector(`[data-stream-id="${nextStreamId}"] .plexd-stream-btn.close`);
+                if (nextItem) {
+                    nextItem.focus();
+                }
+            }, 50);
+        }
+    }
+
+    /**
+     * Reload a stream from the streams panel
+     */
+    function reloadStreamFromPanel(streamId) {
+        PlexdStream.reloadStream(streamId);
+        showMessage('Reloading stream...', 'info');
+        // Update UI after a short delay to show new state
+        setTimeout(updateStreamsPanelUI, 500);
+    }
+
+    /**
+     * Reload all streams
+     */
+    function reloadAllStreams() {
+        const allStreams = PlexdStream.getAllStreams();
+        allStreams.forEach(stream => {
+            PlexdStream.reloadStream(stream.id);
+        });
+        showMessage(`Reloading ${allStreams.length} stream(s)...`, 'info');
+        setTimeout(updateStreamsPanelUI, 500);
+    }
+
+    /**
+     * Close all streams
+     */
+    function closeAllStreams() {
+        const allStreams = PlexdStream.getAllStreams();
+        const count = allStreams.length;
+        allStreams.forEach(stream => {
+            PlexdStream.removeStream(stream.id);
+        });
+        localStorage.removeItem('plexd_streams');
+        updateStreamCount();
+        updateStreamsPanelUI();
+        showMessage(`Closed ${count} stream(s)`, 'info');
+    }
+
     // Public API
     return {
         init,
@@ -2630,6 +2802,12 @@ const PlexdApp = (function() {
         // History
         clearHistory,
         togglePanel,
+        // Streams panel
+        selectAndFocusStream,
+        closeStreamFromPanel,
+        reloadStreamFromPanel,
+        reloadAllStreams,
+        closeAllStreams,
         // View modes
         setViewMode,
         cycleViewMode,

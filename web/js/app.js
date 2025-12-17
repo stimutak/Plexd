@@ -1550,14 +1550,15 @@ const PlexdApp = (function() {
             case 'z':
             case 'Z':
                 e.preventDefault();
-                // Enter or Z: toggle between grid and focused view (browser-fill)
+                // Enter or Z: toggle between grid and focused view
                 // In coverflow mode: enter focused mode on the center-selected stream
                 // In grid mode: enter focused mode on selected stream
                 // In focused mode: exit back to grid
+                // Quick jump: when no selection, uses first stream from current filter
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
-                        // In focused mode - exit back to grid
+                        // In focused mode - exit back to grid (toggle behavior)
                         PlexdStream.exitFocusedMode();
                     } else if (coverflowMode) {
                         // In coverflow mode - enter focused mode on the carousel-selected stream

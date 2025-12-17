@@ -2655,7 +2655,8 @@ const PlexdApp = (function() {
         toggleMuteAll,
         toggleAudioFocus,
         toggleCleanMode,
-        toggleGlobalFullscreen
+        toggleGlobalFullscreen,
+        clearAllStreams
     };
 })();
 

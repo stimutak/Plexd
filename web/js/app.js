@@ -92,8 +92,14 @@ const PlexdApp = (function() {
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
 
-        // Sync rating status for loaded streams
-        setTimeout(() => PlexdStream.syncRatingStatus(), 100);
+        // Sync rating status for loaded streams and auto-assign ratings to unrated videos
+        setTimeout(() => {
+            PlexdStream.syncRatingStatus();
+            const assigned = PlexdStream.distributeRatingsEvenly();
+            if (assigned > 0) {
+                console.log(`[Plexd] Auto-assigned ratings to ${assigned} videos`);
+            }
+        }, 100);
 
         // Set up focus handling
         setupFocusHandling();
@@ -307,6 +313,9 @@ const PlexdApp = (function() {
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         updateLayout();
+
+        // Auto-assign rating to the new video
+        PlexdStream.distributeRatingsEvenly();
 
         // Note: We don't add file streams to history since object URLs are temporary
         showMessage(`Added: ${fileName}`, 'success');
@@ -594,6 +603,9 @@ const PlexdApp = (function() {
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         updateLayout();
+
+        // Auto-assign rating to the new video
+        PlexdStream.distributeRatingsEvenly();
 
         // Add to history
         addToHistory(url);

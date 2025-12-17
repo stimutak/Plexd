@@ -1665,13 +1665,16 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Compute grid columns from actual DOM positions
+     * Compute grid columns from actual DOM positions of visible streams
      */
     function computeGridCols() {
-        const streamList = Array.from(streams.values());
+        // Only use visible streams (not hidden by rating filter)
+        const streamList = Array.from(streams.values()).filter(s =>
+            s.wrapper.style.display !== 'none'
+        );
         if (streamList.length <= 1) return 1;
 
-        // Get Y positions of first few streams
+        // Get Y positions of first few visible streams
         const positions = streamList.slice(0, Math.min(8, streamList.length)).map(s => {
             const rect = s.wrapper.getBoundingClientRect();
             return { y: Math.round(rect.top), x: Math.round(rect.left) };

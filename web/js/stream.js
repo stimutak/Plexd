@@ -139,9 +139,19 @@ const PlexdStream = (function() {
         } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
             // Safari has native HLS support
             video.src = url;
+            // Explicitly trigger play for native HLS (autoplay may not work)
+            video.addEventListener('canplay', function onCanPlay() {
+                video.removeEventListener('canplay', onCanPlay);
+                video.play().catch(() => {});
+            }, { once: true });
         } else {
             // Regular video file
             video.src = url;
+            // Explicitly trigger play (autoplay attribute may be ignored by browsers)
+            video.addEventListener('canplay', function onCanPlay() {
+                video.removeEventListener('canplay', onCanPlay);
+                video.play().catch(() => {});
+            }, { once: true });
         }
 
         // Register stream

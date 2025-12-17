@@ -1579,21 +1579,19 @@ const PlexdApp = (function() {
                                 PlexdStream.enterFocusedMode(streams[0].id);
                             }
                         }
+                    } else if (selected) {
+                        // Enter focused mode on selected stream
+                        PlexdStream.enterFocusedMode(selected.id);
                     } else {
-                        // In grid mode - enter focused mode
-                        if (selected) {
-                            PlexdStream.enterFocusedMode(selected.id);
-                        } else {
-                            // No selection - quick jump to first stream matching current filter
-                            const streams = viewMode === 'all'
-                                ? PlexdStream.getAllStreams()
-                                : PlexdStream.getStreamsByRating(viewMode);
-                            if (streams.length > 0) {
-                                PlexdStream.enterFocusedMode(streams[0].id);
-                            } else if (viewMode !== 'all') {
-                                const stars = '★'.repeat(viewMode);
-                                showMessage(`No ${stars} streams to show`, 'warning');
-                            }
+                        // No selection - quick jump to first stream matching current filter
+                        const streams = viewMode === 'all'
+                            ? PlexdStream.getAllStreams()
+                            : PlexdStream.getStreamsByRating(viewMode);
+                        if (streams.length > 0) {
+                            PlexdStream.enterFocusedMode(streams[0].id);
+                        } else if (viewMode !== 'all') {
+                            const stars = '★'.repeat(viewMode);
+                            showMessage(`No ${stars} streams to show`, 'warning');
                         }
                     }
                 }

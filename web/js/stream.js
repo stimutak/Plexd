@@ -2016,6 +2016,34 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Distribute ratings evenly across all unrated streams
+     * Assigns ratings 1-5 in a round-robin fashion to streams without ratings
+     * @returns {number} Number of streams that were assigned ratings
+     */
+    function distributeRatingsEvenly() {
+        // Get all unrated streams
+        const unratedStreams = Array.from(streams.values()).filter(s => !ratings.has(s.url));
+
+        if (unratedStreams.length === 0) {
+            return 0;
+        }
+
+        // Shuffle the unrated streams for random distribution
+        for (let i = unratedStreams.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [unratedStreams[i], unratedStreams[j]] = [unratedStreams[j], unratedStreams[i]];
+        }
+
+        // Assign ratings 1-5 in round-robin fashion
+        unratedStreams.forEach((stream, index) => {
+            const rating = (index % 5) + 1; // 1, 2, 3, 4, 5, 1, 2, 3, 4, 5...
+            setRating(stream.id, rating);
+        });
+
+        return unratedStreams.length;
+    }
+
+    /**
      * Save ratings to localStorage
      */
     function saveRatings() {
@@ -2322,6 +2350,7 @@ const PlexdStream = (function() {
         getRatedStreams,
         getRatingCount,
         getAllRatingCounts,
+        distributeRatingsEvenly,
         setRatingsUpdateCallback,
         syncRatingStatus,
         // Responsive controls

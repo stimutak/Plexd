@@ -2302,14 +2302,24 @@ const PlexdApp = (function() {
                     let imported = 0;
                     let skipped = 0;
 
+                    let merged = 0;
                     Object.keys(data.combinations).forEach(name => {
                         const combo = data.combinations[name];
                         if (combo.urls && Array.isArray(combo.urls)) {
                             if (existing[name]) {
-                                // Rename if exists
-                                const newName = name + ' (imported)';
-                                existing[newName] = combo;
-                                imported++;
+                                // Merge URLs from both sets (avoid duplicates)
+                                const existingUrls = new Set(existing[name].urls || []);
+                                const newUrls = combo.urls.filter(url => !existingUrls.has(url));
+                                if (newUrls.length > 0) {
+                                    existing[name].urls = [...existing[name].urls, ...newUrls];
+                                    // Merge login domains too
+                                    const existingDomains = new Set(existing[name].loginDomains || []);
+                                    const newDomains = (combo.loginDomains || []).filter(d => !existingDomains.has(d));
+                                    existing[name].loginDomains = [...(existing[name].loginDomains || []), ...newDomains];
+                                    merged++;
+                                } else {
+                                    skipped++; // All URLs already exist
+                                }
                             } else {
                                 existing[name] = combo;
                                 imported++;
@@ -2322,9 +2332,11 @@ const PlexdApp = (function() {
                     localStorage.setItem('plexd_combinations', JSON.stringify(existing));
                     updateCombinationsList();
 
-                    let msg = `Imported ${imported} combination(s)`;
-                    if (skipped > 0) msg += `, ${skipped} skipped`;
-                    showMessage(msg, 'success');
+                    let msg = [];
+                    if (imported > 0) msg.push(`${imported} new`);
+                    if (merged > 0) msg.push(`${merged} merged`);
+                    if (skipped > 0) msg.push(`${skipped} skipped`);
+                    showMessage(msg.length > 0 ? msg.join(', ') : 'No changes', 'success');
 
                 } catch (err) {
                     console.error('Import error:', err);

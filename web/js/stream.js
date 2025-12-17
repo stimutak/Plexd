@@ -1276,6 +1276,24 @@ const PlexdStream = (function() {
                 return;
             }
 
+            // Number keys (0-9) and arrow keys should propagate to document handler
+            // for rating filter/assignment and stream navigation
+            if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
+                // Don't handle here - let it bubble to document.addEventListener in app.js
+                // In fullscreen, we need to manually dispatch since document may be outside fullscreen context
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key,
+                    code: e.code,
+                    shiftKey: e.shiftKey,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                    bubbles: true
+                }));
+                e.preventDefault();
+                return;
+            }
+
             switch (e.key) {
                 case ' ':
                     e.preventDefault();

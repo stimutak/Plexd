@@ -1692,14 +1692,24 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Select next stream in grid order (respects visual grid layout)
+     * Select next stream in grid order (respects visual grid layout and view mode filter)
      */
     function selectNextStream(direction = 'right') {
-        const streamList = Array.from(streams.keys());
+        // Respect current view mode filter
+        const viewMode = window._plexdViewMode || 'all';
+        let streamList;
+        if (viewMode === 'all') {
+            streamList = Array.from(streams.keys());
+        } else {
+            // Get only streams with the current rating filter
+            const filteredStreams = getStreamsByRating(viewMode);
+            streamList = filteredStreams.map(s => s.id);
+        }
+
         const count = streamList.length;
         if (count === 0) return;
 
-        if (!selectedStreamId) {
+        if (!selectedStreamId || !streamList.includes(selectedStreamId)) {
             selectStream(streamList[0]);
             return;
         }
@@ -1825,6 +1835,13 @@ const PlexdStream = (function() {
         } else {
             playAll();
         }
+        return globalPaused;
+    }
+
+    /**
+     * Check if globally paused
+     */
+    function isGloballyPaused() {
         return globalPaused;
     }
 
@@ -2296,6 +2313,8 @@ const PlexdStream = (function() {
         pauseAll,
         playAll,
         muteAll,
+        togglePauseAll,
+        isGloballyPaused,
         getVideoElements,
         setLayoutUpdateCallback,
         // New features

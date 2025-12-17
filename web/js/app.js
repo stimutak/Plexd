@@ -1568,6 +1568,16 @@ const PlexdApp = (function() {
                             PlexdStream.enterFocusedMode(targetStream.id);
                             showMessage('Focused on selected stream', 'info');
                         }
+                    } else if (mode === 'true-grid') {
+                        // In grid fullscreen but no selection - select first stream
+                        if (selected) {
+                            PlexdStream.enterFocusedMode(selected.id);
+                        } else {
+                            const streams = PlexdStream.getAllStreams();
+                            if (streams.length > 0) {
+                                PlexdStream.enterFocusedMode(streams[0].id);
+                            }
+                        }
                     } else {
                         // In grid mode - enter focused mode
                         if (selected) {
@@ -1589,6 +1599,8 @@ const PlexdApp = (function() {
                 break;
             case 'Delete':
             case 'Backspace':
+            case 'x':
+            case 'X':
                 if (selected) {
                     PlexdStream.removeStream(selected.id);
                     updateStreamCount();

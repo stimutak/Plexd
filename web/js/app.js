@@ -629,13 +629,14 @@ const PlexdApp = (function() {
 
         // Handle visibility and playback of streams based on view mode
         // When filtering by rating, pause hidden streams to save bandwidth
+        // Use position-preserving pause/resume to avoid streams restarting
         const isGloballyPaused = PlexdStream.isGloballyPaused();
         allStreams.forEach(stream => {
             if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
                 // Resume playback for all streams when viewing all (if not globally paused)
                 if (!isGloballyPaused) {
-                    stream.video.play().catch(() => {});
+                    PlexdStream.resumeStream(stream.id);
                 }
             } else {
                 const rating = PlexdStream.getRating(stream.url);
@@ -643,9 +644,9 @@ const PlexdApp = (function() {
                 stream.wrapper.style.display = isVisible ? '' : 'none';
                 // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
                 if (isVisible && !isGloballyPaused) {
-                    stream.video.play().catch(() => {});
+                    PlexdStream.resumeStream(stream.id);
                 } else if (!isVisible) {
-                    stream.video.pause();
+                    PlexdStream.pauseStream(stream.id);
                 }
             }
         });
@@ -1707,35 +1708,22 @@ const PlexdApp = (function() {
                 }
                 break;
             case '0':
-                // Context-aware: fullscreen = clear rating, grid = show all
-                // Shift+0: opposite action (grid = clear rating on selected, fullscreen = show all)
+                // 0 always returns to grid and shows all streams
+                // Shift+0: clear rating on selected/fullscreen stream
                 if (e.shiftKey) {
-                    // Shift+0: opposite action
-                    if (PlexdStream.getFullscreenMode() !== 'none') {
-                        // Filter action in focus mode - exit first to show filtered grid
-                        PlexdStream.exitFocusedMode();
-                        setViewMode('all');
-                    } else if (selected) {
-                        PlexdStream.clearRating(selected.id);
+                    // Shift+0: clear rating on targeted stream
+                    const targetStream = PlexdStream.getFullscreenStream() || selected;
+                    if (targetStream) {
+                        PlexdStream.clearRating(targetStream.id);
                         showMessage('Rating cleared', 'info');
                     }
                 } else {
+                    // Exit fullscreen if in fullscreen mode
                     if (PlexdStream.getFullscreenMode() !== 'none') {
-                        // Fullscreen mode: clear rating on current stream
-                        const fsStream = PlexdStream.getFullscreenStream();
-                        if (fsStream) {
-                            PlexdStream.clearRating(fsStream.id);
-                            showMessage('Rating cleared', 'info');
-                            // If a filter is active, clearing rating makes stream no longer match
-                            // Exit focus mode to avoid being stuck viewing a hidden stream
-                            if (viewMode !== 'all') {
-                                PlexdStream.exitFocusedMode();
-                            }
-                        }
-                    } else {
-                        // Grid mode: show all streams
-                        setViewMode('all');
+                        PlexdStream.exitFocusedMode();
                     }
+                    // Show all streams
+                    setViewMode('all');
                 }
                 break;
             case '1':
@@ -1743,26 +1731,29 @@ const PlexdApp = (function() {
             case '3':
             case '4':
             case '5':
-                // Context-aware: fullscreen = rate, grid = filter by rating
-                // Shift+N: opposite action (grid = rate, fullscreen = filter)
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+                // Context-aware: fullscreen = assign slot number, grid = filter by slot
+                // Shift+N: opposite action (grid = assign, fullscreen = filter)
                 if (!e.ctrlKey && !e.metaKey) {
-                    const rating = parseInt(e.key);
+                    const slotNum = parseInt(e.key);
                     const isFullscreen = PlexdStream.getFullscreenMode() !== 'none';
-                    const doRate = e.shiftKey ? !isFullscreen : isFullscreen;
-                    const doFilter = !doRate;
+                    const doAssign = e.shiftKey ? !isFullscreen : isFullscreen;
+                    const doFilter = !doAssign;
 
-                    if (doRate) {
-                        // Rate action
+                    if (doAssign) {
+                        // Assign slot number to stream
                         const targetStream = isFullscreen
                             ? PlexdStream.getFullscreenStream()
                             : selected;
                         if (targetStream) {
-                            PlexdStream.setRating(targetStream.id, rating);
-                            const stars = '★'.repeat(rating);
-                            showMessage(`Rated: ${stars}`, 'info');
-                            // If in focus mode with a filter active and new rating doesn't match,
+                            PlexdStream.setRating(targetStream.id, slotNum);
+                            showMessage(`Assigned to slot ${slotNum}`, 'info');
+                            // If in focus mode with a filter active and new slot doesn't match,
                             // exit focus mode to avoid being stuck viewing a hidden stream
-                            if (isFullscreen && viewMode !== 'all' && rating !== viewMode) {
+                            if (isFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
                                 PlexdStream.exitFocusedMode();
                             }
                         }
@@ -1771,11 +1762,10 @@ const PlexdApp = (function() {
                         if (isFullscreen) {
                             PlexdStream.exitFocusedMode();
                         }
-                        const count = PlexdStream.getStreamsByRating(rating).length;
-                        setViewMode(rating);
+                        const count = PlexdStream.getStreamsByRating(slotNum).length;
+                        setViewMode(slotNum);
                         if (count === 0) {
-                            const stars = '★'.repeat(rating);
-                            showMessage(`No ${stars} streams`, 'warning');
+                            showMessage(`No streams in slot ${slotNum}`, 'warning');
                         }
                     }
                 }

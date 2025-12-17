@@ -631,27 +631,58 @@ const PlexdStream = (function() {
 
     /**
      * Seek relative to current position
+     * Works with both VOD (finite duration) and live streams (using seekable ranges)
      */
     function seekRelative(streamId, seconds) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
         const video = stream.video;
+        const newTime = video.currentTime + seconds;
+
+        // For VOD with finite duration
         if (video.duration && isFinite(video.duration)) {
-            video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds));
+            video.currentTime = Math.max(0, Math.min(video.duration, newTime));
+            return;
+        }
+
+        // For live streams, use seekable ranges
+        if (video.seekable && video.seekable.length > 0) {
+            const start = video.seekable.start(0);
+            const end = video.seekable.end(video.seekable.length - 1);
+            video.currentTime = Math.max(start, Math.min(end, newTime));
+            return;
+        }
+
+        // Fallback: just try to seek (some streams may support it)
+        if (video.currentTime !== undefined) {
+            video.currentTime = Math.max(0, newTime);
         }
     }
 
     /**
      * Seek to absolute position (0-1)
+     * Works with both VOD and live streams
      */
     function seekTo(streamId, position) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
         const video = stream.video;
+        position = Math.max(0, Math.min(1, position));
+
+        // For VOD with finite duration
         if (video.duration && isFinite(video.duration)) {
             video.currentTime = video.duration * position;
+            return;
+        }
+
+        // For live streams, map 0-1 to seekable range
+        if (video.seekable && video.seekable.length > 0) {
+            const start = video.seekable.start(0);
+            const end = video.seekable.end(video.seekable.length - 1);
+            video.currentTime = start + (end - start) * position;
+            return;
         }
     }
 
@@ -1188,12 +1219,34 @@ const PlexdStream = (function() {
 
         // Update seek bar and time display during playback
         video.addEventListener('timeupdate', () => {
-            if (seekBar && video.duration && isFinite(video.duration)) {
-                const progress = (video.currentTime / video.duration) * 100;
-                seekBar.value = progress;
+            // For VOD with finite duration
+            if (video.duration && isFinite(video.duration)) {
+                if (seekBar) {
+                    const progress = (video.currentTime / video.duration) * 100;
+                    seekBar.value = progress;
+                }
+                if (timeDisplay) {
+                    timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+                }
             }
-            if (timeDisplay && video.duration && isFinite(video.duration)) {
-                timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+            // For live streams, use seekable range
+            else if (video.seekable && video.seekable.length > 0) {
+                const start = video.seekable.start(0);
+                const end = video.seekable.end(video.seekable.length - 1);
+                const range = end - start;
+                if (seekBar && range > 0) {
+                    const progress = ((video.currentTime - start) / range) * 100;
+                    seekBar.value = Math.max(0, Math.min(100, progress));
+                }
+                if (timeDisplay) {
+                    // Show position relative to start of seekable range (DVR style)
+                    const offset = video.currentTime - end;
+                    if (offset >= -1) {
+                        timeDisplay.textContent = 'LIVE';
+                    } else {
+                        timeDisplay.textContent = formatTime(offset);
+                    }
+                }
             }
             // Track health - video is making progress
             if (video.currentTime !== stream.health.lastCurrentTime) {
@@ -1515,6 +1568,7 @@ const PlexdStream = (function() {
 
     /**
      * Reload a stream (handles errors, stalled, paused - gets it playing again)
+     * Preserves playback position where possible
      */
     function reloadStream(streamId) {
         const stream = streams.get(streamId);
@@ -1532,6 +1586,10 @@ const PlexdStream = (function() {
         // Reset error state
         stream.error = null;
 
+        // Store current position for restoration after reload
+        const savedTime = video.currentTime;
+        const hasFiniteDuration = video.duration && isFinite(video.duration);
+
         // Check if video is just paused (simple case - just play)
         if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
             video.play().catch(() => {});
@@ -1541,8 +1599,7 @@ const PlexdStream = (function() {
         // Check if stalled but has data - try seeking to unstick
         if (video.readyState >= 2 && video.networkState === 2) {
             // Try seeking slightly to unstick
-            const currentTime = video.currentTime;
-            video.currentTime = currentTime + 0.1;
+            video.currentTime = savedTime + 0.1;
             video.play().catch(() => {});
             return true;
         }
@@ -1562,6 +1619,10 @@ const PlexdStream = (function() {
             hls.loadSource(url);
             hls.attachMedia(video);
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                // Restore position for VOD streams after reload
+                if (hasFiniteDuration && savedTime > 0) {
+                    video.currentTime = savedTime;
+                }
                 video.play().catch(() => {});
             });
             hls.on(Hls.Events.ERROR, (event, data) => {
@@ -1840,10 +1901,50 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Pause a single stream, preserving position for later resume
+     */
+    function pauseStream(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const video = stream.video;
+        // Store current position before pausing
+        stream.savedPosition = video.currentTime;
+        video.pause();
+    }
+
+    /**
+     * Resume a single stream, restoring saved position if needed
+     */
+    function resumeStream(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const video = stream.video;
+
+        // If we have a saved position and the stream reset (currentTime near 0 but we were further)
+        if (stream.savedPosition !== undefined && stream.savedPosition > 1) {
+            const hasFiniteDuration = video.duration && isFinite(video.duration);
+            // Only restore position for VOD or if seekable
+            if (hasFiniteDuration || (video.seekable && video.seekable.length > 0)) {
+                // Check if stream appears to have restarted
+                if (video.currentTime < 1) {
+                    video.currentTime = stream.savedPosition;
+                }
+            }
+        }
+
+        video.play().catch(() => {
+            // Autoplay may be blocked, that's ok
+        });
+    }
+
+    /**
      * Pause all streams
      */
     function pauseAll() {
         streams.forEach(stream => {
+            stream.savedPosition = stream.video.currentTime;
             stream.video.pause();
         });
     }
@@ -1853,9 +1954,7 @@ const PlexdStream = (function() {
      */
     function playAll() {
         streams.forEach(stream => {
-            stream.video.play().catch(() => {
-                // Autoplay may be blocked, that's ok
-            });
+            resumeStream(stream.id);
         });
     }
 
@@ -1952,28 +2051,28 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Cycle rating for a stream (1 -> 2 -> 3 -> 4 -> 5 -> 0 -> 1...)
+     * Cycle rating for a stream (1 -> 2 -> ... -> 9 -> 0 -> 1...)
      */
     function cycleRating(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return 0;
 
         const currentRating = ratings.get(stream.url) || 0;
-        const newRating = (currentRating + 1) % 6; // 0, 1, 2, 3, 4, 5, 0...
+        const newRating = (currentRating + 1) % 10; // 0, 1, 2, ..., 9, 0...
 
         setRating(streamId, newRating);
         return newRating;
     }
 
     /**
-     * Set rating for a stream (0-5)
+     * Set rating/slot for a stream (0-9)
      */
     function setRating(streamId, rating) {
         const stream = streams.get(streamId);
         if (!stream) return;
 
-        // Clamp rating 0-5
-        rating = Math.max(0, Math.min(5, rating));
+        // Clamp rating 0-9
+        rating = Math.max(0, Math.min(9, rating));
 
         if (rating === 0) {
             ratings.delete(stream.url);
@@ -1982,7 +2081,7 @@ const PlexdStream = (function() {
         }
 
         // Update wrapper classes for all rating levels
-        for (let i = 1; i <= 5; i++) {
+        for (let i = 1; i <= 9; i++) {
             stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);
         }
         stream.wrapper.classList.toggle('plexd-rated', rating > 0);
@@ -2388,6 +2487,8 @@ const PlexdStream = (function() {
         exitTrueFullscreen,
         pauseAll,
         playAll,
+        pauseStream,
+        resumeStream,
         muteAll,
         togglePauseAll,
         isGloballyPaused,

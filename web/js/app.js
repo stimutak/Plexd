@@ -1611,11 +1611,11 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'Escape':
-                // Escape only handles true fullscreen modes:
+                // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
                 // - true-grid: exit true fullscreen completely
-                // - browser-fill: do nothing (use Z/Enter to exit)
-                // - none: deselect
+                // - browser-fill: exit to grid view
+                // - none: deselect, or reset fullscreen state if something looks stuck
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused') {
@@ -1625,10 +1625,14 @@ const PlexdApp = (function() {
                         // Exit true fullscreen completely
                         PlexdStream.exitTrueFullscreen();
                     } else if (mode === 'browser-fill') {
-                        // Do nothing - use Z/Enter to exit browser-fill mode
+                        // Exit browser-fill mode back to grid
+                        PlexdStream.exitFocusedMode();
                     } else {
-                        // Normal mode - just deselect
+                        // Normal mode - deselect
                         PlexdStream.selectStream(null);
+                        // Also do a defensive cleanup in case state is stuck
+                        // This ensures any lingering fullscreen CSS is removed
+                        PlexdStream.resetFullscreenState();
                     }
                     if (inputEl) inputEl.blur();
                 }
@@ -1778,6 +1782,7 @@ const PlexdApp = (function() {
      * Stays in the current fullscreen mode (focused mode)
      * Respects current viewMode filter (rating subgroups)
      * Uses actual grid positions for true up/down/left/right navigation
+     * Treats local files and remote streams equally
      */
     function switchFullscreenStream(direction) {
         // Get streams based on current view mode filter
@@ -1789,10 +1794,19 @@ const PlexdApp = (function() {
         }
 
         const fullscreenStream = PlexdStream.getFullscreenStream();
-        if (!fullscreenStream || streams.length <= 1) return;
+        if (!fullscreenStream) return;
 
-        const currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
-        if (currentIndex === -1) return; // Current stream not in filtered set
+        // If current stream isn't in filtered set (e.g., local file with different rating),
+        // fall back to all streams to allow navigation
+        let currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
+        if (currentIndex === -1) {
+            // Current stream not in filtered set - use all streams instead
+            streams = PlexdStream.getAllStreams();
+            currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
+            if (currentIndex === -1) return; // Stream truly doesn't exist
+        }
+
+        if (streams.length <= 1) return;
 
         // Calculate grid dimensions based on number of streams
         const count = streams.length;
@@ -2139,17 +2153,34 @@ const PlexdApp = (function() {
         const currentStreams = PlexdStream.getAllStreams();
         currentStreams.forEach(s => PlexdStream.removeStream(s.id));
 
-        // Load saved streams
-        combo.urls.forEach(url => {
+        // Log HLS.js availability for debugging
+        const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
+        console.log(`[Plexd] Loading "${name}": ${combo.urls.length} streams, HLS.js: ${hlsAvailable ? 'available' : 'NOT AVAILABLE'}`);
+
+        // Load saved streams with validation
+        let loadedCount = 0;
+        let skippedCount = 0;
+        combo.urls.forEach((url, index) => {
             if (url && isValidUrl(url)) {
+                // Log each URL being loaded for debugging
+                console.log(`[Plexd] Loading stream ${index + 1}/${combo.urls.length}: ${truncateUrl(url, 80)}`);
                 addStreamSilent(url);
+                loadedCount++;
+            } else {
+                console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
+                skippedCount++;
             }
         });
 
-        // Save to current streams
-        localStorage.setItem('plexd_streams', JSON.stringify(combo.urls));
+        // Save to current streams (only valid URLs)
+        const validUrls = combo.urls.filter(url => url && isValidUrl(url));
+        localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
 
-        showMessage(`Loaded: ${name} (${combo.urls.length} streams)`, 'success');
+        let msg = `Loaded: ${name} (${loadedCount} streams)`;
+        if (skippedCount > 0) {
+            msg += ` - ${skippedCount} skipped`;
+        }
+        showMessage(msg, 'success');
         updateStreamCount();
     }
 

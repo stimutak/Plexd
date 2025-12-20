@@ -1017,19 +1017,46 @@ const PlexdStream = (function() {
      * Exit focused mode back to grid view (stays in true fullscreen if applicable)
      */
     function exitFocusedMode() {
-        if (fullscreenStreamId) {
-            const stream = streams.get(fullscreenStreamId);
-            if (stream) {
+        // Remove fullscreen class from any stream that has it (defensive cleanup)
+        streams.forEach(stream => {
+            if (stream.wrapper.classList.contains('plexd-fullscreen')) {
                 stream.wrapper.classList.remove('plexd-fullscreen');
             }
-            fullscreenStreamId = null;
-        }
+        });
+        fullscreenStreamId = null;
 
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
             fullscreenMode = 'true-grid';
+        } else if (document.fullscreenElement) {
+            // We're in some fullscreen state, go to grid mode
+            fullscreenMode = 'true-grid';
         } else {
             fullscreenMode = 'none';
+        }
+
+        triggerLayoutUpdate();
+    }
+
+    /**
+     * Force reset all fullscreen state (emergency cleanup)
+     * Call this if fullscreen gets stuck
+     */
+    function resetFullscreenState() {
+        console.log('[Plexd] Resetting fullscreen state');
+
+        // Remove fullscreen class from all streams
+        streams.forEach(stream => {
+            stream.wrapper.classList.remove('plexd-fullscreen');
+        });
+
+        // Clear state variables
+        fullscreenStreamId = null;
+        fullscreenMode = 'none';
+
+        // Exit true fullscreen if active
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
         }
 
         triggerLayoutUpdate();
@@ -1149,12 +1176,37 @@ const PlexdStream = (function() {
 
     /**
      * Get fullscreen stream if any (checks both CSS fullscreen and true fullscreen)
+     * Only returns a stream if we're actually in a fullscreen mode
      */
     function getFullscreenStream() {
-        // First check our tracked fullscreen
-        if (fullscreenStreamId) {
-            return streams.get(fullscreenStreamId);
+        // Validate state: if fullscreenMode is 'none', we shouldn't have a fullscreen stream
+        if (fullscreenMode === 'none') {
+            // State cleanup: if we have a stale fullscreenStreamId, clear it
+            if (fullscreenStreamId) {
+                console.log('[Plexd] Cleaning up stale fullscreenStreamId');
+                const stream = streams.get(fullscreenStreamId);
+                if (stream) {
+                    stream.wrapper.classList.remove('plexd-fullscreen');
+                }
+                fullscreenStreamId = null;
+            }
+            return null;
         }
+
+        // Check our tracked fullscreen
+        if (fullscreenStreamId) {
+            const stream = streams.get(fullscreenStreamId);
+            // Verify the stream still exists and has the fullscreen class
+            if (stream && stream.wrapper.classList.contains('plexd-fullscreen')) {
+                return stream;
+            }
+            // State is inconsistent - clean up
+            console.log('[Plexd] Fullscreen state inconsistent, cleaning up');
+            fullscreenStreamId = null;
+            fullscreenMode = 'none';
+            return null;
+        }
+
         // Also check true browser fullscreen element
         if (document.fullscreenElement) {
             const streamId = document.fullscreenElement.dataset?.streamId || document.fullscreenElement.id;
@@ -1276,11 +1328,18 @@ const PlexdStream = (function() {
                 return;
             }
 
+            // Only process keys here when in focused/fullscreen mode
+            // In grid mode (fullscreenMode === 'none'), let events bubble naturally to document
+            if (fullscreenMode !== 'true-focused' && fullscreenMode !== 'browser-fill') {
+                // Not in fullscreen mode - don't interfere, let event bubble to document
+                return;
+            }
+
             // Number keys (0-9) and arrow keys should propagate to document handler
             // for rating filter/assignment and stream navigation
+            // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
-                // Don't handle here - let it bubble to document.addEventListener in app.js
-                // In fullscreen, we need to manually dispatch since document may be outside fullscreen context
+                // Dispatch to document for app.js to handle
                 document.dispatchEvent(new KeyboardEvent('keydown', {
                     key: e.key,
                     code: e.code,
@@ -1425,7 +1484,18 @@ const PlexdStream = (function() {
         video.addEventListener('error', (e) => {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
-            console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
+            const isHLS = stream.url.toLowerCase().includes('.m3u8');
+            const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
+            console.error(`Stream ${stream.id} error:`, stream.error,
+                'URL:', stream.url,
+                'IsHLS:', isHLS,
+                'HLS.js available:', hlsAvailable);
+
+            // Check if this is an HLS stream without HLS.js support
+            if (isHLS && !hlsAvailable && !video.canPlayType('application/vnd.apple.mpegurl')) {
+                stream.error = 'HLS not supported - HLS.js failed to load';
+                console.error('[Plexd] HLS.js is not available and browser lacks native HLS support');
+            }
 
             // For non-HLS streams, try automatic recovery
             if (!stream.hls && RECOVERY_CONFIG.enableAutoRecovery) {
@@ -1819,13 +1889,23 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Check if a stream URL is a local file (blob URL)
+     */
+    function isLocalFile(streamId) {
+        const stream = streams.get(streamId);
+        return stream && stream.url && stream.url.startsWith('blob:');
+    }
+
+    /**
      * Select next stream in grid order (respects visual grid layout and view mode filter)
+     * When viewMode is 'all', includes all streams (both remote and local files)
      */
     function selectNextStream(direction = 'right') {
         // Respect current view mode filter
         const viewMode = window._plexdViewMode || 'all';
         let streamList;
         if (viewMode === 'all') {
+            // Include ALL streams - both remote and local files
             streamList = Array.from(streams.keys());
         } else {
             // Get only streams with the current rating filter
@@ -1894,7 +1974,16 @@ const PlexdStream = (function() {
             }
         }
 
-        selectStream(streamList[newIndex]);
+        const newStreamId = streamList[newIndex];
+        selectStream(newStreamId);
+
+        // Maintain keyboard focus on the newly selected stream
+        // This ensures arrow keys continue to work after navigation
+        const newStream = streams.get(newStreamId);
+        if (newStream && newStream.wrapper) {
+            // Focus the wrapper to maintain keyboard control
+            newStream.wrapper.focus();
+        }
     }
 
     /**
@@ -2470,14 +2559,14 @@ const PlexdStream = (function() {
     // Listen for fullscreen changes (when user exits via browser UI)
     document.addEventListener('fullscreenchange', () => {
         if (!document.fullscreenElement) {
-            // Exited fullscreen - reset mode
-            if (fullscreenStreamId) {
-                const stream = streams.get(fullscreenStreamId);
-                if (stream) {
+            // Exited true fullscreen - clean up all fullscreen state
+            // Remove fullscreen class from all streams (defensive)
+            streams.forEach(stream => {
+                if (stream.wrapper.classList.contains('plexd-fullscreen')) {
                     stream.wrapper.classList.remove('plexd-fullscreen');
                 }
-                fullscreenStreamId = null;
-            }
+            });
+            fullscreenStreamId = null;
             fullscreenMode = 'none';
             triggerLayoutUpdate();
         }
@@ -2503,6 +2592,7 @@ const PlexdStream = (function() {
         exitFocusedMode,
         enterGridFullscreen,
         exitTrueFullscreen,
+        resetFullscreenState,
         pauseAll,
         playAll,
         pauseStream,
@@ -2552,7 +2642,9 @@ const PlexdStream = (function() {
         getRecoveryConfig,
         setRecoveryConfig,
         startHealthMonitoring,
-        stopHealthMonitoring
+        stopHealthMonitoring,
+        // Local file detection
+        isLocalFile
     };
 })();
 

@@ -1021,6 +1021,8 @@ const PlexdStream = (function() {
             const stream = streams.get(fullscreenStreamId);
             if (stream) {
                 stream.wrapper.classList.remove('plexd-fullscreen');
+                // Blur wrapper so focus returns to document for keyboard handling
+                stream.wrapper.blur();
             }
             fullscreenStreamId = null;
         }
@@ -1028,6 +1030,9 @@ const PlexdStream = (function() {
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
             fullscreenMode = 'true-grid';
+            // Focus container for keyboard events
+            const container = document.querySelector('.plexd-app');
+            if (container) container.focus();
         } else {
             fullscreenMode = 'none';
         }
@@ -1096,6 +1101,8 @@ const PlexdStream = (function() {
 
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-grid';
+            // Focus container for keyboard events
+            container.focus();
             triggerLayoutUpdate();
         }).catch(err => {
             console.log('Grid fullscreen request failed:', err);
@@ -1267,12 +1274,14 @@ const PlexdStream = (function() {
             toggleFullscreen(stream.id);
         });
 
-        // Keyboard handling on wrapper (for fullscreen mode)
+        // Keyboard handling on wrapper (for fullscreen mode only)
         // Note: Arrow keys and most keys are handled by app.js
-        // This handler catches keys when the wrapper has focus (in true-focused mode)
+        // This handler only catches keys when actually in a fullscreen mode
         wrapper.addEventListener('keydown', (e) => {
-            // Only handle when this element is the fullscreen element or has focus
-            if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
+            // Only handle when in true fullscreen or browser-fill mode
+            const inTrueFullscreen = document.fullscreenElement === wrapper;
+            const inBrowserFill = wrapper.classList.contains('plexd-fullscreen');
+            if (!inTrueFullscreen && !inBrowserFill) {
                 return;
             }
 
@@ -1304,10 +1313,22 @@ const PlexdStream = (function() {
                         video.pause();
                     }
                     break;
+                case 'ArrowLeft':
+                case 'ArrowRight':
+                case 'ArrowUp':
+                case 'ArrowDown':
+                    // Prevent default video seeking behavior
+                    // Let the event bubble to app.js handleKeyboard for stream switching
+                    e.preventDefault();
+                    break;
+                case 'Enter':
+                    // Prevent any default behavior, let app.js handle focus mode
+                    e.preventDefault();
+                    break;
                 case 'z':
                 case 'Z':
                 case 'Enter':
-                    // Z or Enter in focused mode: toggle back to grid
+                    // Z/Enter in focused mode: exit focus mode (toggle behavior)
                     e.preventDefault();
                     e.stopPropagation(); // Prevent app.js from re-entering focused mode
                     exitFocusedMode();
@@ -1792,13 +1813,16 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Compute grid columns from actual DOM positions
+     * Compute grid columns from actual DOM positions of visible streams
      */
     function computeGridCols() {
-        const streamList = Array.from(streams.values());
+        // Only use visible streams (not hidden by rating filter)
+        const streamList = Array.from(streams.values()).filter(s =>
+            s.wrapper.style.display !== 'none'
+        );
         if (streamList.length <= 1) return 1;
 
-        // Get Y positions of first few streams
+        // Get Y positions of first few visible streams
         const positions = streamList.slice(0, Math.min(8, streamList.length)).map(s => {
             const rect = s.wrapper.getBoundingClientRect();
             return { y: Math.round(rect.top), x: Math.round(rect.left) };

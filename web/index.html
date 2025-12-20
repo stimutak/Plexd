@@ -9,10 +9,10 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=19">
+    <link rel="stylesheet" href="css/plexd.css?v=21">
 </head>
 <body>
-    <div class="plexd-app header-hidden">
+    <div class="plexd-app header-hidden" tabindex="-1">
         <!-- Header Toggle Button (always visible) -->
         <button id="header-toggle" class="plexd-header-toggle" title="Toggle toolbar (T)">
             ☰
@@ -66,6 +66,7 @@
                 <button id="audio-focus-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleAudioFocus()" title="Audio focus mode">🎧</button>
                 <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls">👁</button>
                 <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="True fullscreen (F key)">⛶</button>
+                <button id="clear-all-btn" class="plexd-button plexd-button-danger" onclick="PlexdApp.clearAllStreams()" title="Clear all streams">Clear</button>
 
                 <!-- Panels -->
                 <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list (S)">Strms</button>
@@ -144,6 +145,7 @@
             <kbd>Z</kbd>/<kbd>Enter</kbd> Focus &nbsp;
             <kbd>F</kbd> Fullscreen &nbsp;
             <kbd>Esc</kbd> Back/Exit &nbsp;
+            <kbd>X</kbd> Close &nbsp;
             <kbd>Space</kbd> Play/Pause &nbsp;
             <kbd>M</kbd> Mute &nbsp;
             <kbd>T</kbd> Tetris (modes) &nbsp;
@@ -160,8 +162,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=19"></script>
-    <script src="js/stream.js?v=19"></script>
-    <script src="js/app.js?v=19"></script>
+    <script src="js/grid.js?v=21"></script>
+    <script src="js/stream.js?v=21"></script>
+    <script src="js/app.js?v=21"></script>
 </body>
 </html>

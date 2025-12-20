@@ -1554,14 +1554,15 @@ const PlexdApp = (function() {
             case 'z':
             case 'Z':
                 e.preventDefault();
-                // Enter or Z: toggle between grid and focused view (browser-fill)
+                // Enter or Z: toggle between grid and focused view
                 // In coverflow mode: enter focused mode on the center-selected stream
                 // In grid mode: enter focused mode on selected stream
                 // In focused mode: exit back to grid
+                // Quick jump: when no selection, uses first stream from current filter
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
-                        // In focused mode - exit back to grid
+                        // In focused mode - exit back to grid (toggle behavior)
                         PlexdStream.exitFocusedMode();
                     } else if (coverflowMode) {
                         // In coverflow mode - enter focused mode on the carousel-selected stream
@@ -1572,27 +1573,37 @@ const PlexdApp = (function() {
                             PlexdStream.enterFocusedMode(targetStream.id);
                             showMessage('Focused on selected stream', 'info');
                         }
-                    } else {
-                        // In grid mode - enter focused mode
+                    } else if (mode === 'true-grid') {
+                        // In grid fullscreen but no selection - select first stream
                         if (selected) {
                             PlexdStream.enterFocusedMode(selected.id);
                         } else {
-                            // No selection - quick jump to first stream matching current filter
-                            const streams = viewMode === 'all'
-                                ? PlexdStream.getAllStreams()
-                                : PlexdStream.getStreamsByRating(viewMode);
+                            const streams = PlexdStream.getAllStreams();
                             if (streams.length > 0) {
                                 PlexdStream.enterFocusedMode(streams[0].id);
-                            } else if (viewMode !== 'all') {
-                                const stars = '★'.repeat(viewMode);
-                                showMessage(`No ${stars} streams to show`, 'warning');
                             }
+                        }
+                    } else if (selected) {
+                        // Enter focused mode on selected stream
+                        PlexdStream.enterFocusedMode(selected.id);
+                    } else {
+                        // No selection - quick jump to first stream matching current filter
+                        const streams = viewMode === 'all'
+                            ? PlexdStream.getAllStreams()
+                            : PlexdStream.getStreamsByRating(viewMode);
+                        if (streams.length > 0) {
+                            PlexdStream.enterFocusedMode(streams[0].id);
+                        } else if (viewMode !== 'all') {
+                            const stars = '★'.repeat(viewMode);
+                            showMessage(`No ${stars} streams to show`, 'warning');
                         }
                     }
                 }
                 break;
             case 'Delete':
             case 'Backspace':
+            case 'x':
+            case 'X':
                 if (selected) {
                     PlexdStream.removeStream(selected.id);
                     updateStreamCount();
@@ -2812,7 +2823,8 @@ const PlexdApp = (function() {
         toggleMuteAll,
         toggleAudioFocus,
         toggleCleanMode,
-        toggleGlobalFullscreen
+        toggleGlobalFullscreen,
+        clearAllStreams
     };
 })();
 

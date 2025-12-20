@@ -109,6 +109,7 @@ const PlexdStream = (function() {
             controls,
             infoOverlay,
             hls: null, // HLS.js instance if used
+            hlsFallbackAttempted: false, // Track if we already tried HLS fallback
             aspectRatio: DEFAULT_ASPECT_RATIO,
             state: 'loading', // loading, playing, paused, buffering, error, recovering
             error: null,
@@ -162,9 +163,47 @@ const PlexdStream = (function() {
 
     /**
      * Check if URL is an HLS stream
+     * Detects both explicit .m3u8 extensions and common streaming endpoints
      */
     function isHlsUrl(url) {
-        return url.toLowerCase().includes('.m3u8');
+        const lowerUrl = url.toLowerCase();
+
+        // Explicit HLS extension
+        if (lowerUrl.includes('.m3u8')) return true;
+
+        // Common streaming server patterns (Stash, Jellyfin, Emby, etc.)
+        // These often serve HLS without the .m3u8 extension
+        const hlsPatterns = [
+            /\/stream$/i,           // /stream endpoint
+            /\/stream\?/i,          // /stream with query params
+            /\/live$/i,             // /live endpoint
+            /\/live\?/i,            // /live with query params
+            /\/playlist$/i,         // /playlist endpoint
+            /\/master$/i,           // /master playlist
+            /\/hls\//i,             // /hls/ in path
+            /\/scene\/\d+\/stream/i // Stash-style /scene/{id}/stream
+        ];
+
+        return hlsPatterns.some(pattern => pattern.test(url));
+    }
+
+    /**
+     * Check if URL might be HLS (for fallback attempts)
+     */
+    function mightBeHlsUrl(url) {
+        // Already detected as HLS
+        if (isHlsUrl(url)) return true;
+
+        // URLs without common video extensions might be HLS
+        const videoExtensions = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.avi', '.ogv'];
+        const lowerUrl = url.toLowerCase();
+
+        // If it has a video extension, probably not HLS
+        if (videoExtensions.some(ext => lowerUrl.includes(ext))) return false;
+
+        // URLs ending with just a path segment (no extension) might be HLS
+        const urlPath = new URL(url).pathname;
+        return !urlPath.includes('.') || urlPath.endsWith('/');
     }
 
     /**
@@ -1484,17 +1523,30 @@ const PlexdStream = (function() {
         video.addEventListener('error', (e) => {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
-            const isHLS = stream.url.toLowerCase().includes('.m3u8');
+            const detectedHLS = isHlsUrl(stream.url);
             const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
             console.error(`Stream ${stream.id} error:`, stream.error,
                 'URL:', stream.url,
-                'IsHLS:', isHLS,
+                'DetectedHLS:', detectedHLS,
                 'HLS.js available:', hlsAvailable);
 
             // Check if this is an HLS stream without HLS.js support
-            if (isHLS && !hlsAvailable && !video.canPlayType('application/vnd.apple.mpegurl')) {
+            if (detectedHLS && !hlsAvailable && !video.canPlayType('application/vnd.apple.mpegurl')) {
                 stream.error = 'HLS not supported - HLS.js failed to load';
                 console.error('[Plexd] HLS.js is not available and browser lacks native HLS support');
+            }
+
+            // If not already using HLS.js, try loading as HLS (might be HLS without extension)
+            if (!stream.hls && hlsAvailable && !stream.hlsFallbackAttempted && mightBeHlsUrl(stream.url)) {
+                console.log(`[${stream.id}] Trying HLS.js fallback for: ${stream.url}`);
+                stream.hlsFallbackAttempted = true;
+                stream.error = null;
+                stream.state = 'loading';
+
+                // Try loading with HLS.js
+                const hls = createHlsInstance(stream, stream.url);
+                stream.hls = hls;
+                return; // Don't show error yet, wait for HLS result
             }
 
             // For non-HLS streams, try automatic recovery

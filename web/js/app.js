@@ -2266,95 +2266,95 @@ const PlexdApp = (function() {
             const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
             const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
 
-        // Check if we have anything to save
-        if (validUrlStreams.length === 0 && localFileStreams.length === 0) {
-            const reasons = [];
-            if (shortVideos > 0) reasons.push('videos too short');
-            showMessage(`No valid streams to save${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`, 'error');
-            return;
-        }
-
-        const name = prompt('Enter a name for this stream combination:');
-        if (!name) return;
-
-        const urls = validUrlStreams.map(s => s.url);
-        // Save local files with their ratings
-        const localFilesData = localFileStreams.map(s => ({
-            fileName: s.fileName,
-            rating: PlexdStream.getRating(s.url) || 0
-        }));
-        const localFiles = localFilesData.map(f => f.fileName);
-        const localFileRatings = {};
-        localFilesData.forEach(f => {
-            if (f.rating > 0) {
-                localFileRatings[f.fileName] = f.rating;
+            // Check if we have anything to save
+            if (validUrlStreams.length === 0 && localFileStreams.length === 0) {
+                const reasons = [];
+                if (shortVideos > 0) reasons.push('videos too short');
+                showMessage(`No valid streams to save${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`, 'error');
+                return;
             }
-        });
-        const loginDomains = extractLoginDomains(urls);
 
-        // Check if user wants to save local files to disc
-        let savedToDisc = false;
-        if (localFileStreams.length > 0) {
-            const saveToDisc = confirm(
-                `Save ${localFileStreams.length} local file(s) to browser storage?\n\n` +
-                'This allows loading the set without re-providing files.\n' +
-                'Note: Large files may use significant storage space.'
-            );
+            const name = prompt('Enter a name for this stream combination:');
+            if (!name) return;
 
-            if (saveToDisc) {
-                showMessage('Saving local files to disc...', 'info');
-                try {
-                    let savedCount = 0;
-                    for (const stream of localFileStreams) {
-                        // Fetch the blob from the blob URL
-                        try {
-                            const response = await fetch(stream.url);
-                            const blob = await response.blob();
-                            const success = await saveLocalFileToDisc(name, stream.fileName, blob);
-                            if (success) savedCount++;
-                        } catch (err) {
-                            console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+            const urls = validUrlStreams.map(s => s.url);
+            // Save local files with their ratings
+            const localFilesData = localFileStreams.map(s => ({
+                fileName: s.fileName,
+                rating: PlexdStream.getRating(s.url) || 0
+            }));
+            const localFiles = localFilesData.map(f => f.fileName);
+            const localFileRatings = {};
+            localFilesData.forEach(f => {
+                if (f.rating > 0) {
+                    localFileRatings[f.fileName] = f.rating;
+                }
+            });
+            const loginDomains = extractLoginDomains(urls);
+
+            // Check if user wants to save local files to disc
+            let savedToDisc = false;
+            if (localFileStreams.length > 0) {
+                const saveToDisc = confirm(
+                    `Save ${localFileStreams.length} local file(s) to browser storage?\n\n` +
+                    'This allows loading the set without re-providing files.\n' +
+                    'Note: Large files may use significant storage space.'
+                );
+
+                if (saveToDisc) {
+                    showMessage('Saving local files to disc...', 'info');
+                    try {
+                        let savedCount = 0;
+                        for (const stream of localFileStreams) {
+                            // Fetch the blob from the blob URL
+                            try {
+                                const response = await fetch(stream.url);
+                                const blob = await response.blob();
+                                const success = await saveLocalFileToDisc(name, stream.fileName, blob);
+                                if (success) savedCount++;
+                            } catch (err) {
+                                console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+                            }
                         }
+                        savedToDisc = savedCount > 0;
+                        if (savedCount < localFileStreams.length) {
+                            console.warn(`[Plexd] Only saved ${savedCount}/${localFileStreams.length} files`);
+                        }
+                    } catch (err) {
+                        console.error('[Plexd] Error during disc save:', err);
+                        // Continue anyway - we'll still save the set metadata
                     }
-                    savedToDisc = savedCount > 0;
-                    if (savedCount < localFileStreams.length) {
-                        console.warn(`[Plexd] Only saved ${savedCount}/${localFileStreams.length} files`);
-                    }
-                } catch (err) {
-                    console.error('[Plexd] Error during disc save:', err);
-                    // Continue anyway - we'll still save the set metadata
                 }
             }
-        }
 
-        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
-        combinations[name] = {
-            urls: urls,
-            localFiles: localFiles,
-            localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
-            localFilesSavedToDisc: savedToDisc,
-            loginDomains: loginDomains,
-            savedAt: Date.now()
-        };
-        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+            const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+            combinations[name] = {
+                urls: urls,
+                localFiles: localFiles,
+                localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
+                localFilesSavedToDisc: savedToDisc,
+                loginDomains: loginDomains,
+                savedAt: Date.now()
+            };
+            localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
 
-        // Build informative message
-        const totalCount = urls.length + localFiles.length;
-        let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
-        if (localFiles.length > 0) {
-            msg += ` | ${localFiles.length} local`;
-            if (savedToDisc) {
-                msg += ' (stored)';
+            // Build informative message
+            const totalCount = urls.length + localFiles.length;
+            let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
+            if (localFiles.length > 0) {
+                msg += ` | ${localFiles.length} local`;
+                if (savedToDisc) {
+                    msg += ' (stored)';
+                }
             }
-        }
-        if (shortVideos > 0) {
-            msg += ` | excluded: ${shortVideos} short`;
-        }
-        if (loginDomains.length > 0) {
-            msg += ` | Login: ${loginDomains.join(', ')}`;
-        }
-        showMessage(msg, 'success');
-        updateCombinationsList();
+            if (shortVideos > 0) {
+                msg += ` | excluded: ${shortVideos} short`;
+            }
+            if (loginDomains.length > 0) {
+                msg += ` | Login: ${loginDomains.join(', ')}`;
+            }
+            showMessage(msg, 'success');
+            updateCombinationsList();
         } catch (err) {
             console.error('[Plexd] Error saving combination:', err);
             showMessage('Error saving combination: ' + err.message, 'error');

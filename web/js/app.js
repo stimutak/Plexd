@@ -8,6 +8,186 @@
 const PlexdApp = (function() {
     'use strict';
 
+    // ========================================
+    // IndexedDB for Local File Storage
+    // ========================================
+
+    const DB_NAME = 'PlexdLocalFiles';
+    const DB_VERSION = 1;
+    const STORE_NAME = 'files';
+    let dbInstance = null;
+
+    /**
+     * Open or create the IndexedDB database
+     */
+    function openDatabase() {
+        return new Promise((resolve, reject) => {
+            if (dbInstance) {
+                resolve(dbInstance);
+                return;
+            }
+
+            const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+            request.onerror = () => {
+                console.error('[Plexd] IndexedDB error:', request.error);
+                reject(request.error);
+            };
+
+            request.onsuccess = () => {
+                dbInstance = request.result;
+                resolve(dbInstance);
+            };
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                    store.createIndex('setName', 'setName', { unique: false });
+                    store.createIndex('fileName', 'fileName', { unique: false });
+                }
+            };
+        });
+    }
+
+    /**
+     * Save a local file blob to IndexedDB
+     * @param {string} setName - The combination/set name
+     * @param {string} fileName - Original file name
+     * @param {Blob} blob - The file blob data
+     */
+    async function saveLocalFileToDisc(setName, fileName, blob) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+
+            const id = `${setName}::${fileName}`;
+            const data = {
+                id: id,
+                setName: setName,
+                fileName: fileName,
+                blob: blob,
+                savedAt: Date.now(),
+                size: blob.size,
+                type: blob.type
+            };
+
+            await new Promise((resolve, reject) => {
+                const request = store.put(data);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+
+            console.log(`[Plexd] Saved local file to disc: ${fileName} (${formatBytes(blob.size)})`);
+            return true;
+        } catch (err) {
+            console.error('[Plexd] Failed to save local file:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Load a local file from IndexedDB
+     * @param {string} setName - The combination/set name
+     * @param {string} fileName - Original file name
+     * @returns {Promise<{url: string, fileName: string}|null>}
+     */
+    async function loadLocalFileFromDisc(setName, fileName) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+
+            const id = `${setName}::${fileName}`;
+            const data = await new Promise((resolve, reject) => {
+                const request = store.get(id);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+
+            if (data && data.blob) {
+                const url = URL.createObjectURL(data.blob);
+                console.log(`[Plexd] Loaded local file from disc: ${fileName}`);
+                return { url, fileName: data.fileName };
+            }
+            return null;
+        } catch (err) {
+            console.error('[Plexd] Failed to load local file:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Get all saved local files for a set
+     * @param {string} setName - The combination/set name
+     * @returns {Promise<Array<{fileName: string, size: number}>>}
+     */
+    async function getSavedLocalFiles(setName) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+            const index = store.index('setName');
+
+            const files = await new Promise((resolve, reject) => {
+                const request = index.getAll(setName);
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => reject(request.error);
+            });
+
+            return files.map(f => ({ fileName: f.fileName, size: f.size }));
+        } catch (err) {
+            console.error('[Plexd] Failed to get saved files:', err);
+            return [];
+        }
+    }
+
+    /**
+     * Delete all local files for a set from IndexedDB
+     * @param {string} setName - The combination/set name
+     */
+    async function deleteLocalFilesForSet(setName) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+            const index = store.index('setName');
+
+            const keys = await new Promise((resolve, reject) => {
+                const request = index.getAllKeys(setName);
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = () => reject(request.error);
+            });
+
+            for (const key of keys) {
+                store.delete(key);
+            }
+
+            await new Promise((resolve, reject) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+
+            if (keys.length > 0) {
+                console.log(`[Plexd] Deleted ${keys.length} local files for set: ${setName}`);
+            }
+        } catch (err) {
+            console.error('[Plexd] Failed to delete local files:', err);
+        }
+    }
+
+    /**
+     * Format bytes to human readable string
+     */
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
     // DOM references
     let containerEl = null;
     let inputEl = null;
@@ -2072,48 +2252,97 @@ const PlexdApp = (function() {
     /**
      * Save current stream combination with a name
      */
-    function saveStreamCombination() {
+    async function saveStreamCombination() {
         const streams = PlexdStream.getAllStreams();
         if (streams.length === 0) {
             showMessage('No streams to save', 'error');
             return;
         }
 
-        // Count exclusions by type
-        const localFiles = streams.filter(s => isBlobUrl(s.url)).length;
-        const shortVideos = streams.filter(s => !isBlobUrl(s.url) && !shouldSaveStream(s)).length;
+        // Separate local files from URL streams
+        const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName);
+        const urlStreams = streams.filter(s => !isBlobUrl(s.url));
+        const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
+        const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
 
-        // Filter out local files and short videos
-        const validStreams = streams.filter(s => shouldSaveStream(s));
-        if (validStreams.length === 0) {
+        // Check if we have anything to save
+        if (validUrlStreams.length === 0 && localFileStreams.length === 0) {
             const reasons = [];
-            if (localFiles > 0) reasons.push('local files cannot be saved');
             if (shortVideos > 0) reasons.push('videos too short');
-            showMessage(`No valid streams to save (${reasons.join(', ')})`, 'error');
+            showMessage(`No valid streams to save${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`, 'error');
             return;
         }
 
         const name = prompt('Enter a name for this stream combination:');
         if (!name) return;
 
-        const urls = validStreams.map(s => s.url);
+        const urls = validUrlStreams.map(s => s.url);
+        // Save local files with their ratings
+        const localFilesData = localFileStreams.map(s => ({
+            fileName: s.fileName,
+            rating: PlexdStream.getRating(s.url) || 0
+        }));
+        const localFiles = localFilesData.map(f => f.fileName);
+        const localFileRatings = {};
+        localFilesData.forEach(f => {
+            if (f.rating > 0) {
+                localFileRatings[f.fileName] = f.rating;
+            }
+        });
         const loginDomains = extractLoginDomains(urls);
+
+        // Check if user wants to save local files to disc
+        let savedToDisc = false;
+        if (localFileStreams.length > 0) {
+            const saveToDisc = confirm(
+                `Save ${localFileStreams.length} local file(s) to browser storage?\n\n` +
+                'This allows loading the set without re-providing files.\n' +
+                'Note: Large files may use significant storage space.'
+            );
+
+            if (saveToDisc) {
+                showMessage('Saving local files to disc...', 'info');
+                let savedCount = 0;
+                for (const stream of localFileStreams) {
+                    // Fetch the blob from the blob URL
+                    try {
+                        const response = await fetch(stream.url);
+                        const blob = await response.blob();
+                        const success = await saveLocalFileToDisc(name, stream.fileName, blob);
+                        if (success) savedCount++;
+                    } catch (err) {
+                        console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+                    }
+                }
+                savedToDisc = savedCount > 0;
+                if (savedCount < localFileStreams.length) {
+                    console.warn(`[Plexd] Only saved ${savedCount}/${localFileStreams.length} files`);
+                }
+            }
+        }
 
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         combinations[name] = {
             urls: urls,
+            localFiles: localFiles,
+            localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
+            localFilesSavedToDisc: savedToDisc,
             loginDomains: loginDomains,
             savedAt: Date.now()
         };
         localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
 
         // Build informative message
-        let msg = `Saved: ${name} (${urls.length} streams)`;
-        const exclusions = [];
-        if (localFiles > 0) exclusions.push(`${localFiles} local file(s)`);
-        if (shortVideos > 0) exclusions.push(`${shortVideos} short video(s)`);
-        if (exclusions.length > 0) {
-            msg += ` - excluded: ${exclusions.join(', ')}`;
+        const totalCount = urls.length + localFiles.length;
+        let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
+        if (localFiles.length > 0) {
+            msg += ` | ${localFiles.length} local`;
+            if (savedToDisc) {
+                msg += ' (stored)';
+            }
+        }
+        if (shortVideos > 0) {
+            msg += ` | excluded: ${shortVideos} short`;
         }
         if (loginDomains.length > 0) {
             msg += ` | Login: ${loginDomains.join(', ')}`;
@@ -2125,7 +2354,7 @@ const PlexdApp = (function() {
     /**
      * Load a saved stream combination
      */
-    function loadStreamCombination(name) {
+    async function loadStreamCombination(name) {
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         const combo = combinations[name];
 
@@ -2134,51 +2363,290 @@ const PlexdApp = (function() {
             return;
         }
 
-        // Check if there are login domains
+        // Check if there are local files to provide
+        const localFiles = combo.localFiles || [];
         const loginDomains = combo.loginDomains || [];
-        if (loginDomains.length > 0) {
-            showLoginDomainsModal(name, loginDomains, () => {
-                loadCombinationStreams(name, combo);
-            });
+
+        // Chain of modals: login domains first, then local files
+        const loadWithFiles = (providedFiles) => {
+            if (loginDomains.length > 0) {
+                showLoginDomainsModal(name, loginDomains, () => {
+                    loadCombinationStreams(name, combo, providedFiles);
+                });
+            } else {
+                loadCombinationStreams(name, combo, providedFiles);
+            }
+        };
+
+        if (localFiles.length > 0) {
+            // First try to load from disc storage
+            if (combo.localFilesSavedToDisc) {
+                showMessage('Loading local files from storage...', 'info');
+                const loadedFiles = [];
+                let loadedCount = 0;
+                const missingFiles = [];
+
+                for (let i = 0; i < localFiles.length; i++) {
+                    const fileName = localFiles[i];
+                    const file = await loadLocalFileFromDisc(name, fileName);
+                    if (file) {
+                        loadedFiles[i] = file;
+                        loadedCount++;
+                    } else {
+                        missingFiles.push(fileName);
+                    }
+                }
+
+                if (missingFiles.length === 0) {
+                    // All files loaded from disc
+                    loadWithFiles(loadedFiles);
+                } else {
+                    // Some files missing - show modal for remaining
+                    showLocalFilesModal(name, missingFiles, (additionalFiles) => {
+                        // Merge loaded and additional files
+                        let addIdx = 0;
+                        for (let i = 0; i < localFiles.length; i++) {
+                            if (!loadedFiles[i] && additionalFiles[addIdx]) {
+                                loadedFiles[i] = additionalFiles[addIdx];
+                            }
+                            if (!loadedFiles[i]) addIdx++;
+                        }
+                        loadWithFiles(loadedFiles);
+                    }, loadedCount);
+                }
+            } else {
+                // Files not saved to disc - show modal
+                showLocalFilesModal(name, localFiles, loadWithFiles);
+            }
         } else {
-            loadCombinationStreams(name, combo);
+            loadWithFiles([]);
         }
     }
 
     /**
-     * Actually load the combination streams
+     * Show modal to let user provide local files needed by a combination
      */
-    function loadCombinationStreams(name, combo) {
+    function showLocalFilesModal(name, expectedFiles, onContinue) {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('local-files-modal');
+        if (existingModal) existingModal.remove();
+
+        let providedFiles = [];
+
+        const modal = document.createElement('div');
+        modal.id = 'local-files-modal';
+        modal.className = 'plexd-modal-overlay';
+        modal.innerHTML = `
+            <div class="plexd-modal plexd-modal-wide">
+                <h3>Local Files Required</h3>
+                <p>This set includes ${expectedFiles.length} local file${expectedFiles.length !== 1 ? 's' : ''}. Drop or select the files below:</p>
+                <div class="plexd-local-files-list">
+                    ${expectedFiles.map((fileName, idx) => `
+                        <div class="plexd-local-file-item" data-index="${idx}" data-expected="${escapeAttr(fileName)}">
+                            <span class="plexd-local-file-name">${escapeHtml(fileName)}</span>
+                            <span class="plexd-local-file-status">Not provided</span>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="plexd-local-files-drop" id="local-files-drop-zone">
+                    <div class="plexd-drop-text">Drop video files here or click to browse</div>
+                    <input type="file" id="local-files-input" multiple accept="video/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.ogv,.3gp,.flv,.mpeg,.mpg" style="display: none;">
+                </div>
+                <div class="plexd-modal-hint">
+                    Files will be matched by name. You can skip files you don't have.
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="local-modal-cancel" class="plexd-button plexd-button-secondary">Cancel</button>
+                    <button id="local-modal-skip" class="plexd-button plexd-button-secondary">Skip Local Files</button>
+                    <button id="local-modal-continue" class="plexd-button plexd-button-primary">Load Streams</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        const dropZone = document.getElementById('local-files-drop-zone');
+        const fileInput = document.getElementById('local-files-input');
+
+        // Handle file selection
+        function handleFiles(files) {
+            Array.from(files).forEach(file => {
+                // Find matching expected file by name
+                const fileItems = modal.querySelectorAll('.plexd-local-file-item');
+                let matched = false;
+
+                fileItems.forEach(item => {
+                    const expected = item.dataset.expected;
+                    const idx = parseInt(item.dataset.index);
+
+                    // Match by exact name or similar name (case-insensitive, without extension)
+                    const expectedBase = expected.replace(/\.[^/.]+$/, '').toLowerCase();
+                    const fileBase = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+
+                    if (!matched && (file.name === expected || expectedBase === fileBase)) {
+                        // Create blob URL and store
+                        const objectUrl = URL.createObjectURL(file);
+                        providedFiles[idx] = { url: objectUrl, fileName: file.name };
+
+                        // Update UI
+                        item.classList.add('plexd-local-file-matched');
+                        item.querySelector('.plexd-local-file-status').textContent = '✓ ' + file.name;
+                        matched = true;
+                    }
+                });
+
+                if (!matched) {
+                    // Try partial match - file name contains expected name or vice versa
+                    fileItems.forEach(item => {
+                        if (matched) return;
+                        const expected = item.dataset.expected;
+                        const idx = parseInt(item.dataset.index);
+                        const expectedBase = expected.replace(/\.[^/.]+$/, '').toLowerCase();
+                        const fileBase = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+
+                        if (providedFiles[idx] === undefined &&
+                            (expectedBase.includes(fileBase) || fileBase.includes(expectedBase))) {
+                            const objectUrl = URL.createObjectURL(file);
+                            providedFiles[idx] = { url: objectUrl, fileName: file.name };
+                            item.classList.add('plexd-local-file-matched');
+                            item.querySelector('.plexd-local-file-status').textContent = '✓ ' + file.name;
+                            matched = true;
+                        }
+                    });
+                }
+            });
+        }
+
+        // Click to browse
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files) handleFiles(e.target.files);
+        });
+
+        // Drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('plexd-drop-active');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('plexd-drop-active');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('plexd-drop-active');
+            if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files);
+        });
+
+        // Button handlers
+        document.getElementById('local-modal-cancel').addEventListener('click', () => {
+            // Revoke any created blob URLs
+            providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
+            modal.remove();
+        });
+
+        document.getElementById('local-modal-skip').addEventListener('click', () => {
+            // Revoke any created blob URLs
+            providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
+            modal.remove();
+            onContinue([]);
+        });
+
+        document.getElementById('local-modal-continue').addEventListener('click', () => {
+            modal.remove();
+            onContinue(providedFiles);
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    /**
+     * Actually load the combination streams
+     * @param {string} name - Combination name
+     * @param {Object} combo - Combination data
+     * @param {Array} providedFiles - Array of {url, fileName} for local files
+     */
+    function loadCombinationStreams(name, combo, providedFiles = []) {
         // Clear current streams
         const currentStreams = PlexdStream.getAllStreams();
         currentStreams.forEach(s => PlexdStream.removeStream(s.id));
 
         // Log HLS.js availability for debugging
         const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
-        console.log(`[Plexd] Loading "${name}": ${combo.urls.length} streams, HLS.js: ${hlsAvailable ? 'available' : 'NOT AVAILABLE'}`);
+        const urlCount = combo.urls?.length || 0;
+        const localCount = providedFiles.filter(f => f).length;
+        console.log(`[Plexd] Loading "${name}": ${urlCount} URL streams, ${localCount} local files, HLS.js: ${hlsAvailable ? 'available' : 'NOT AVAILABLE'}`);
 
-        // Load saved streams with validation
+        // Load URL streams with validation
         let loadedCount = 0;
         let skippedCount = 0;
-        combo.urls.forEach((url, index) => {
-            if (url && isValidUrl(url)) {
-                // Log each URL being loaded for debugging
-                console.log(`[Plexd] Loading stream ${index + 1}/${combo.urls.length}: ${truncateUrl(url, 80)}`);
-                addStreamSilent(url);
-                loadedCount++;
-            } else {
-                console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
-                skippedCount++;
+
+        if (combo.urls) {
+            combo.urls.forEach((url, index) => {
+                if (url && isValidUrl(url)) {
+                    console.log(`[Plexd] Loading stream ${index + 1}/${urlCount}: ${truncateUrl(url, 80)}`);
+                    addStreamSilent(url);
+                    loadedCount++;
+                } else {
+                    console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
+                    skippedCount++;
+                }
+            });
+        }
+
+        // Load provided local files and restore their ratings
+        let localLoaded = 0;
+        const localFileRatings = combo.localFileRatings || {};
+        const localFiles = combo.localFiles || [];
+
+        providedFiles.forEach((file, index) => {
+            if (file && file.url) {
+                const originalFileName = localFiles[index];
+                console.log(`[Plexd] Loading local file ${index + 1}: ${file.fileName}`);
+                addStreamFromFile(file.url, file.fileName);
+                localLoaded++;
+
+                // Restore rating if saved
+                const savedRating = localFileRatings[originalFileName] || localFileRatings[file.fileName];
+                if (savedRating && savedRating > 0) {
+                    // Find the just-added stream and set its rating
+                    const streams = PlexdStream.getAllStreams();
+                    const newStream = streams.find(s => s.url === file.url);
+                    if (newStream) {
+                        PlexdStream.setRating(newStream.id, savedRating);
+                        console.log(`[Plexd] Restored rating ${savedRating} for ${file.fileName}`);
+                    }
+                }
             }
         });
 
-        // Save to current streams (only valid URLs)
-        const validUrls = combo.urls.filter(url => url && isValidUrl(url));
+        // Save to current streams (only URL streams, not local files)
+        const validUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
         localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
 
-        let msg = `Loaded: ${name} (${loadedCount} streams)`;
+        // Build message
+        const total = loadedCount + localLoaded;
+        let msg = `Loaded: ${name} (${total} stream${total !== 1 ? 's' : ''})`;
+        if (localLoaded > 0) {
+            msg += ` | ${localLoaded} local`;
+        }
         if (skippedCount > 0) {
-            msg += ` - ${skippedCount} skipped`;
+            msg += ` | ${skippedCount} skipped`;
         }
         showMessage(msg, 'success');
         updateStreamCount();
@@ -2251,9 +2719,13 @@ const PlexdApp = (function() {
     /**
      * Delete a saved combination
      */
-    function deleteStreamCombination(name) {
+    async function deleteStreamCombination(name) {
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         if (combinations[name]) {
+            // Delete local files from IndexedDB if they were saved to disc
+            if (combinations[name].localFilesSavedToDisc) {
+                await deleteLocalFilesForSet(name);
+            }
             delete combinations[name];
             localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
             showMessage(`Deleted: ${name}`, 'info');
@@ -2332,20 +2804,41 @@ const PlexdApp = (function() {
                     let merged = 0;
                     Object.keys(data.combinations).forEach(name => {
                         const combo = data.combinations[name];
-                        if (combo.urls && Array.isArray(combo.urls)) {
+                        const hasUrls = combo.urls && Array.isArray(combo.urls);
+                        const hasLocalFiles = combo.localFiles && Array.isArray(combo.localFiles);
+
+                        if (hasUrls || hasLocalFiles) {
                             if (existing[name]) {
+                                let changed = false;
                                 // Merge URLs from both sets (avoid duplicates)
-                                const existingUrls = new Set(existing[name].urls || []);
-                                const newUrls = combo.urls.filter(url => !existingUrls.has(url));
-                                if (newUrls.length > 0) {
-                                    existing[name].urls = [...existing[name].urls, ...newUrls];
-                                    // Merge login domains too
-                                    const existingDomains = new Set(existing[name].loginDomains || []);
-                                    const newDomains = (combo.loginDomains || []).filter(d => !existingDomains.has(d));
+                                if (hasUrls) {
+                                    const existingUrls = new Set(existing[name].urls || []);
+                                    const newUrls = combo.urls.filter(url => !existingUrls.has(url));
+                                    if (newUrls.length > 0) {
+                                        existing[name].urls = [...(existing[name].urls || []), ...newUrls];
+                                        changed = true;
+                                    }
+                                }
+                                // Merge local files (avoid duplicates)
+                                if (hasLocalFiles) {
+                                    const existingFiles = new Set(existing[name].localFiles || []);
+                                    const newFiles = combo.localFiles.filter(f => !existingFiles.has(f));
+                                    if (newFiles.length > 0) {
+                                        existing[name].localFiles = [...(existing[name].localFiles || []), ...newFiles];
+                                        changed = true;
+                                    }
+                                }
+                                // Merge login domains
+                                const existingDomains = new Set(existing[name].loginDomains || []);
+                                const newDomains = (combo.loginDomains || []).filter(d => !existingDomains.has(d));
+                                if (newDomains.length > 0) {
                                     existing[name].loginDomains = [...(existing[name].loginDomains || []), ...newDomains];
+                                    changed = true;
+                                }
+                                if (changed) {
                                     merged++;
                                 } else {
-                                    skipped++; // All URLs already exist
+                                    skipped++;
                                 }
                             } else {
                                 existing[name] = combo;

@@ -1123,6 +1123,81 @@ body {
     justify-content: flex-end;
 }
 
+/* Local Files Modal */
+.plexd-modal-wide {
+    max-width: 500px;
+}
+
+.plexd-local-files-list {
+    background: #0a0a0a;
+    border-radius: 8px;
+    padding: 8px;
+    margin-bottom: 16px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.plexd-local-file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: #252525;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    transition: background 0.2s ease;
+}
+
+.plexd-local-file-item:last-child {
+    margin-bottom: 0;
+}
+
+.plexd-local-file-name {
+    font-size: 13px;
+    color: #ccc;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 12px;
+}
+
+.plexd-local-file-status {
+    font-size: 12px;
+    color: #888;
+    flex-shrink: 0;
+}
+
+.plexd-local-file-item.plexd-local-file-matched {
+    background: #1a3a1a;
+    border: 1px solid #2a5a2a;
+}
+
+.plexd-local-file-item.plexd-local-file-matched .plexd-local-file-status {
+    color: #5a5;
+}
+
+.plexd-local-files-drop {
+    border: 2px dashed #444;
+    border-radius: 8px;
+    padding: 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 16px;
+}
+
+.plexd-local-files-drop:hover,
+.plexd-local-files-drop.plexd-drop-active {
+    border-color: #666;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.plexd-local-files-drop .plexd-drop-text {
+    font-size: 14px;
+    color: #888;
+}
+
 /* ========================================
    Header Toggle (Floating Action Button)
    ======================================== */

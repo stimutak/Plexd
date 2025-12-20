@@ -26,6 +26,56 @@
     const DEFAULT_PLEXD_URL = '';
 
     /**
+     * Check if a host is localhost or local network
+     */
+    function isLocalHost(host) {
+        if (!host) return false;
+        return ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
+               host.startsWith('192.168.') || host.startsWith('10.');
+    }
+
+    /**
+     * Find existing Plexd tab that matches the configured URL
+     */
+    async function findPlexdTab(plexdUrl) {
+        const tabs = await chrome.tabs.query({});
+
+        // Handle file:// URLs specially
+        if (plexdUrl.startsWith('file://')) {
+            // For file URLs, match the file path (ignoring query string)
+            const plexdPath = plexdUrl.split('?')[0];
+            return tabs.find(t => t.url && t.url.startsWith('file://') && t.url.split('?')[0] === plexdPath);
+        }
+
+        // For http/https URLs
+        try {
+            const plexdUrlObj = new URL(plexdUrl);
+
+            return tabs.find(t => {
+                if (!t.url) return false;
+                try {
+                    const tabUrl = new URL(t.url);
+
+                    // Both must be http/https
+                    if (!tabUrl.protocol.startsWith('http')) return false;
+
+                    // For localhost URLs, match on port
+                    if (isLocalHost(plexdUrlObj.hostname) && isLocalHost(tabUrl.hostname)) {
+                        return tabUrl.port === plexdUrlObj.port;
+                    }
+
+                    // For other URLs, match on origin
+                    return tabUrl.origin === plexdUrlObj.origin;
+                } catch {
+                    return false;
+                }
+            });
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Initialize popup
      */
     async function init() {
@@ -219,18 +269,23 @@
 
         li.addEventListener('click', () => toggleSelection(index, li));
 
+        // Create actions row
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'video-item-actions';
+
         // Create copy button
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
         copyBtn.title = 'Copy stream URL';
-        copyBtn.innerHTML = '&#128203;'; // Clipboard icon
+        copyBtn.innerHTML = '&#128203; Copy URL'; // Clipboard icon with text
         copyBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             copyStreamUrl(video.url, copyBtn);
         });
 
+        actionsRow.appendChild(copyBtn);
         wrapper.appendChild(li);
-        wrapper.appendChild(copyBtn);
+        wrapper.appendChild(actionsRow);
         return wrapper;
     }
 
@@ -241,11 +296,11 @@
         try {
             await navigator.clipboard.writeText(url);
             button.classList.add('copied');
-            button.innerHTML = '&#10003;'; // Checkmark
+            button.innerHTML = '&#10003; Copied!'; // Checkmark with text
             showStatus('URL copied to clipboard');
             setTimeout(() => {
                 button.classList.remove('copied');
-                button.innerHTML = '&#128203;';
+                button.innerHTML = '&#128203; Copy URL';
             }, 2000);
         } catch (err) {
             console.error('Copy failed:', err);
@@ -302,31 +357,18 @@
             console.log('[Plexd Popup] Sending:', newUrls);
 
             const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
-            const targetUrl = `${plexdUrl}?streams=${streamUrls}`;
+            // Build target URL - for file:// need to use different separator
+            const separator = plexdUrl.includes('?') ? '&' : '?';
+            const targetUrl = `${plexdUrl}${separator}streams=${streamUrls}`;
 
             // Find existing Plexd tab or create new one
-            const tabs = await chrome.tabs.query({});
-            const plexdUrlObj = new URL(plexdUrl);
-
-            let plexdTab = tabs.find(t => {
-                if (!t.url) return false;
-                try {
-                    const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
-                        return tabUrl.port === plexdUrlObj.port;
-                    }
-                    return t.url.startsWith(plexdUrlObj.origin);
-                } catch {
-                    return false;
-                }
-            });
-
+            const plexdTab = await findPlexdTab(plexdUrl);
             console.log('[Plexd Popup] Found tab:', plexdTab ? plexdTab.url : 'none');
 
             if (plexdTab) {
                 await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                // Also focus the window
+                await chrome.windows.update(plexdTab.windowId, { focused: true });
             } else {
                 await chrome.tabs.create({ url: targetUrl });
             }
@@ -368,29 +410,15 @@
             console.log('[Plexd Popup] Queueing:', newUrls);
 
             const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
-            const targetUrl = `${plexdUrl}?queue=${streamUrls}`;
+            const separator = plexdUrl.includes('?') ? '&' : '?';
+            const targetUrl = `${plexdUrl}${separator}queue=${streamUrls}`;
 
             // Find existing Plexd tab or create new one
-            const tabs = await chrome.tabs.query({});
-            const plexdUrlObj = new URL(plexdUrl);
-
-            let plexdTab = tabs.find(t => {
-                if (!t.url) return false;
-                try {
-                    const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
-                        return tabUrl.port === plexdUrlObj.port;
-                    }
-                    return t.url.startsWith(plexdUrlObj.origin);
-                } catch {
-                    return false;
-                }
-            });
+            const plexdTab = await findPlexdTab(plexdUrl);
 
             if (plexdTab) {
                 await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                await chrome.windows.update(plexdTab.windowId, { focused: true });
             } else {
                 await chrome.tabs.create({ url: targetUrl });
             }
@@ -423,23 +451,7 @@
 
         try {
             // Find existing Plexd tab or create new one
-            const tabs = await chrome.tabs.query({});
-            const plexdUrlObj = new URL(plexdUrl);
-
-            let plexdTab = tabs.find(t => {
-                if (!t.url) return false;
-                try {
-                    const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
-                        return tabUrl.port === plexdUrlObj.port;
-                    }
-                    return t.url.startsWith(plexdUrlObj.origin);
-                } catch {
-                    return false;
-                }
-            });
+            const plexdTab = await findPlexdTab(plexdUrl);
 
             if (plexdTab) {
                 // Activate existing tab

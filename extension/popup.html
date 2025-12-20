@@ -260,7 +260,7 @@
 
         .video-item-wrapper {
             display: flex;
-            align-items: stretch;
+            flex-direction: column;
             gap: 4px;
             margin-bottom: 8px;
         }
@@ -270,18 +270,25 @@
             margin-bottom: 0;
         }
 
+        .video-item-actions {
+            display: flex;
+            gap: 4px;
+        }
+
         .copy-btn {
+            flex: 1;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 8px;
+            gap: 6px;
+            padding: 6px 8px;
             background: #252525;
             border: none;
             border-radius: 6px;
             color: #888;
             cursor: pointer;
             transition: all 0.15s;
-            font-size: 14px;
+            font-size: 12px;
         }
 
         .copy-btn:hover {

@@ -1425,7 +1425,18 @@ const PlexdStream = (function() {
         video.addEventListener('error', (e) => {
             stream.state = 'error';
             stream.error = getVideoError(video.error);
-            console.error(`Stream ${stream.id} error:`, stream.error, 'URL:', stream.url);
+            const isHLS = stream.url.toLowerCase().includes('.m3u8');
+            const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
+            console.error(`Stream ${stream.id} error:`, stream.error,
+                'URL:', stream.url,
+                'IsHLS:', isHLS,
+                'HLS.js available:', hlsAvailable);
+
+            // Check if this is an HLS stream without HLS.js support
+            if (isHLS && !hlsAvailable && !video.canPlayType('application/vnd.apple.mpegurl')) {
+                stream.error = 'HLS not supported - HLS.js failed to load';
+                console.error('[Plexd] HLS.js is not available and browser lacks native HLS support');
+            }
 
             // For non-HLS streams, try automatic recovery
             if (!stream.hls && RECOVERY_CONFIG.enableAutoRecovery) {
@@ -1819,13 +1830,23 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Check if a stream URL is a local file (blob URL)
+     */
+    function isLocalFile(streamId) {
+        const stream = streams.get(streamId);
+        return stream && stream.url && stream.url.startsWith('blob:');
+    }
+
+    /**
      * Select next stream in grid order (respects visual grid layout and view mode filter)
+     * When viewMode is 'all', includes all streams (both remote and local files)
      */
     function selectNextStream(direction = 'right') {
         // Respect current view mode filter
         const viewMode = window._plexdViewMode || 'all';
         let streamList;
         if (viewMode === 'all') {
+            // Include ALL streams - both remote and local files
             streamList = Array.from(streams.keys());
         } else {
             // Get only streams with the current rating filter
@@ -2552,7 +2573,9 @@ const PlexdStream = (function() {
         getRecoveryConfig,
         setRecoveryConfig,
         startHealthMonitoring,
-        stopHealthMonitoring
+        stopHealthMonitoring,
+        // Local file detection
+        isLocalFile
     };
 })();
 

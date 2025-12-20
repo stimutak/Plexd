@@ -1328,11 +1328,18 @@ const PlexdStream = (function() {
                 return;
             }
 
+            // Only process keys here when in focused/fullscreen mode
+            // In grid mode (fullscreenMode === 'none'), let events bubble naturally to document
+            if (fullscreenMode !== 'true-focused' && fullscreenMode !== 'browser-fill') {
+                // Not in fullscreen mode - don't interfere, let event bubble to document
+                return;
+            }
+
             // Number keys (0-9) and arrow keys should propagate to document handler
             // for rating filter/assignment and stream navigation
+            // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
-                // Don't handle here - let it bubble to document.addEventListener in app.js
-                // In fullscreen, we need to manually dispatch since document may be outside fullscreen context
+                // Dispatch to document for app.js to handle
                 document.dispatchEvent(new KeyboardEvent('keydown', {
                     key: e.key,
                     code: e.code,
@@ -1967,7 +1974,16 @@ const PlexdStream = (function() {
             }
         }
 
-        selectStream(streamList[newIndex]);
+        const newStreamId = streamList[newIndex];
+        selectStream(newStreamId);
+
+        // Maintain keyboard focus on the newly selected stream
+        // This ensures arrow keys continue to work after navigation
+        const newStream = streams.get(newStreamId);
+        if (newStream && newStream.wrapper) {
+            // Focus the wrapper to maintain keyboard control
+            newStream.wrapper.focus();
+        }
     }
 
     /**

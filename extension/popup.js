@@ -194,10 +194,15 @@
     }
 
     /**
-     * Create a video list item
+     * Create a video list item with copy button
      */
     function createVideoItem(video, index, isStream) {
-        const li = document.createElement('li');
+        // Create wrapper div
+        const wrapper = document.createElement('div');
+        wrapper.className = 'video-item-wrapper';
+
+        // Create the video item
+        const li = document.createElement('div');
         li.className = 'video-item' + (isStream ? ' stream-item' : '');
         li.dataset.index = index;
 
@@ -213,7 +218,39 @@
         `;
 
         li.addEventListener('click', () => toggleSelection(index, li));
-        return li;
+
+        // Create copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.title = 'Copy stream URL';
+        copyBtn.innerHTML = '&#128203;'; // Clipboard icon
+        copyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            copyStreamUrl(video.url, copyBtn);
+        });
+
+        wrapper.appendChild(li);
+        wrapper.appendChild(copyBtn);
+        return wrapper;
+    }
+
+    /**
+     * Copy stream URL to clipboard
+     */
+    async function copyStreamUrl(url, button) {
+        try {
+            await navigator.clipboard.writeText(url);
+            button.classList.add('copied');
+            button.innerHTML = '&#10003;'; // Checkmark
+            showStatus('URL copied to clipboard');
+            setTimeout(() => {
+                button.classList.remove('copied');
+                button.innerHTML = '&#128203;';
+            }, 2000);
+        } catch (err) {
+            console.error('Copy failed:', err);
+            showStatus('Failed to copy URL', true);
+        }
     }
 
     /**
@@ -374,7 +411,7 @@
     }
 
     /**
-     * Open Plexd in new tab
+     * Open Plexd - finds existing tab or creates new one
      */
     async function openPlexd() {
         const plexdUrl = plexdUrlInput.value;
@@ -384,7 +421,40 @@
             return;
         }
 
-        await chrome.tabs.create({ url: plexdUrl });
+        try {
+            // Find existing Plexd tab or create new one
+            const tabs = await chrome.tabs.query({});
+            const plexdUrlObj = new URL(plexdUrl);
+
+            let plexdTab = tabs.find(t => {
+                if (!t.url) return false;
+                try {
+                    const tabUrl = new URL(t.url);
+                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
+                                                   host.startsWith('192.168.') || host.startsWith('10.');
+                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                        return tabUrl.port === plexdUrlObj.port;
+                    }
+                    return t.url.startsWith(plexdUrlObj.origin);
+                } catch {
+                    return false;
+                }
+            });
+
+            if (plexdTab) {
+                // Activate existing tab
+                await chrome.tabs.update(plexdTab.id, { active: true });
+                await chrome.windows.update(plexdTab.windowId, { focused: true });
+                showStatus('Switched to Plexd tab');
+            } else {
+                // Create new tab
+                await chrome.tabs.create({ url: plexdUrl });
+            }
+        } catch (err) {
+            console.error('Open Plexd error:', err);
+            // Fallback: just create a new tab
+            await chrome.tabs.create({ url: plexdUrl });
+        }
     }
 
     /**

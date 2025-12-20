@@ -2253,17 +2253,18 @@ const PlexdApp = (function() {
      * Save current stream combination with a name
      */
     async function saveStreamCombination() {
-        const streams = PlexdStream.getAllStreams();
-        if (streams.length === 0) {
-            showMessage('No streams to save', 'error');
-            return;
-        }
+        try {
+            const streams = PlexdStream.getAllStreams();
+            if (streams.length === 0) {
+                showMessage('No streams to save', 'error');
+                return;
+            }
 
-        // Separate local files from URL streams
-        const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName);
-        const urlStreams = streams.filter(s => !isBlobUrl(s.url));
-        const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
-        const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
+            // Separate local files from URL streams
+            const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName);
+            const urlStreams = streams.filter(s => !isBlobUrl(s.url));
+            const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
+            const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
 
         // Check if we have anything to save
         if (validUrlStreams.length === 0 && localFileStreams.length === 0) {
@@ -2302,21 +2303,26 @@ const PlexdApp = (function() {
 
             if (saveToDisc) {
                 showMessage('Saving local files to disc...', 'info');
-                let savedCount = 0;
-                for (const stream of localFileStreams) {
-                    // Fetch the blob from the blob URL
-                    try {
-                        const response = await fetch(stream.url);
-                        const blob = await response.blob();
-                        const success = await saveLocalFileToDisc(name, stream.fileName, blob);
-                        if (success) savedCount++;
-                    } catch (err) {
-                        console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+                try {
+                    let savedCount = 0;
+                    for (const stream of localFileStreams) {
+                        // Fetch the blob from the blob URL
+                        try {
+                            const response = await fetch(stream.url);
+                            const blob = await response.blob();
+                            const success = await saveLocalFileToDisc(name, stream.fileName, blob);
+                            if (success) savedCount++;
+                        } catch (err) {
+                            console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+                        }
                     }
-                }
-                savedToDisc = savedCount > 0;
-                if (savedCount < localFileStreams.length) {
-                    console.warn(`[Plexd] Only saved ${savedCount}/${localFileStreams.length} files`);
+                    savedToDisc = savedCount > 0;
+                    if (savedCount < localFileStreams.length) {
+                        console.warn(`[Plexd] Only saved ${savedCount}/${localFileStreams.length} files`);
+                    }
+                } catch (err) {
+                    console.error('[Plexd] Error during disc save:', err);
+                    // Continue anyway - we'll still save the set metadata
                 }
             }
         }
@@ -2349,6 +2355,10 @@ const PlexdApp = (function() {
         }
         showMessage(msg, 'success');
         updateCombinationsList();
+        } catch (err) {
+            console.error('[Plexd] Error saving combination:', err);
+            showMessage('Error saving combination: ' + err.message, 'error');
+        }
     }
 
     /**

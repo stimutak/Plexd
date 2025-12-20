@@ -2886,12 +2886,18 @@ const PlexdApp = (function() {
 
         listEl.innerHTML = names.map(name => {
             const combo = combinations[name];
+            // Skip invalid entries
+            if (!combo) return '';
+            // Defensive: handle missing urls array (corrupted/old data)
+            const urlCount = (combo.urls || []).length;
+            const localCount = (combo.localFiles || []).length;
+            const totalCount = urlCount + localCount;
             const loginCount = (combo.loginDomains || []).length;
             const loginHint = loginCount > 0 ? ` · ${loginCount} login site${loginCount > 1 ? 's' : ''}` : '';
             return `
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
-                    <span class="plexd-combo-count">${combo.urls.length} streams${loginHint}</span>
+                    <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
                     <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
                     <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
                 </div>

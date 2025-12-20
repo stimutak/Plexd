@@ -1362,6 +1362,13 @@ const PlexdStream = (function() {
         // Note: Arrow keys and most keys are handled by app.js
         // This handler catches keys when the wrapper has focus (in true-focused mode)
         wrapper.addEventListener('keydown', (e) => {
+            // Check if any modal is open - don't process shortcuts when modals are active
+            const activeModal = document.querySelector('.plexd-modal-overlay:not([style*="display: none"])');
+            if (activeModal) {
+                // Let modal handle its own keyboard events
+                return;
+            }
+
             // Only handle when this element is the fullscreen element or has focus
             if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
                 return;
@@ -1386,7 +1393,8 @@ const PlexdStream = (function() {
                     ctrlKey: e.ctrlKey,
                     altKey: e.altKey,
                     metaKey: e.metaKey,
-                    bubbles: true
+                    bubbles: true,
+                    cancelable: true
                 }));
                 e.preventDefault();
                 return;
@@ -1723,8 +1731,23 @@ const PlexdStream = (function() {
             errorOverlay.remove();
         }
 
-        // Reset error state
+        // Reset error state and recovery state
         stream.error = null;
+        stream.recovery.retryCount = 0;
+        stream.recovery.isRecovering = false;
+        stream.recovery.lastRetryTime = 0;
+        if (stream.recovery.retryTimer) {
+            clearTimeout(stream.recovery.retryTimer);
+            stream.recovery.retryTimer = null;
+        }
+        delete stream.wrapper.dataset.recovering;
+
+        // Reset health monitoring state
+        stream.health.lastTimeUpdate = Date.now();
+        stream.health.lastCurrentTime = video.currentTime;
+        stream.health.stallStartTime = null;
+        stream.health.bufferEmptyStartTime = null;
+        stream.health.consecutiveStalls = 0;
 
         // Store current position for restoration after reload
         const savedTime = video.currentTime;
@@ -1732,7 +1755,9 @@ const PlexdStream = (function() {
 
         // Check if video is just paused (simple case - just play)
         if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
+            stream.state = 'playing';
             video.play().catch(() => {});
+            updateStreamInfo(stream);
             return true;
         }
 
@@ -1740,43 +1765,67 @@ const PlexdStream = (function() {
         if (video.readyState >= 2 && video.networkState === 2) {
             // Try seeking slightly to unstick
             video.currentTime = savedTime + 0.1;
+            stream.state = 'playing';
             video.play().catch(() => {});
+            updateStreamInfo(stream);
             return true;
         }
 
         // Full reload needed - destroy and recreate
         if (stream.hls) {
-            stream.hls.destroy();
+            try {
+                stream.hls.destroy();
+            } catch (e) {
+                console.warn(`[${stream.id}] Error destroying HLS instance:`, e);
+            }
             stream.hls = null;
         }
 
-        // Reload the video
-        if (isHlsUrl(url) && Hls.isSupported()) {
-            const hls = new Hls({
-                maxMaxBufferLength: 30,
-                startLevel: -1
-            });
-            hls.loadSource(url);
-            hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                // Restore position for VOD streams after reload
-                if (hasFiniteDuration && savedTime > 0) {
-                    video.currentTime = savedTime;
-                }
+        // Reset HLS fallback flag for retry
+        stream.hlsFallbackAttempted = false;
+
+        // Reset video element state
+        video.src = '';
+        video.load();
+
+        // Small delay to ensure cleanup completes
+        setTimeout(() => {
+            // Reload the video
+            if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const config = getAdaptiveHlsConfig();
+                const hls = createHlsInstance(stream, url);
+                stream.hls = hls;
+                // Restore position for VOD streams after manifest loads
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (hasFiniteDuration && savedTime > 0) {
+                        video.currentTime = savedTime;
+                    }
+                    video.play().catch(() => {});
+                });
+            } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari native HLS
+                video.src = url;
+                video.addEventListener('loadedmetadata', () => {
+                    if (hasFiniteDuration && savedTime > 0) {
+                        video.currentTime = savedTime;
+                    }
+                }, { once: true });
                 video.play().catch(() => {});
-            });
-            hls.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    stream.error = `HLS Error: ${data.type}`;
-                    updateStreamInfo(stream);
-                }
-            });
-            stream.hls = hls;
-        } else {
-            video.src = url;
-            video.load();
-            video.play().catch(() => {});
-        }
+            } else {
+                // Regular video file
+                video.src = url;
+                video.load();
+                video.addEventListener('loadedmetadata', () => {
+                    if (hasFiniteDuration && savedTime > 0) {
+                        video.currentTime = savedTime;
+                    }
+                }, { once: true });
+                video.play().catch(() => {});
+            }
+
+            stream.state = 'loading';
+            updateStreamInfo(stream);
+        }, 100);
 
         return true;
     }
@@ -2210,13 +2259,26 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Get the key to use for rating storage (fileName for local files, URL for network streams)
+     */
+    function getRatingKey(stream) {
+        // For local files (blob URLs), use fileName for consistent matching
+        // For network streams, use URL
+        if (stream.url && stream.url.startsWith('blob:') && stream.fileName) {
+            return `file:${stream.fileName}`;
+        }
+        return stream.url;
+    }
+
+    /**
      * Cycle rating for a stream (1 -> 2 -> ... -> 9 -> 0 -> 1...)
      */
     function cycleRating(streamId) {
         const stream = streams.get(streamId);
         if (!stream) return 0;
 
-        const currentRating = ratings.get(stream.url) || 0;
+        const ratingKey = getRatingKey(stream);
+        const currentRating = ratings.get(ratingKey) || 0;
         const newRating = (currentRating + 1) % 10; // 0, 1, 2, ..., 9, 0...
 
         setRating(streamId, newRating);
@@ -2233,10 +2295,12 @@ const PlexdStream = (function() {
         // Clamp rating 0-9
         rating = Math.max(0, Math.min(9, rating));
 
+        const ratingKey = getRatingKey(stream);
+
         if (rating === 0) {
-            ratings.delete(stream.url);
+            ratings.delete(ratingKey);
         } else {
-            ratings.set(stream.url, rating);
+            ratings.set(ratingKey, rating);
         }
 
         // Update wrapper classes for all rating levels
@@ -2268,7 +2332,8 @@ const PlexdStream = (function() {
      * Update rating button and indicator appearance
      */
     function updateRatingDisplay(stream) {
-        const rating = ratings.get(stream.url) || 0;
+        const ratingKey = getRatingKey(stream);
+        const rating = ratings.get(ratingKey) || 0;
 
         // Update button - show ★N format to keep it compact
         const ratingBtn = stream.controls.querySelector('.plexd-rating-btn');
@@ -2296,9 +2361,15 @@ const PlexdStream = (function() {
     }
 
     /**
-     * Get rating for a stream URL
+     * Get rating for a stream URL or fileName
+     * @param {string} url - Stream URL (for network streams) or fileName (for local files)
+     * @param {string} fileName - Optional fileName for local files
      */
-    function getRating(url) {
+    function getRating(url, fileName) {
+        // If fileName is provided and URL is a blob, use fileName-based key
+        if (fileName && url && url.startsWith('blob:')) {
+            return ratings.get(`file:${fileName}`) || 0;
+        }
         return ratings.get(url) || 0;
     }
 
@@ -2306,14 +2377,20 @@ const PlexdStream = (function() {
      * Get streams with a specific rating
      */
     function getStreamsByRating(rating) {
-        return Array.from(streams.values()).filter(s => (ratings.get(s.url) || 0) === rating);
+        return Array.from(streams.values()).filter(s => {
+            const ratingKey = getRatingKey(s);
+            return (ratings.get(ratingKey) || 0) === rating;
+        });
     }
 
     /**
      * Get streams with any rating (rated streams)
      */
     function getRatedStreams() {
-        return Array.from(streams.values()).filter(s => ratings.has(s.url));
+        return Array.from(streams.values()).filter(s => {
+            const ratingKey = getRatingKey(s);
+            return ratings.has(ratingKey);
+        });
     }
 
     /**
@@ -2321,9 +2398,15 @@ const PlexdStream = (function() {
      */
     function getRatingCount(rating) {
         if (rating === 0) {
-            return Array.from(streams.values()).filter(s => !ratings.has(s.url)).length;
+            return Array.from(streams.values()).filter(s => {
+                const ratingKey = getRatingKey(s);
+                return !ratings.has(ratingKey);
+            }).length;
         }
-        return Array.from(streams.values()).filter(s => ratings.get(s.url) === rating).length;
+        return Array.from(streams.values()).filter(s => {
+            const ratingKey = getRatingKey(s);
+            return ratings.get(ratingKey) === rating;
+        }).length;
     }
 
     /**
@@ -2332,7 +2415,8 @@ const PlexdStream = (function() {
     function getAllRatingCounts() {
         const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         streams.forEach(stream => {
-            const rating = ratings.get(stream.url) || 0;
+            const ratingKey = getRatingKey(stream);
+            const rating = ratings.get(ratingKey) || 0;
             counts[rating]++;
         });
         return counts;
@@ -2345,7 +2429,10 @@ const PlexdStream = (function() {
      */
     function distributeRatingsEvenly() {
         // Get all unrated streams
-        const unratedStreams = Array.from(streams.values()).filter(s => !ratings.has(s.url));
+        const unratedStreams = Array.from(streams.values()).filter(s => {
+            const ratingKey = getRatingKey(s);
+            return !ratings.has(ratingKey);
+        });
 
         if (unratedStreams.length === 0) {
             return 0;
@@ -2368,41 +2455,52 @@ const PlexdStream = (function() {
 
     /**
      * Save ratings to localStorage
+     * Handles both URL-based keys (network streams) and file:fileName keys (local files)
      */
     function saveRatings() {
         const obj = {};
-        ratings.forEach((rating, url) => {
-            obj[url] = rating;
+        ratings.forEach((rating, key) => {
+            obj[key] = rating;
         });
         localStorage.setItem('plexd_ratings', JSON.stringify(obj));
     }
 
     /**
      * Load ratings from localStorage
+     * Handles both URL-based keys (network streams) and file:fileName keys (local files)
      */
     function loadRatings() {
         // Load new ratings format
         const saved = localStorage.getItem('plexd_ratings');
         if (saved) {
-            const obj = JSON.parse(saved);
-            ratings.clear();
-            Object.keys(obj).forEach(url => {
-                ratings.set(url, obj[url]);
-            });
+            try {
+                const obj = JSON.parse(saved);
+                ratings.clear();
+                Object.keys(obj).forEach(key => {
+                    ratings.set(key, obj[key]);
+                });
+            } catch (e) {
+                console.error('[Plexd] Failed to load ratings:', e);
+            }
         }
 
         // Migrate old favorites to 5-star ratings
         const oldFavorites = localStorage.getItem('plexd_favorites');
         if (oldFavorites) {
-            const urls = JSON.parse(oldFavorites);
-            urls.forEach(url => {
-                if (!ratings.has(url)) {
-                    ratings.set(url, 5); // Migrate favorites to 5-star
-                }
-            });
-            // Remove old format after migration
-            localStorage.removeItem('plexd_favorites');
-            saveRatings();
+            try {
+                const urls = JSON.parse(oldFavorites);
+                urls.forEach(url => {
+                    // Check if it's a file: key or regular URL
+                    if (!ratings.has(url) && !ratings.has(`file:${url}`)) {
+                        ratings.set(url, 5); // Migrate favorites to 5-star
+                    }
+                });
+                // Remove old format after migration
+                localStorage.removeItem('plexd_favorites');
+                saveRatings();
+            } catch (e) {
+                console.error('[Plexd] Failed to migrate favorites:', e);
+            }
         }
     }
 
@@ -2418,7 +2516,8 @@ const PlexdStream = (function() {
      */
     function syncRatingStatus() {
         streams.forEach(stream => {
-            const rating = ratings.get(stream.url);
+            const ratingKey = getRatingKey(stream);
+            const rating = ratings.get(ratingKey);
             if (rating) {
                 for (let i = 1; i <= 5; i++) {
                     stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);

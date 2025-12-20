@@ -133,11 +133,18 @@ const PlexdStream = (function() {
         // Set up event listeners
         setupVideoEvents(stream);
 
-        // Set source - use HLS.js for .m3u8 streams
-        if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
+        // Determine if URL should use HLS
+        const detectedAsHls = isHlsUrl(url);
+        const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
+        console.log(`[Plexd] Loading stream: ${url}`);
+        console.log(`[Plexd]   Detected as HLS: ${detectedAsHls}, HLS.js available: ${hlsAvailable}`);
+
+        // Set source - use HLS.js for HLS streams
+        if (detectedAsHls && hlsAvailable) {
+            console.log(`[Plexd]   Using HLS.js to load stream`);
             const hls = createHlsInstance(stream, url);
             stream.hls = hls;
-        } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+        } else if (detectedAsHls && video.canPlayType('application/vnd.apple.mpegurl')) {
             // Safari has native HLS support
             video.src = url;
             // Explicitly trigger play for native HLS (autoplay may not work)

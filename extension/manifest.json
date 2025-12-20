@@ -5,6 +5,7 @@
   "description": "Send videos from any webpage to Plexd multiplex viewer",
   "permissions": [
     "activeTab",
+    "tabs",
     "scripting",
     "storage"
   ],

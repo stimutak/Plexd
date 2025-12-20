@@ -26,6 +26,30 @@
     const DEFAULT_PLEXD_URL = '';
 
     /**
+     * Check if a hostname is a local/private network address
+     * Includes localhost, private ranges, and Tailscale CGNAT
+     */
+    function isLocalNetwork(host) {
+        if (!host) return false;
+        // Standard localhost
+        if (['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host)) return true;
+        // Private network ranges
+        if (host.startsWith('192.168.')) return true;
+        if (host.startsWith('10.')) return true;
+        if (host.startsWith('172.')) {
+            // 172.16.0.0 - 172.31.255.255
+            const second = parseInt(host.split('.')[1], 10);
+            if (second >= 16 && second <= 31) return true;
+        }
+        // Tailscale CGNAT range: 100.64.0.0/10 (100.64.x.x - 100.127.x.x)
+        if (host.startsWith('100.')) {
+            const second = parseInt(host.split('.')[1], 10);
+            if (second >= 64 && second <= 127) return true;
+        }
+        return false;
+    }
+
+    /**
      * Initialize popup
      */
     async function init() {
@@ -312,11 +336,11 @@
                 if (!t.url) return false;
                 try {
                     const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                    // For local network addresses, match by port
+                    if (isLocalNetwork(plexdUrlObj.hostname) && isLocalNetwork(tabUrl.hostname)) {
                         return tabUrl.port === plexdUrlObj.port;
                     }
+                    // For public URLs, match by origin
                     return t.url.startsWith(plexdUrlObj.origin);
                 } catch {
                     return false;
@@ -327,6 +351,7 @@
 
             if (plexdTab) {
                 await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                await chrome.windows.update(plexdTab.windowId, { focused: true });
             } else {
                 await chrome.tabs.create({ url: targetUrl });
             }
@@ -378,11 +403,11 @@
                 if (!t.url) return false;
                 try {
                     const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                    // For local network addresses, match by port
+                    if (isLocalNetwork(plexdUrlObj.hostname) && isLocalNetwork(tabUrl.hostname)) {
                         return tabUrl.port === plexdUrlObj.port;
                     }
+                    // For public URLs, match by origin
                     return t.url.startsWith(plexdUrlObj.origin);
                 } catch {
                     return false;
@@ -391,6 +416,7 @@
 
             if (plexdTab) {
                 await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
+                await chrome.windows.update(plexdTab.windowId, { focused: true });
             } else {
                 await chrome.tabs.create({ url: targetUrl });
             }
@@ -430,11 +456,11 @@
                 if (!t.url) return false;
                 try {
                     const tabUrl = new URL(t.url);
-                    const isLocalhost = (host) => ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-                                                   host.startsWith('192.168.') || host.startsWith('10.');
-                    if (isLocalhost(plexdUrlObj.hostname) && isLocalhost(tabUrl.hostname)) {
+                    // For local network addresses, match by port
+                    if (isLocalNetwork(plexdUrlObj.hostname) && isLocalNetwork(tabUrl.hostname)) {
                         return tabUrl.port === plexdUrlObj.port;
                     }
+                    // For public URLs, match by origin
                     return t.url.startsWith(plexdUrlObj.origin);
                 } catch {
                     return false;

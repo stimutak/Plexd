@@ -1611,11 +1611,11 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'Escape':
-                // Escape only handles true fullscreen modes:
+                // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
                 // - true-grid: exit true fullscreen completely
-                // - browser-fill: do nothing (use Z/Enter to exit)
-                // - none: deselect
+                // - browser-fill: exit to grid view
+                // - none: deselect, or reset fullscreen state if something looks stuck
                 {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused') {
@@ -1625,10 +1625,14 @@ const PlexdApp = (function() {
                         // Exit true fullscreen completely
                         PlexdStream.exitTrueFullscreen();
                     } else if (mode === 'browser-fill') {
-                        // Do nothing - use Z/Enter to exit browser-fill mode
+                        // Exit browser-fill mode back to grid
+                        PlexdStream.exitFocusedMode();
                     } else {
-                        // Normal mode - just deselect
+                        // Normal mode - deselect
                         PlexdStream.selectStream(null);
+                        // Also do a defensive cleanup in case state is stuck
+                        // This ensures any lingering fullscreen CSS is removed
+                        PlexdStream.resetFullscreenState();
                     }
                     if (inputEl) inputEl.blur();
                 }

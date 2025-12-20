@@ -1017,19 +1017,46 @@ const PlexdStream = (function() {
      * Exit focused mode back to grid view (stays in true fullscreen if applicable)
      */
     function exitFocusedMode() {
-        if (fullscreenStreamId) {
-            const stream = streams.get(fullscreenStreamId);
-            if (stream) {
+        // Remove fullscreen class from any stream that has it (defensive cleanup)
+        streams.forEach(stream => {
+            if (stream.wrapper.classList.contains('plexd-fullscreen')) {
                 stream.wrapper.classList.remove('plexd-fullscreen');
             }
-            fullscreenStreamId = null;
-        }
+        });
+        fullscreenStreamId = null;
 
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
             fullscreenMode = 'true-grid';
+        } else if (document.fullscreenElement) {
+            // We're in some fullscreen state, go to grid mode
+            fullscreenMode = 'true-grid';
         } else {
             fullscreenMode = 'none';
+        }
+
+        triggerLayoutUpdate();
+    }
+
+    /**
+     * Force reset all fullscreen state (emergency cleanup)
+     * Call this if fullscreen gets stuck
+     */
+    function resetFullscreenState() {
+        console.log('[Plexd] Resetting fullscreen state');
+
+        // Remove fullscreen class from all streams
+        streams.forEach(stream => {
+            stream.wrapper.classList.remove('plexd-fullscreen');
+        });
+
+        // Clear state variables
+        fullscreenStreamId = null;
+        fullscreenMode = 'none';
+
+        // Exit true fullscreen if active
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
         }
 
         triggerLayoutUpdate();
@@ -1149,12 +1176,37 @@ const PlexdStream = (function() {
 
     /**
      * Get fullscreen stream if any (checks both CSS fullscreen and true fullscreen)
+     * Only returns a stream if we're actually in a fullscreen mode
      */
     function getFullscreenStream() {
-        // First check our tracked fullscreen
-        if (fullscreenStreamId) {
-            return streams.get(fullscreenStreamId);
+        // Validate state: if fullscreenMode is 'none', we shouldn't have a fullscreen stream
+        if (fullscreenMode === 'none') {
+            // State cleanup: if we have a stale fullscreenStreamId, clear it
+            if (fullscreenStreamId) {
+                console.log('[Plexd] Cleaning up stale fullscreenStreamId');
+                const stream = streams.get(fullscreenStreamId);
+                if (stream) {
+                    stream.wrapper.classList.remove('plexd-fullscreen');
+                }
+                fullscreenStreamId = null;
+            }
+            return null;
         }
+
+        // Check our tracked fullscreen
+        if (fullscreenStreamId) {
+            const stream = streams.get(fullscreenStreamId);
+            // Verify the stream still exists and has the fullscreen class
+            if (stream && stream.wrapper.classList.contains('plexd-fullscreen')) {
+                return stream;
+            }
+            // State is inconsistent - clean up
+            console.log('[Plexd] Fullscreen state inconsistent, cleaning up');
+            fullscreenStreamId = null;
+            fullscreenMode = 'none';
+            return null;
+        }
+
         // Also check true browser fullscreen element
         if (document.fullscreenElement) {
             const streamId = document.fullscreenElement.dataset?.streamId || document.fullscreenElement.id;
@@ -2491,14 +2543,14 @@ const PlexdStream = (function() {
     // Listen for fullscreen changes (when user exits via browser UI)
     document.addEventListener('fullscreenchange', () => {
         if (!document.fullscreenElement) {
-            // Exited fullscreen - reset mode
-            if (fullscreenStreamId) {
-                const stream = streams.get(fullscreenStreamId);
-                if (stream) {
+            // Exited true fullscreen - clean up all fullscreen state
+            // Remove fullscreen class from all streams (defensive)
+            streams.forEach(stream => {
+                if (stream.wrapper.classList.contains('plexd-fullscreen')) {
                     stream.wrapper.classList.remove('plexd-fullscreen');
                 }
-                fullscreenStreamId = null;
-            }
+            });
+            fullscreenStreamId = null;
             fullscreenMode = 'none';
             triggerLayoutUpdate();
         }
@@ -2524,6 +2576,7 @@ const PlexdStream = (function() {
         exitFocusedMode,
         enterGridFullscreen,
         exitTrueFullscreen,
+        resetFullscreenState,
         pauseAll,
         playAll,
         pauseStream,

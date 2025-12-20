@@ -1378,7 +1378,12 @@ const PlexdStream = (function() {
             // for rating filter/assignment and stream navigation
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
-                // Dispatch to document for app.js to handle
+                // IMPORTANT:
+                // We dispatch a synthetic event to `document` so app-level shortcuts still work
+                // in fullscreen/focused contexts. We MUST stop propagation of the original event
+                // to avoid double-handling (original bubbling + synthetic dispatch).
+                e.stopPropagation();
+                // Dispatch to document for app.js to handle (exactly once)
                 document.dispatchEvent(new KeyboardEvent('keydown', {
                     key: e.key,
                     code: e.code,
@@ -1386,7 +1391,8 @@ const PlexdStream = (function() {
                     ctrlKey: e.ctrlKey,
                     altKey: e.altKey,
                     metaKey: e.metaKey,
-                    bubbles: true
+                    bubbles: true,
+                    cancelable: true
                 }));
                 e.preventDefault();
                 return;
@@ -1725,6 +1731,11 @@ const PlexdStream = (function() {
 
         // Reset error state
         stream.error = null;
+        stream.state = 'loading';
+        // Clear any recovering marker so UI doesn't get "stuck"
+        delete stream.wrapper.dataset.recovering;
+        stream.recovery.isRecovering = false;
+        updateStreamInfo(stream);
 
         // Store current position for restoration after reload
         const savedTime = video.currentTime;
@@ -1751,28 +1762,42 @@ const PlexdStream = (function() {
         }
 
         // Reload the video
-        if (isHlsUrl(url) && Hls.isSupported()) {
-            const hls = new Hls({
-                maxMaxBufferLength: 30,
-                startLevel: -1
-            });
-            hls.loadSource(url);
-            hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                // Restore position for VOD streams after reload
-                if (hasFiniteDuration && savedTime > 0) {
-                    video.currentTime = savedTime;
-                }
-                video.play().catch(() => {});
-            });
-            hls.on(Hls.Events.ERROR, (event, data) => {
-                if (data.fatal) {
-                    stream.error = `HLS Error: ${data.type}`;
-                    updateStreamInfo(stream);
-                }
-            });
+        const hlsSupported = typeof Hls !== 'undefined' && Hls.isSupported && Hls.isSupported();
+        if (isHlsUrl(url) && hlsSupported) {
+            // Use the same robust HLS setup as initial playback (with recovery hooks)
+            const hls = createHlsInstance(stream, url);
+            // Restore position for VOD streams after reload (best-effort)
+            if (hasFiniteDuration && savedTime > 0) {
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    try {
+                        video.currentTime = Math.max(0, savedTime);
+                    } catch (_) {
+                        // Some streams disallow seeking until later; ignore.
+                    }
+                });
+            }
             stream.hls = hls;
+        } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Native HLS (Safari): restore VOD position once metadata is available.
+            if (hasFiniteDuration && savedTime > 0) {
+                video.addEventListener('loadedmetadata', () => {
+                    try {
+                        video.currentTime = Math.max(0, savedTime);
+                    } catch (_) {}
+                }, { once: true });
+            }
+            video.src = url;
+            video.load();
+            video.play().catch(() => {});
         } else {
+            // Regular media: restore VOD position once metadata is available.
+            if (hasFiniteDuration && savedTime > 0) {
+                video.addEventListener('loadedmetadata', () => {
+                    try {
+                        video.currentTime = Math.max(0, savedTime);
+                    } catch (_) {}
+                }, { once: true });
+            }
             video.src = url;
             video.load();
             video.play().catch(() => {});

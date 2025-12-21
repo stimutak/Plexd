@@ -265,6 +265,11 @@ const PlexdApp = (function() {
         // Set up header toggle button
         setupHeaderToggle();
 
+        // Sync audio focus UI to actual state
+        if (PlexdStream.getAudioFocusMode) {
+            updateAudioFocusButton(PlexdStream.getAudioFocusMode());
+        }
+
         // Set up ratings callback
         PlexdStream.setRatingsUpdateCallback(updateRatingsUI);
         updateRatingsUI();
@@ -654,10 +659,7 @@ const PlexdApp = (function() {
                 updateQueueUI();
                 showMessage(`Queued ${queuedCount} video(s)`, 'success');
                 // Open queue panel to show the newly added items
-                const queuePanel = document.getElementById('queue-panel');
-                if (queuePanel && !queuePanel.classList.contains('plexd-panel-open')) {
-                    queuePanel.classList.add('plexd-panel-open');
-                }
+                openPanel('queue-panel');
             }
         }
 
@@ -851,23 +853,23 @@ const PlexdApp = (function() {
                 stream.wrapper.style.display = '';
                 // Resume playback for all streams when viewing all (if not globally paused)
                 // Only resume streams we auto-paused for filtering (so we don't override user pauses).
-                if (!isGloballyPaused && stream._plexdAutoPaused) {
+                if (!isGloballyPaused && stream._plexdAutoPausedForFilter) {
                     PlexdStream.resumeStream(stream.id);
-                    stream._plexdAutoPaused = false;
+                    stream._plexdAutoPausedForFilter = false;
                 }
             } else {
                 const rating = PlexdStream.getRating(stream.url);
                 const isVisible = (rating === viewMode);
                 stream.wrapper.style.display = isVisible ? '' : 'none';
                 // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
-                if (isVisible && !isGloballyPaused && stream._plexdAutoPaused) {
+                if (isVisible && !isGloballyPaused && stream._plexdAutoPausedForFilter) {
                     PlexdStream.resumeStream(stream.id);
-                    stream._plexdAutoPaused = false;
+                    stream._plexdAutoPausedForFilter = false;
                 } else if (!isVisible) {
                     // Mark as auto-paused only if it was actually playing.
                     // This lets us resume it later without overriding user-intended pauses.
                     if (stream.video && !stream.video.paused) {
-                        stream._plexdAutoPaused = true;
+                        stream._plexdAutoPausedForFilter = true;
                     }
                     PlexdStream.pauseStream(stream.id);
                 }
@@ -1113,10 +1115,24 @@ const PlexdApp = (function() {
      * Toggle audio focus mode
      */
     function toggleAudioFocus() {
-        const mode = PlexdStream.toggleAudioFocus();
+        const enabled = PlexdStream.toggleAudioFocus();
+        updateAudioFocusButton(enabled);
+        showMessage(`Audio focus: ${enabled ? 'ON' : 'OFF'}`, 'info');
+    }
+
+    /**
+     * Update audio focus button to reflect actual state.
+     * Audio focus ON = unmuting one stream mutes the others.
+     */
+    function updateAudioFocusButton(enabled) {
         const btn = document.getElementById('audio-focus-btn');
-        if (btn) btn.classList.toggle('active', mode !== 'off');
-        showMessage(`Audio focus: ${mode}`, 'info');
+        if (!btn) return;
+        btn.classList.toggle('active', !!enabled);
+        // Keep icon compact, but make state obvious.
+        btn.textContent = enabled ? '🎧' : '🔈';
+        btn.title = enabled
+            ? 'Audio focus: ON (unmuting one mutes others)'
+            : 'Audio focus: OFF (streams can be unmuted independently)';
     }
 
     /**
@@ -1663,8 +1679,11 @@ const PlexdApp = (function() {
                 break;
             case 'a':
             case 'A':
-                const audioFocus = PlexdStream.toggleAudioFocus();
-                showMessage(`Audio focus: ${audioFocus ? 'ON' : 'OFF'}`, 'info');
+                {
+                    const audioFocus = PlexdStream.toggleAudioFocus();
+                    updateAudioFocusButton(audioFocus);
+                    showMessage(`Audio focus: ${audioFocus ? 'ON' : 'OFF'}`, 'info');
+                }
                 break;
             case 'i':
             case 'I':
@@ -3315,8 +3334,34 @@ const PlexdApp = (function() {
     function togglePanel(panelId) {
         const panel = document.getElementById(panelId);
         if (panel) {
+            const willOpen = !panel.classList.contains('plexd-panel-open');
+            if (willOpen) {
+                // Panels are mutually exclusive for a clean UX.
+                // When one opens, close the others.
+                ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel'].forEach(id => {
+                    if (id !== panelId) {
+                        const other = document.getElementById(id);
+                        if (other) other.classList.remove('plexd-panel-open');
+                    }
+                });
+            }
             panel.classList.toggle('plexd-panel-open');
         }
+    }
+
+    /**
+     * Open a panel and close other mutually-exclusive panels.
+     */
+    function openPanel(panelId) {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel'].forEach(id => {
+            if (id !== panelId) {
+                const other = document.getElementById(id);
+                if (other) other.classList.remove('plexd-panel-open');
+            }
+        });
+        panel.classList.add('plexd-panel-open');
     }
 
     // ========================================
@@ -3506,6 +3551,7 @@ const PlexdApp = (function() {
         // History
         clearHistory,
         togglePanel,
+        openPanel,
         // Streams panel
         selectAndFocusStream,
         closeStreamFromPanel,

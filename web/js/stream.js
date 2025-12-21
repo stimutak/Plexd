@@ -27,10 +27,19 @@ const PlexdStream = (function() {
     // Current grid layout for navigation
     let gridCols = 1;
 
-    // Ratings map - stores stream URL -> rating (1-9, 0 = not rated)
-    // For blob URLs (local files), also stores fileName -> rating for persistence
+    // Ratings map - stores stream URL -> rating slot (1-9, 0 = unrated)
+    // For blob URLs (local files), also stores fileName -> rating for persistence across sessions
     const ratings = new Map();
     const fileNameRatings = new Map(); // fileName -> rating for blob URLs
+
+    /**
+     * Clamp rating slot to 0-9.
+     */
+    function clampRatingSlot(rating) {
+        rating = Number(rating);
+        if (!Number.isFinite(rating)) return 0;
+        return Math.max(0, Math.min(9, Math.trunc(rating)));
+    }
 
     // ===== STREAM RECOVERY CONFIGURATION =====
     const RECOVERY_CONFIG = {
@@ -1012,6 +1021,8 @@ const PlexdStream = (function() {
                     resumeStream(id);
                     s._plexdAutoPausedForFocus = false;
                 }
+                // If we previously downgraded HLS quality for this stream, restore it now.
+                restoreHlsQualityIfNeeded(s);
                 return;
             }
 
@@ -1020,10 +1031,17 @@ const PlexdStream = (function() {
                 return;
             }
 
-            // Only auto-pause if it was actually playing (so we can safely resume later).
-            if (s.video && !s.video.paused) {
-                s._plexdAutoPausedForFocus = true;
-                pauseStream(id);
+            // Resource strategy:
+            // - For live/HLS streams, pausing often causes a "restart" on resume (jump to live edge),
+            //   so we avoid pausing and instead *deprioritize* by forcing low quality on HLS.js.
+            // - For finite-duration VOD/local files, pausing is safe and saves CPU/GPU.
+            if (isSafeToAutoPauseForResources(s)) {
+                if (s.video && !s.video.paused) {
+                    s._plexdAutoPausedForFocus = true;
+                    pauseStream(id);
+                }
+            } else {
+                downgradeHlsQualityIfPossible(s);
             }
         });
     }
@@ -1038,6 +1056,9 @@ const PlexdStream = (function() {
         if (globalPaused) return;
 
         streams.forEach((s, id) => {
+            // Restore any HLS quality downgrades we applied during focus.
+            restoreHlsQualityIfNeeded(s);
+
             if (!s._plexdAutoPausedForFocus) return;
             // Don't resume streams that are currently hidden by filtering.
             if (s.wrapper && s.wrapper.style && s.wrapper.style.display === 'none') {
@@ -1050,6 +1071,88 @@ const PlexdStream = (function() {
             }
             s._plexdAutoPausedForFocus = false;
         });
+    }
+
+    /**
+     * Determine if we can safely auto-pause a stream without it "restarting" on resume.
+     * We consider local file blobs and finite-duration media safe.
+     * We consider HLS/live/infinite-duration media unsafe to auto-pause.
+     */
+    function isSafeToAutoPauseForResources(stream) {
+        if (!stream) return false;
+        if (stream.url && stream.url.startsWith('blob:')) return true;
+
+        // HLS streams and common live endpoints are generally unsafe to pause/resume without jumps.
+        if (stream.hls || isHlsUrl(stream.url)) return false;
+
+        const video = stream.video;
+        if (!video) return false;
+
+        const d = video.duration;
+        if (d && Number.isFinite(d) && d > 0) {
+            return true; // VOD-ish
+        }
+
+        // Unknown duration: err on the side of not pausing (avoids unwanted restarts).
+        return false;
+    }
+
+    /**
+     * Downgrade HLS.js quality for a stream (best-effort), to save resources without pausing.
+     * We persist previous state so it can be restored.
+     */
+    function downgradeHlsQualityIfPossible(stream) {
+        if (!stream || !stream.hls) return;
+        if (stream._plexdHlsQualityDowngraded) return;
+
+        try {
+            stream._plexdPrevHlsAutoLevelEnabled = stream.hls.autoLevelEnabled;
+            stream._plexdPrevHlsCurrentLevel = stream.hls.currentLevel;
+            // Force lowest quality; keep it stable while unfocused.
+            stream.hls.autoLevelEnabled = false;
+            stream.hls.currentLevel = 0;
+            stream._plexdHlsQualityDowngraded = true;
+        } catch (_) {
+            // Best-effort only.
+        }
+    }
+
+    /**
+     * Restore HLS.js quality settings if we previously downgraded them.
+     */
+    function restoreHlsQualityIfNeeded(stream) {
+        if (!stream || !stream.hls || !stream._plexdHlsQualityDowngraded) return;
+
+        try {
+            if (typeof stream._plexdPrevHlsAutoLevelEnabled === 'boolean') {
+                stream.hls.autoLevelEnabled = stream._plexdPrevHlsAutoLevelEnabled;
+            } else {
+                stream.hls.autoLevelEnabled = true;
+            }
+
+            if (typeof stream._plexdPrevHlsCurrentLevel === 'number') {
+                stream.hls.currentLevel = stream._plexdPrevHlsCurrentLevel;
+            } else {
+                // -1 = auto in HLS.js
+                stream.hls.currentLevel = -1;
+            }
+        } catch (_) {
+            // Best-effort only.
+        } finally {
+            delete stream._plexdPrevHlsAutoLevelEnabled;
+            delete stream._plexdPrevHlsCurrentLevel;
+            stream._plexdHlsQualityDowngraded = false;
+        }
+    }
+
+    /**
+     * Toggle a global app CSS class used to prevent "hover bleed-through"
+     * from streams behind the focused/fullscreen stream.
+     */
+    function setAppFocusedMode(isFocused) {
+        const app = document.querySelector('.plexd-app');
+        if (!app) return;
+        app.classList.toggle('plexd-focused-mode', !!isFocused);
     }
 
     /**
@@ -1067,15 +1170,13 @@ const PlexdStream = (function() {
         }
 
         if (fullscreenStreamId === streamId) {
-        // Exit fullscreen
-        stream.wrapper.classList.remove('plexd-fullscreen');
-        fullscreenStreamId = null;
-        fullscreenMode = 'none';
-        // Remove focused mode class
-        const app = document.querySelector('.plexd-app');
-        if (app) app.classList.remove('plexd-focused-mode');
-        // Resource saving: resume streams that were auto-paused for focus
-        clearFocusResourcePolicy();
+            // Exit fullscreen
+            stream.wrapper.classList.remove('plexd-fullscreen');
+            fullscreenStreamId = null;
+            fullscreenMode = 'none';
+            setAppFocusedMode(false);
+            // Resource saving: resume streams that were auto-paused for focus
+            clearFocusResourcePolicy();
             // Also exit true fullscreen if active
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -1088,15 +1189,14 @@ const PlexdStream = (function() {
                     prevStream.wrapper.classList.remove('plexd-fullscreen');
                 }
             }
-        // Enter fullscreen
-        stream.wrapper.classList.add('plexd-fullscreen');
-        fullscreenStreamId = streamId;
-        fullscreenMode = 'browser-fill';
-        // Add focused mode class to app for CSS targeting
-        const app = document.querySelector('.plexd-app');
-        if (app) app.classList.add('plexd-focused-mode');
-        // Resource saving: pause other streams while focused
-        applyFocusResourcePolicy(streamId);
+
+            // Enter fullscreen
+            stream.wrapper.classList.add('plexd-fullscreen');
+            fullscreenStreamId = streamId;
+            fullscreenMode = 'browser-fill';
+            setAppFocusedMode(true);
+            // Resource saving: pause other streams while focused
+            applyFocusResourcePolicy(streamId);
         }
         triggerLayoutUpdate();
     }
@@ -1124,6 +1224,7 @@ const PlexdStream = (function() {
         // Apply CSS fullscreen to this stream
         stream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = streamId;
+        setAppFocusedMode(true);
 
         // If we're in true fullscreen grid mode, switch to focused mode
         if (document.fullscreenElement) {
@@ -1157,6 +1258,7 @@ const PlexdStream = (function() {
             }
         });
         fullscreenStreamId = null;
+        setAppFocusedMode(false);
 
         // Remove focused mode class
         const app = document.querySelector('.plexd-app');
@@ -1193,6 +1295,7 @@ const PlexdStream = (function() {
         // Clear state variables
         fullscreenStreamId = null;
         fullscreenMode = 'none';
+        setAppFocusedMode(false);
 
         // Resource saving: resume streams that were auto-paused for focus
         clearFocusResourcePolicy();
@@ -1229,6 +1332,7 @@ const PlexdStream = (function() {
                 stream.wrapper.classList.add('plexd-fullscreen');
                 fullscreenStreamId = streamId;
             }
+            setAppFocusedMode(true);
 
             // Request true fullscreen on the stream
             stream.wrapper.requestFullscreen().then(() => {
@@ -1264,12 +1368,18 @@ const PlexdStream = (function() {
                 stream.wrapper.classList.remove('plexd-fullscreen');
             }
             fullscreenStreamId = null;
+            setAppFocusedMode(false);
             // Returning to grid: resume anything we auto-paused for focus
             clearFocusResourcePolicy();
         }
 
+        // Ensure the fullscreen container can hold focus for keyboard shortcuts.
+        // (Some browsers/iPad Safari behave better when the fullscreen element is focusable.)
+        container.tabIndex = 0;
+
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-grid';
+            container.focus();
             triggerLayoutUpdate();
         }).catch(err => {
             console.log('Grid fullscreen request failed:', err);
@@ -1292,6 +1402,7 @@ const PlexdStream = (function() {
                 fullscreenStreamId = null;
             }
             fullscreenMode = 'none';
+            setAppFocusedMode(false);
             triggerLayoutUpdate();
         }).catch(() => {
             // Fallback
@@ -1303,6 +1414,7 @@ const PlexdStream = (function() {
                 fullscreenStreamId = null;
             }
             fullscreenMode = 'none';
+            setAppFocusedMode(false);
             triggerLayoutUpdate();
         });
     }
@@ -2094,162 +2206,162 @@ const PlexdStream = (function() {
         return stream && stream.url && stream.url.startsWith('blob:');
     }
 
+    // =====================================================================
+    // Spatial Navigation (Arrow Keys) - robust across Tetris/overlaps
+    // =====================================================================
+
+    /**
+     * Get streams included in navigation, respecting current view mode filter,
+     * and excluding streams that are not currently visible (display: none).
+     */
+    function getNavigableStreams() {
+        const viewMode = window._plexdViewMode || 'all';
+        let list;
+        if (viewMode === 'all') {
+            list = Array.from(streams.values());
+        } else {
+            list = getStreamsByRating(viewMode);
+        }
+
+        return list.filter(s => {
+            if (!s.wrapper) return false;
+            if (s.wrapper.style && s.wrapper.style.display === 'none') return false;
+            const rect = s.wrapper.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        });
+    }
+
+    /**
+     * Build row groups from DOM positions (row-major ordering).
+     * Rows are clustered by Y center with a tolerance derived from median height.
+     */
+    function buildSpatialRows(navigable) {
+        const items = navigable.map(s => {
+            // Prefer the layout engine's absolute positioning (stable even when a stream is fullscreen),
+            // and fall back to DOM rects if styles aren't available yet.
+            const styleLeft = parseFloat(s.wrapper.style.left);
+            const styleTop = parseFloat(s.wrapper.style.top);
+            const styleWidth = parseFloat(s.wrapper.style.width);
+            const styleHeight = parseFloat(s.wrapper.style.height);
+
+            const hasStyleRect =
+                Number.isFinite(styleLeft) &&
+                Number.isFinite(styleTop) &&
+                Number.isFinite(styleWidth) &&
+                Number.isFinite(styleHeight) &&
+                styleWidth > 0 &&
+                styleHeight > 0;
+
+            const r = hasStyleRect
+                ? { left: styleLeft, top: styleTop, width: styleWidth, height: styleHeight }
+                : s.wrapper.getBoundingClientRect();
+
+            return {
+                stream: s,
+                id: s.id,
+                cx: r.left + r.width / 2,
+                cy: r.top + r.height / 2,
+                h: r.height
+            };
+        });
+
+        items.sort((a, b) => (a.cy - b.cy) || (a.cx - b.cx));
+
+        const heights = items.map(i => i.h).sort((a, b) => a - b);
+        const medianH = heights.length ? heights[Math.floor(heights.length / 2)] : 0;
+        const tol = Math.max(20, Math.min(120, medianH * 0.6));
+
+        const rows = [];
+        for (const it of items) {
+            const lastRow = rows[rows.length - 1];
+            if (!lastRow) {
+                rows.push({ cy: it.cy, items: [it] });
+                continue;
+            }
+
+            if (Math.abs(it.cy - lastRow.cy) <= tol) {
+                lastRow.cy = (lastRow.cy * lastRow.items.length + it.cy) / (lastRow.items.length + 1);
+                lastRow.items.push(it);
+            } else {
+                rows.push({ cy: it.cy, items: [it] });
+            }
+        }
+
+        for (const row of rows) {
+            row.items.sort((a, b) => a.cx - b.cx);
+        }
+
+        return rows;
+    }
+
+    /**
+     * Get the next stream id in a direction based on spatial layout.
+     * - Right/Left: strict row-major cycling through every visible clip (wraps).
+     * - Up/Down: nearest X in the previous/next row (wraps rows).
+     */
+    function getSpatialNeighborStreamId(currentStreamId, direction) {
+        const navigable = getNavigableStreams();
+        if (navigable.length === 0) return null;
+        if (navigable.length === 1) return navigable[0].id;
+
+        const rows = buildSpatialRows(navigable);
+        const flat = rows.flatMap(r => r.items);
+
+        const currentIdx = flat.findIndex(it => it.id === currentStreamId);
+        const idx = currentIdx === -1 ? 0 : currentIdx;
+        const current = flat[idx];
+
+        if (direction === 'right' || direction === 'left') {
+            const delta = direction === 'right' ? 1 : -1;
+            const nextIdx = (idx + delta + flat.length) % flat.length;
+            return flat[nextIdx].id;
+        }
+
+        // Up/down: find current row
+        let rowIndex = 0;
+        for (let r = 0; r < rows.length; r++) {
+            if (rows[r].items.some(it => it.id === current.id)) {
+                rowIndex = r;
+                break;
+            }
+        }
+
+        const rowDelta = direction === 'down' ? 1 : -1;
+        const targetRowIndex = (rowIndex + rowDelta + rows.length) % rows.length;
+        const targetRow = rows[targetRowIndex].items;
+        if (!targetRow || targetRow.length === 0) return current.id;
+
+        let best = targetRow[0];
+        let bestDist = Math.abs(best.cx - current.cx);
+        for (const it of targetRow) {
+            const d = Math.abs(it.cx - current.cx);
+            if (d < bestDist) {
+                best = it;
+                bestDist = d;
+            }
+        }
+        return best.id;
+    }
+
     /**
      * Select next stream in grid order (respects visual grid layout and view mode filter)
      * Uses actual DOM positions for accurate navigation, even with Tetris/coverflow layouts
      * When viewMode is 'all', includes all streams (both remote and local files)
      */
     function selectNextStream(direction = 'right') {
-        // Respect current view mode filter
-        const viewMode = window._plexdViewMode || 'all';
-        let streamList;
-        if (viewMode === 'all') {
-            // Include ALL streams - both remote and local files
-            streamList = Array.from(streams.keys());
-        } else {
-            // Get only streams with the current rating filter
-            const filteredStreams = getStreamsByRating(viewMode);
-            streamList = filteredStreams.map(s => s.id);
-        }
+        const navigable = getNavigableStreams();
+        if (navigable.length === 0) return;
 
-        const count = streamList.length;
-        if (count === 0) return;
+        const currentId = (selectedStreamId && streams.has(selectedStreamId)) ? selectedStreamId : navigable[0].id;
+        const nextId = getSpatialNeighborStreamId(currentId, direction) || navigable[0].id;
+        selectStream(nextId);
 
-        if (!selectedStreamId || !streamList.includes(selectedStreamId)) {
-            selectStream(streamList[0]);
-            return;
-        }
-
-        // Get actual DOM positions for all streams (respects Tetris/coverflow layouts)
-        const streamPositions = streamList.map(id => {
-            const stream = streams.get(id);
-            if (!stream || !stream.wrapper) return null;
-            const rect = stream.wrapper.getBoundingClientRect();
-            return {
-                id,
-                x: rect.left + rect.width / 2,  // Center X
-                y: rect.top + rect.height / 2,  // Center Y
-                left: rect.left,
-                right: rect.right,
-                top: rect.top,
-                bottom: rect.bottom
-            };
-        }).filter(p => p !== null);
-
-        if (streamPositions.length === 0) return;
-
-        // Find current stream position
-        const currentPos = streamPositions.find(p => p.id === selectedStreamId);
-        if (!currentPos) {
-            selectStream(streamPositions[0].id);
-            return;
-        }
-
-        // Find next stream based on actual spatial position
-        let nextPos = null;
-        let minDistance = Infinity;
-
-        switch (direction) {
-            case 'right':
-                // Find stream to the right (higher X, similar Y)
-                streamPositions.forEach(pos => {
-                    if (pos.id === currentPos.id) return;
-                    const dx = pos.x - currentPos.x;
-                    const dy = Math.abs(pos.y - currentPos.y);
-                    // Prefer streams to the right (dx > 0), with similar Y
-                    if (dx > 0 && dy < currentPos.bottom - currentPos.top) {
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance < minDistance) {
-                            minDistance = distance;
-                            nextPos = pos;
-                        }
-                    }
-                });
-                // If nothing found to the right, wrap to leftmost stream
-                if (!nextPos) {
-                    const leftmost = streamPositions.reduce((min, p) => 
-                        p.x < min.x ? p : min, streamPositions[0]);
-                    nextPos = leftmost;
-                }
-                break;
-
-            case 'left':
-                // Find stream to the left (lower X, similar Y)
-                streamPositions.forEach(pos => {
-                    if (pos.id === currentPos.id) return;
-                    const dx = currentPos.x - pos.x;
-                    const dy = Math.abs(pos.y - currentPos.y);
-                    // Prefer streams to the left (dx > 0 means pos is left), with similar Y
-                    if (dx > 0 && dy < currentPos.bottom - currentPos.top) {
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance < minDistance) {
-                            minDistance = distance;
-                            nextPos = pos;
-                        }
-                    }
-                });
-                // If nothing found to the left, wrap to rightmost stream
-                if (!nextPos) {
-                    const rightmost = streamPositions.reduce((max, p) => 
-                        p.x > max.x ? p : max, streamPositions[0]);
-                    nextPos = rightmost;
-                }
-                break;
-
-            case 'down':
-                // Find stream below (higher Y, similar X)
-                streamPositions.forEach(pos => {
-                    if (pos.id === currentPos.id) return;
-                    const dy = pos.y - currentPos.y;
-                    const dx = Math.abs(pos.x - currentPos.x);
-                    // Prefer streams below (dy > 0), with similar X
-                    if (dy > 0 && dx < currentPos.right - currentPos.left) {
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance < minDistance) {
-                            minDistance = distance;
-                            nextPos = pos;
-                        }
-                    }
-                });
-                // If nothing found below, wrap to topmost stream
-                if (!nextPos) {
-                    const topmost = streamPositions.reduce((min, p) => 
-                        p.y < min.y ? p : min, streamPositions[0]);
-                    nextPos = topmost;
-                }
-                break;
-
-            case 'up':
-                // Find stream above (lower Y, similar X)
-                streamPositions.forEach(pos => {
-                    if (pos.id === currentPos.id) return;
-                    const dy = currentPos.y - pos.y;
-                    const dx = Math.abs(pos.x - currentPos.x);
-                    // Prefer streams above (dy > 0 means pos is above), with similar X
-                    if (dy > 0 && dx < currentPos.right - currentPos.left) {
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance < minDistance) {
-                            minDistance = distance;
-                            nextPos = pos;
-                        }
-                    }
-                });
-                // If nothing found above, wrap to bottommost stream
-                if (!nextPos) {
-                    const bottommost = streamPositions.reduce((max, p) => 
-                        p.y > max.y ? p : max, streamPositions[0]);
-                    nextPos = bottommost;
-                }
-                break;
-        }
-
-        if (nextPos) {
-            selectStream(nextPos.id);
-            // Maintain keyboard focus
-            const newStream = streams.get(nextPos.id);
-            if (newStream && newStream.wrapper) {
-                newStream.wrapper.focus();
-            }
+        // Maintain keyboard focus on the newly selected stream
+        // This ensures arrow keys continue to work after navigation
+        const newStream = streams.get(nextId);
+        if (newStream && newStream.wrapper) {
+            // Focus the wrapper to maintain keyboard control
+            newStream.wrapper.focus();
         }
     }
 
@@ -2444,7 +2556,7 @@ const PlexdStream = (function() {
         const stream = streams.get(streamId);
         if (!stream) return 0;
 
-        const currentRating = ratings.get(stream.url) || 0;
+        const currentRating = getRating(stream.url, stream.fileName);
         const newRating = (currentRating + 1) % 10; // 0, 1, 2, ..., 9, 0...
 
         setRating(streamId, newRating);
@@ -2460,13 +2572,16 @@ const PlexdStream = (function() {
         if (!stream) return;
 
         // Clamp rating 0-9
-        rating = Math.max(0, Math.min(9, rating));
+        rating = clampRatingSlot(rating);
+
+        const urlKey = stream.url;
+        if (!urlKey) return;
 
         // Store by URL (for remote streams)
         if (rating === 0) {
-            ratings.delete(stream.url);
+            ratings.delete(urlKey);
         } else {
-            ratings.set(stream.url, rating);
+            ratings.set(urlKey, rating);
         }
 
         // For blob URLs (local files), also store by fileName for persistence
@@ -2508,13 +2623,7 @@ const PlexdStream = (function() {
      * Update rating button and indicator appearance
      */
     function updateRatingDisplay(stream) {
-        // Get rating - for blob URLs, check fileName first
-        let rating = 0;
-        if (stream.url && stream.url.startsWith('blob:') && stream.fileName) {
-            rating = fileNameRatings.get(stream.fileName) || ratings.get(stream.url) || 0;
-        } else {
-            rating = ratings.get(stream.url) || 0;
-        }
+        const rating = getRating(stream.url, stream.fileName);
 
         // Update button - show ★N format to keep it compact
         const ratingBtn = stream.controls.querySelector('.plexd-rating-btn');
@@ -2546,6 +2655,18 @@ const PlexdStream = (function() {
      * For blob URLs, checks fileName first, then URL
      */
     function getRating(url, fileName) {
+        if (!url) return 0;
+
+        // If caller didn't provide fileName for a blob URL, try to infer it from active streams.
+        if (!fileName && url.startsWith('blob:')) {
+            for (const s of streams.values()) {
+                if (s.url === url && s.fileName) {
+                    fileName = s.fileName;
+                    break;
+                }
+            }
+        }
+
         // For blob URLs, check fileName first (stable identifier)
         if (fileName && url && url.startsWith('blob:')) {
             const fileNameRating = fileNameRatings.get(fileName);
@@ -2562,17 +2683,8 @@ const PlexdStream = (function() {
      * Checks both URL-based and fileName-based ratings
      */
     function getStreamsByRating(rating) {
-        return Array.from(streams.values()).filter(s => {
-            // For blob URLs, check fileName first
-            if (s.url && s.url.startsWith('blob:') && s.fileName) {
-                const fileNameRating = fileNameRatings.get(s.fileName);
-                if (fileNameRating !== undefined) {
-                    return fileNameRating === rating;
-                }
-            }
-            // Fall back to URL-based rating
-            return (ratings.get(s.url) || 0) === rating;
-        });
+        rating = clampRatingSlot(rating);
+        return Array.from(streams.values()).filter(s => getRating(s.url, s.fileName) === rating);
     }
 
     /**
@@ -2581,12 +2693,7 @@ const PlexdStream = (function() {
      */
     function getRatedStreams() {
         return Array.from(streams.values()).filter(s => {
-            // For blob URLs, check fileName first
-            if (s.url && s.url.startsWith('blob:') && s.fileName) {
-                if (fileNameRatings.has(s.fileName)) return true;
-            }
-            // Fall back to URL-based rating
-            return ratings.has(s.url);
+            return getRating(s.url, s.fileName) > 0;
         });
     }
 
@@ -2595,13 +2702,10 @@ const PlexdStream = (function() {
      * Checks both URL-based and fileName-based ratings
      */
     function getRatingCount(rating) {
+        rating = clampRatingSlot(rating);
         if (rating === 0) {
             return Array.from(streams.values()).filter(s => {
-                // For blob URLs, check fileName first
-                if (s.url && s.url.startsWith('blob:') && s.fileName) {
-                    return !fileNameRatings.has(s.fileName) && !ratings.has(s.url);
-                }
-                return !ratings.has(s.url);
+                return getRating(s.url, s.fileName) === 0;
             }).length;
         }
         return getStreamsByRating(rating).length;
@@ -2611,10 +2715,10 @@ const PlexdStream = (function() {
      * Get all rating counts
      */
     function getAllRatingCounts() {
-        const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 };
         streams.forEach(stream => {
-            const rating = ratings.get(stream.url) || 0;
-            counts[rating]++;
+            const rating = getRating(stream.url, stream.fileName);
+            counts[rating] = (counts[rating] || 0) + 1;
         });
         return counts;
     }
@@ -2626,30 +2730,30 @@ const PlexdStream = (function() {
      * @returns {number} Number of streams that were assigned ratings
      */
     function distributeRatingsEvenly() {
-        // Get all unrated streams (check both URL and fileName for blob URLs)
-        const unratedStreams = Array.from(streams.values()).filter(s => {
-            // For blob URLs, check fileName first
-            if (s.url && s.url.startsWith('blob:') && s.fileName) {
-                return !fileNameRatings.has(s.fileName) && !ratings.has(s.url);
-            }
-            // For remote URLs, check URL-based rating
-            return !ratings.has(s.url);
-        });
+        // Auto-assign slots 1-9 only when a stream has no saved slot yet.
+        // We balance across 1..9 (slot 0 remains "unrated").
+        const unratedStreams = Array.from(streams.values()).filter(s => getRating(s.url, s.fileName) === 0);
 
         if (unratedStreams.length === 0) {
             return 0;
         }
 
-        // Shuffle the unrated streams for random distribution
-        for (let i = unratedStreams.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [unratedStreams[i], unratedStreams[j]] = [unratedStreams[j], unratedStreams[i]];
-        }
+        const counts = getAllRatingCounts();
 
-        // Assign ratings 1-9 in round-robin fashion for equal distribution
-        unratedStreams.forEach((stream, index) => {
-            const rating = (index % 9) + 1; // 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3...
-            setRating(stream.id, rating);
+        // Deterministic balancing: always choose the currently least-populated slot.
+        // Tie-breaker: smallest slot number.
+        unratedStreams.forEach((stream) => {
+            let bestSlot = 1;
+            let bestCount = Number.POSITIVE_INFINITY;
+            for (let slot = 1; slot <= 9; slot++) {
+                const c = counts[slot] || 0;
+                if (c < bestCount) {
+                    bestCount = c;
+                    bestSlot = slot;
+                }
+            }
+            setRating(stream.id, bestSlot);
+            counts[bestSlot] = (counts[bestSlot] || 0) + 1;
         });
 
         return unratedStreams.length;
@@ -2686,7 +2790,7 @@ const PlexdStream = (function() {
             const obj = JSON.parse(saved);
             ratings.clear();
             Object.keys(obj).forEach(url => {
-                ratings.set(url, obj[url]);
+                ratings.set(url, clampRatingSlot(obj[url]));
             });
         }
 
@@ -2706,7 +2810,7 @@ const PlexdStream = (function() {
             const urls = JSON.parse(oldFavorites);
             urls.forEach(url => {
                 if (!ratings.has(url)) {
-                    ratings.set(url, 5); // Migrate favorites to 5-star
+                    ratings.set(url, 5); // Migrate favorites to slot 5
                 }
             });
             // Remove old format after migration
@@ -2728,21 +2832,13 @@ const PlexdStream = (function() {
      */
     function syncRatingStatus() {
         streams.forEach(stream => {
-            // Get rating - for blob URLs, check fileName first
-            let rating = 0;
-            if (stream.url && stream.url.startsWith('blob:') && stream.fileName) {
-                rating = fileNameRatings.get(stream.fileName) || ratings.get(stream.url) || 0;
-            } else {
-                rating = ratings.get(stream.url) || 0;
-            }
+            const rating = getRating(stream.url, stream.fileName);
 
-            if (rating) {
-                for (let i = 1; i <= 9; i++) {
-                    stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);
-                }
-                stream.wrapper.classList.add('plexd-rated');
-                updateRatingDisplay(stream);
+            for (let i = 1; i <= 9; i++) {
+                stream.wrapper.classList.toggle(`plexd-rated-${i}`, rating === i);
             }
+            stream.wrapper.classList.toggle('plexd-rated', rating > 0);
+            updateRatingDisplay(stream);
         });
     }
 
@@ -2937,6 +3033,7 @@ const PlexdStream = (function() {
             });
             fullscreenStreamId = null;
             fullscreenMode = 'none';
+            setAppFocusedMode(false);
             // Resource saving: resume streams that were auto-paused for focus
             clearFocusResourcePolicy();
             triggerLayoutUpdate();
@@ -2983,6 +3080,8 @@ const PlexdStream = (function() {
         selectStream,
         getSelectedStream,
         selectNextStream,
+        // Spatial navigation helper (used by app.js for focused mode switching)
+        getSpatialNeighborStreamId,
         setGridCols,
         getGridCols,
         reorderStreams,

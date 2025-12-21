@@ -590,6 +590,9 @@ body {
     height: 100vh !important;
     z-index: 9999;
     background: #000;
+    /* Ensure previous layout transforms (coverflow) can't leak into fullscreen */
+    transform: none !important;
+    opacity: 1 !important;
 }
 
 .plexd-stream.plexd-fullscreen .plexd-controls {
@@ -615,6 +618,21 @@ body {
     width: 40px;
     height: 40px;
     font-size: 18px;
+}
+
+/* Focused mode: prevent controls/hover bleeding from streams "behind" fullscreen */
+.plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) {
+    pointer-events: none !important;
+}
+
+.plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-controls {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+.plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-rating-indicator {
+    opacity: 0 !important;
+    pointer-events: none !important;
 }
 
 /* ========================================
@@ -1029,6 +1047,10 @@ body {
 .plexd-stream-rating.rated-3 { color: #eab308; }
 .plexd-stream-rating.rated-4 { color: #84cc16; }
 .plexd-stream-rating.rated-5 { color: #22c55e; }
+.plexd-stream-rating.rated-6 { color: #06b6d4; }
+.plexd-stream-rating.rated-7 { color: #3b82f6; }
+.plexd-stream-rating.rated-8 { color: #8b5cf6; }
+.plexd-stream-rating.rated-9 { color: #ec4899; }
 
 .plexd-stream-actions {
     display: flex;
@@ -1438,6 +1460,10 @@ body {
 .plexd-rating-indicator.rated-3 { color: #eab308; }
 .plexd-rating-indicator.rated-4 { color: #84cc16; }
 .plexd-rating-indicator.rated-5 { color: #22c55e; }
+.plexd-rating-indicator.rated-6 { color: #06b6d4; }
+.plexd-rating-indicator.rated-7 { color: #3b82f6; }
+.plexd-rating-indicator.rated-8 { color: #8b5cf6; }
+.plexd-rating-indicator.rated-9 { color: #ec4899; }
 
 /* Rating button in controls */
 .plexd-btn.plexd-rating-btn {
@@ -1455,6 +1481,10 @@ body {
 .plexd-btn.plexd-rating-btn.rated-3 { color: #eab308; }
 .plexd-btn.plexd-rating-btn.rated-4 { color: #84cc16; }
 .plexd-btn.plexd-rating-btn.rated-5 { color: #22c55e; }
+.plexd-btn.plexd-rating-btn.rated-6 { color: #06b6d4; }
+.plexd-btn.plexd-rating-btn.rated-7 { color: #3b82f6; }
+.plexd-btn.plexd-rating-btn.rated-8 { color: #8b5cf6; }
+.plexd-btn.plexd-rating-btn.rated-9 { color: #ec4899; }
 
 /* View toggle buttons in header */
 .plexd-view-toggle {
@@ -1491,6 +1521,10 @@ body {
 .plexd-view-btn.rating-3.active { background: #713f12; border-color: #854d0e; color: #fde047; }
 .plexd-view-btn.rating-4.active { background: #365314; border-color: #3f6212; color: #bef264; }
 .plexd-view-btn.rating-5.active { background: #14532d; border-color: #166534; color: #86efac; }
+.plexd-view-btn.rating-6.active { background: #164e63; border-color: #155e75; color: #a5f3fc; }
+.plexd-view-btn.rating-7.active { background: #1e3a8a; border-color: #1d4ed8; color: #bfdbfe; }
+.plexd-view-btn.rating-8.active { background: #4c1d95; border-color: #6d28d9; color: #ddd6fe; }
+.plexd-view-btn.rating-9.active { background: #831843; border-color: #be185d; color: #fbcfe8; }
 
 .plexd-view-btn .badge {
     display: inline-block;
@@ -1515,6 +1549,10 @@ body {
 .plexd-stream.plexd-rated-3 { outline: 2px solid rgba(234, 179, 8, 0.5); }
 .plexd-stream.plexd-rated-4 { outline: 2px solid rgba(132, 204, 22, 0.5); }
 .plexd-stream.plexd-rated-5 { outline: 2px solid rgba(34, 197, 94, 0.5); }
+.plexd-stream.plexd-rated-6 { outline: 2px solid rgba(6, 182, 212, 0.5); }
+.plexd-stream.plexd-rated-7 { outline: 2px solid rgba(59, 130, 246, 0.5); }
+.plexd-stream.plexd-rated-8 { outline: 2px solid rgba(139, 92, 246, 0.5); }
+.plexd-stream.plexd-rated-9 { outline: 2px solid rgba(236, 72, 153, 0.5); }
 
 /* ========================================
    Layout Mode Buttons

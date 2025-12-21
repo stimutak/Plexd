@@ -487,7 +487,7 @@ const PlexdApp = (function() {
             muted: true
         });
 
-        // Store the filename for display
+        // Store the filename for display and matching
         stream.fileName = fileName;
 
         containerEl.appendChild(stream.wrapper);
@@ -724,6 +724,10 @@ const PlexdApp = (function() {
         // F key for true fullscreen - toggles true fullscreen (hides browser chrome)
         document.addEventListener('keydown', (e) => {
             if (isTypingTarget(e.target)) return;
+            
+            // Don't handle if modal is open
+            const activeModal = document.querySelector('.plexd-modal-overlay:not([style*="display: none"])');
+            if (activeModal) return;
 
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
@@ -856,7 +860,7 @@ const PlexdApp = (function() {
                     stream._plexdAutoPaused = false;
                 }
             } else {
-                const rating = PlexdStream.getRating(stream.url);
+                const rating = PlexdStream.getRating(stream.url, stream.fileName);
                 const isVisible = (rating === viewMode);
                 stream.wrapper.style.display = isVisible ? '' : 'none';
                 // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
@@ -1628,7 +1632,8 @@ const PlexdApp = (function() {
     function handleKeyboard(e) {
         // If a modal is open, avoid accidental destructive/global shortcuts.
         // Let modal-specific handlers deal with Escape/etc.
-        if (document.querySelector('.plexd-modal-overlay') && e.key !== 'Escape') {
+        const activeModal = document.querySelector('.plexd-modal-overlay:not([style*="display: none"])');
+        if (activeModal && e.key !== 'Escape') {
             return;
         }
 
@@ -2425,7 +2430,7 @@ const PlexdApp = (function() {
         // Save local files with their ratings
         const localFilesData = localFileStreams.map(s => ({
             fileName: s.fileName,
-            rating: PlexdStream.getRating(s.url) || 0
+            rating: PlexdStream.getRating(s.url, s.fileName) || 0
         }));
         const localFiles = localFilesData.map(f => f.fileName);
         const localFileRatings = {};
@@ -2763,19 +2768,26 @@ const PlexdApp = (function() {
             if (file && file.url) {
                 const originalFileName = localFiles[index];
                 console.log(`[Plexd] Loading local file ${index + 1}: ${file.fileName}`);
+                
+                // Use addStreamFromFile to ensure proper fileName handling
                 addStreamFromFile(file.url, file.fileName);
                 localLoaded++;
 
-                // Restore rating if saved
+                // Restore rating if saved - match by fileName since blob URLs are unique
                 const savedRating = localFileRatings[originalFileName] || localFileRatings[file.fileName];
                 if (savedRating && savedRating > 0) {
-                    // Find the just-added stream and set its rating
-                    const streams = PlexdStream.getAllStreams();
-                    const newStream = streams.find(s => s.url === file.url);
-                    if (newStream) {
-                        PlexdStream.setRating(newStream.id, savedRating);
-                        console.log(`[Plexd] Restored rating ${savedRating} for ${file.fileName}`);
-                    }
+                    // Find the just-added stream by matching fileName (not URL, since blob URLs are unique)
+                    // Use a small delay to ensure stream is registered
+                    setTimeout(() => {
+                        const streams = PlexdStream.getAllStreams();
+                        const newStream = streams.find(s => s.fileName === file.fileName && s.url.startsWith('blob:'));
+                        if (newStream) {
+                            // Rating will be restored automatically via syncRatingStatus since we store by fileName
+                            // But set it explicitly to ensure it's applied immediately
+                            PlexdStream.setRating(newStream.id, savedRating);
+                            console.log(`[Plexd] Restored rating ${savedRating} for ${file.fileName}`);
+                        }
+                    }, 50);
                 }
             }
         });
@@ -2783,6 +2795,12 @@ const PlexdApp = (function() {
         // Save to current streams (only URL streams, not local files)
         const validUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
         localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
+
+        // Sync rating status after a brief delay to ensure all streams are loaded
+        setTimeout(() => {
+            PlexdStream.syncRatingStatus();
+            updateLayout();
+        }, 100);
 
         // Build message
         const total = loadedCount + localLoaded;
@@ -3341,7 +3359,7 @@ const PlexdApp = (function() {
         streamsList.innerHTML = allStreams.map((stream, index) => {
             const isLocal = stream.url.startsWith('blob:');
             const isSelected = selectedStream && selectedStream.id === stream.id;
-            const rating = PlexdStream.getRating(stream.url);
+            const rating = PlexdStream.getRating(stream.url, stream.fileName);
             const displayName = stream.fileName || getStreamDisplayName(stream.url);
             const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
             const stateClass = stream.state === 'playing' ? 'playing' :
@@ -3803,7 +3821,7 @@ const PlexdRemote = (function() {
             currentTime: s.video ? s.video.currentTime : 0,
             duration: s.video ? s.video.duration : 0,
             aspectRatio: s.aspectRatio,
-            rating: PlexdStream.getRating(s.url),
+            rating: PlexdStream.getRating(s.url, s.fileName),
             fileName: s.fileName || null
         }));
 

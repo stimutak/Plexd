@@ -587,13 +587,38 @@ body {
 .plexd-stream.plexd-fullscreen .plexd-controls {
     opacity: 1;
     padding: 16px;
+    z-index: 10000; /* Ensure controls are above video */
+    pointer-events: auto; /* Ensure controls are clickable */
 }
 
 .plexd-stream.plexd-fullscreen .plexd-btn {
     width: 40px;
     height: 40px;
     font-size: 18px;
+    pointer-events: auto; /* Ensure buttons are clickable */
+    z-index: 10001;
 }
+
+/* Rating display in focused/fullscreen mode */
+.plexd-stream.plexd-fullscreen .plexd-rating-display {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: 600;
+    z-index: 10002;
+    pointer-events: none;
+    color: #fbbf24;
+}
+
+.plexd-stream.plexd-fullscreen .plexd-rating-display.rated-1 { color: #ef4444; }
+.plexd-stream.plexd-fullscreen .plexd-rating-display.rated-2 { color: #f97316; }
+.plexd-stream.plexd-fullscreen .plexd-rating-display.rated-3 { color: #eab308; }
+.plexd-stream.plexd-fullscreen .plexd-rating-display.rated-4 { color: #84cc16; }
+.plexd-stream.plexd-fullscreen .plexd-rating-display.rated-5 { color: #22c55e; }
 
 /* ========================================
    Stream Selection
@@ -605,18 +630,37 @@ body {
 }
 
 .plexd-stream.plexd-selected {
-    outline: 3px solid #555;
-    outline-offset: -3px;
+    outline: 4px solid #3b82f6;
+    outline-offset: -4px;
     z-index: 10;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.3);
 }
 
 .plexd-stream.plexd-selected::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(59, 130, 246, 0.15);
     pointer-events: none;
     z-index: 1;
+}
+
+/* Selection indicator badge */
+.plexd-stream.plexd-selected::after {
+    content: 'SELECTED';
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(59, 130, 246, 0.9);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    z-index: 11;
+    pointer-events: none;
+    text-transform: uppercase;
 }
 
 /* ========================================

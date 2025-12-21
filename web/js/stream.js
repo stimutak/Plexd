@@ -89,11 +89,17 @@ const PlexdStream = (function() {
             cycleRating(id);
         };
 
+        // Create rating display for fullscreen/focused mode
+        const ratingDisplay = document.createElement('div');
+        ratingDisplay.className = 'plexd-rating-display';
+        ratingDisplay.style.display = 'none'; // Hidden by default, shown in fullscreen
+
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
         wrapper.appendChild(infoOverlay);
         wrapper.appendChild(ratingIndicator);
+        wrapper.appendChild(ratingDisplay);
 
         // Make draggable and focusable (for keyboard in fullscreen)
         wrapper.draggable = true;
@@ -992,6 +998,11 @@ const PlexdStream = (function() {
         if (fullscreenStreamId === streamId) {
             // Exit fullscreen
             stream.wrapper.classList.remove('plexd-fullscreen');
+            // Hide rating display when exiting fullscreen
+            const ratingDisplay = stream.wrapper.querySelector('.plexd-rating-display');
+            if (ratingDisplay) {
+                ratingDisplay.style.display = 'none';
+            }
             fullscreenStreamId = null;
             fullscreenMode = 'none';
             // Also exit true fullscreen if active
@@ -1004,10 +1015,20 @@ const PlexdStream = (function() {
                 const prevStream = streams.get(fullscreenStreamId);
                 if (prevStream) {
                     prevStream.wrapper.classList.remove('plexd-fullscreen');
+                    // Hide rating display
+                    const prevRatingDisplay = prevStream.wrapper.querySelector('.plexd-rating-display');
+                    if (prevRatingDisplay) {
+                        prevRatingDisplay.style.display = 'none';
+                    }
                 }
             }
             // Enter fullscreen
             stream.wrapper.classList.add('plexd-fullscreen');
+            // Show rating display in fullscreen mode
+            const ratingDisplay = stream.wrapper.querySelector('.plexd-rating-display');
+            if (ratingDisplay) {
+                ratingDisplay.style.display = 'block';
+            }
             fullscreenStreamId = streamId;
             fullscreenMode = 'browser-fill';
         }
@@ -1034,9 +1055,22 @@ const PlexdStream = (function() {
             }
         }
 
+        // Pause all other streams to save resources
+        streams.forEach((s, id) => {
+            if (id !== streamId && !s.video.paused) {
+                pauseStream(id);
+            }
+        });
+
         // Apply CSS fullscreen to this stream
         stream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = streamId;
+
+        // Show rating display in fullscreen mode
+        const ratingDisplay = stream.wrapper.querySelector('.plexd-rating-display');
+        if (ratingDisplay) {
+            ratingDisplay.style.display = 'block';
+        }
 
         // If we're in true fullscreen grid mode, switch to focused mode
         if (document.fullscreenElement) {
@@ -1060,9 +1094,21 @@ const PlexdStream = (function() {
         streams.forEach(stream => {
             if (stream.wrapper.classList.contains('plexd-fullscreen')) {
                 stream.wrapper.classList.remove('plexd-fullscreen');
+                // Hide rating display when exiting fullscreen
+                const ratingDisplay = stream.wrapper.querySelector('.plexd-rating-display');
+                if (ratingDisplay) {
+                    ratingDisplay.style.display = 'none';
+                }
             }
         });
         fullscreenStreamId = null;
+
+        // Resume all paused streams (they were paused when entering focused mode)
+        streams.forEach((s, id) => {
+            if (s.savedPosition !== undefined) {
+                resumeStream(id);
+            }
+        });
 
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
@@ -1714,7 +1760,7 @@ const PlexdStream = (function() {
 
     /**
      * Reload a stream (handles errors, stalled, paused - gets it playing again)
-     * Preserves playback position where possible
+     * Preserves playback position where possible, but restarts if stuck at beginning
      */
     function reloadStream(streamId) {
         const stream = streams.get(streamId);
@@ -1740,15 +1786,20 @@ const PlexdStream = (function() {
         // Store current position for restoration after reload
         const savedTime = video.currentTime;
         const hasFiniteDuration = video.duration && isFinite(video.duration);
+        
+        // Check if stream appears stuck at beginning (less than 1 second but should be further)
+        // This handles streams that seem to be "looking at a small amount of movie"
+        const isStuckAtStart = savedTime < 1 && hasFiniteDuration && video.duration > 10;
+        const shouldRestart = isStuckAtStart || video.ended || stream.state === 'error';
 
         // Check if video is just paused (simple case - just play)
-        if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
+        if (!shouldRestart && video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
             video.play().catch(() => {});
             return true;
         }
 
         // Check if stalled but has data - try seeking to unstick
-        if (video.readyState >= 2 && video.networkState === 2) {
+        if (!shouldRestart && video.readyState >= 2 && video.networkState === 2) {
             // Try seeking slightly to unstick
             video.currentTime = savedTime + 0.1;
             video.play().catch(() => {});
@@ -1766,8 +1817,8 @@ const PlexdStream = (function() {
         if (isHlsUrl(url) && hlsSupported) {
             // Use the same robust HLS setup as initial playback (with recovery hooks)
             const hls = createHlsInstance(stream, url);
-            // Restore position for VOD streams after reload (best-effort)
-            if (hasFiniteDuration && savedTime > 0) {
+            // Restore position for VOD streams after reload (only if not stuck at start)
+            if (hasFiniteDuration && savedTime > 0 && !shouldRestart) {
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
                     try {
                         video.currentTime = Math.max(0, savedTime);
@@ -1778,8 +1829,8 @@ const PlexdStream = (function() {
             }
             stream.hls = hls;
         } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Native HLS (Safari): restore VOD position once metadata is available.
-            if (hasFiniteDuration && savedTime > 0) {
+            // Native HLS (Safari): restore VOD position once metadata is available (only if not stuck).
+            if (hasFiniteDuration && savedTime > 0 && !shouldRestart) {
                 video.addEventListener('loadedmetadata', () => {
                     try {
                         video.currentTime = Math.max(0, savedTime);
@@ -1790,8 +1841,8 @@ const PlexdStream = (function() {
             video.load();
             video.play().catch(() => {});
         } else {
-            // Regular media: restore VOD position once metadata is available.
-            if (hasFiniteDuration && savedTime > 0) {
+            // Regular media: restore VOD position once metadata is available (only if not stuck).
+            if (hasFiniteDuration && savedTime > 0 && !shouldRestart) {
                 video.addEventListener('loadedmetadata', () => {
                     try {
                         video.currentTime = Math.max(0, savedTime);
@@ -1885,6 +1936,10 @@ const PlexdStream = (function() {
      */
     function toggleAudioFocus() {
         audioFocusMode = !audioFocusMode;
+        // Update all mute buttons to reflect current state
+        streams.forEach(stream => {
+            updateMuteButton(stream);
+        });
         return audioFocusMode;
     }
 
@@ -2316,6 +2371,18 @@ const PlexdStream = (function() {
             } else {
                 indicator.innerHTML = `★${rating}`;
                 indicator.className = `plexd-rating-indicator rated rated-${rating}`;
+            }
+        }
+
+        // Update fullscreen rating display
+        const ratingDisplay = stream.wrapper.querySelector('.plexd-rating-display');
+        if (ratingDisplay) {
+            if (rating === 0) {
+                ratingDisplay.innerHTML = '☆ Unrated';
+                ratingDisplay.className = 'plexd-rating-display';
+            } else {
+                ratingDisplay.innerHTML = `★${rating}`;
+                ratingDisplay.className = `plexd-rating-display rated-${rating}`;
             }
         }
     }

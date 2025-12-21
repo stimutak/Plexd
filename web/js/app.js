@@ -1115,8 +1115,13 @@ const PlexdApp = (function() {
     function toggleAudioFocus() {
         const mode = PlexdStream.toggleAudioFocus();
         const btn = document.getElementById('audio-focus-btn');
-        if (btn) btn.classList.toggle('active', mode !== 'off');
-        showMessage(`Audio focus: ${mode}`, 'info');
+        if (btn) {
+            btn.classList.toggle('active', mode);
+            // Update icon to reflect state: 🎧 when active, 🎵 when inactive
+            btn.textContent = mode ? '🎧' : '🎵';
+            btn.title = mode ? 'Audio focus mode: ON (unmuting one mutes others)' : 'Audio focus mode: OFF';
+        }
+        showMessage(`Audio focus: ${mode ? 'ON' : 'OFF'}`, 'info');
     }
 
     /**
@@ -3311,11 +3316,28 @@ const PlexdApp = (function() {
 
     /**
      * Toggle panel visibility
+     * Panels are mutually exclusive - opening one closes others
      */
     function togglePanel(panelId) {
         const panel = document.getElementById(panelId);
-        if (panel) {
-            panel.classList.toggle('plexd-panel-open');
+        if (!panel) return;
+        
+        const isOpening = !panel.classList.contains('plexd-panel-open');
+        
+        // Close all other panels (mutually exclusive)
+        const allPanels = ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel'];
+        allPanels.forEach(id => {
+            const p = document.getElementById(id);
+            if (p && id !== panelId) {
+                p.classList.remove('plexd-panel-open');
+            }
+        });
+        
+        // Toggle the requested panel
+        if (isOpening) {
+            panel.classList.add('plexd-panel-open');
+        } else {
+            panel.classList.remove('plexd-panel-open');
         }
     }
 

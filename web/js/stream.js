@@ -89,11 +89,18 @@ const PlexdStream = (function() {
             cycleRating(id);
         };
 
+        // Selected badge (purely visual; CSS controls when it shows)
+        // This makes it obvious which stream will be acted upon (Enter/Z/etc).
+        const selectedBadge = document.createElement('div');
+        selectedBadge.className = 'plexd-selected-badge';
+        selectedBadge.textContent = 'SELECTED';
+
         // Assemble
         wrapper.appendChild(video);
         wrapper.appendChild(controls);
         wrapper.appendChild(infoOverlay);
         wrapper.appendChild(ratingIndicator);
+        wrapper.appendChild(selectedBadge);
 
         // Make draggable and focusable (for keyboard in fullscreen)
         wrapper.draggable = true;
@@ -975,6 +982,63 @@ const PlexdStream = (function() {
     // - 'true-focused': True fullscreen on a specific stream
     let fullscreenMode = 'none';
 
+    // =====================================================================
+    // Resource saving policies (focus/zoom + filtered views)
+    // =====================================================================
+
+    /**
+     * Apply "focused stream only" playback policy.
+     *
+     * When zoomed into a stream, we pause other streams to save resources,
+     * but ONLY if we can reliably resume them when leaving focus/switching.
+     *
+     * This does not override user-paused streams (we only auto-pause if playing),
+     * and it respects global pause mode (we never auto-resume while globally paused).
+     */
+    function applyFocusResourcePolicy(focusedStreamId) {
+        const isPausedGlobally = globalPaused;
+
+        streams.forEach((s, id) => {
+            if (id === focusedStreamId) {
+                // Ensure the focused stream plays (unless globally paused)
+                if (!isPausedGlobally && s._plexdAutoPausedForFocus) {
+                    resumeStream(id);
+                    s._plexdAutoPausedForFocus = false;
+                }
+                return;
+            }
+
+            // Don't touch hidden items (e.g., rating-filtered out) - app.js handles those.
+            if (s.wrapper && s.wrapper.style && s.wrapper.style.display === 'none') {
+                return;
+            }
+
+            // Only auto-pause if it was actually playing (so we can safely resume later).
+            if (s.video && !s.video.paused) {
+                s._plexdAutoPausedForFocus = true;
+                pauseStream(id);
+            }
+        });
+    }
+
+    /**
+     * Clear "focused stream only" policy and resume any streams that were
+     * auto-paused for focus (best-effort; respects global pause + view filters).
+     */
+    function clearFocusResourcePolicy() {
+        if (globalPaused) return;
+
+        streams.forEach((s, id) => {
+            if (!s._plexdAutoPausedForFocus) return;
+            // Don't resume streams that are currently hidden by filtering.
+            if (s.wrapper && s.wrapper.style && s.wrapper.style.display === 'none') {
+                return;
+            }
+            resumeStream(id);
+            s._plexdAutoPausedForFocus = false;
+        });
+    }
+
     /**
      * Toggle fullscreen for a stream (browser-fill mode)
      * In true fullscreen, this focuses/unfocuses a stream without exiting true fullscreen
@@ -994,6 +1058,8 @@ const PlexdStream = (function() {
             stream.wrapper.classList.remove('plexd-fullscreen');
             fullscreenStreamId = null;
             fullscreenMode = 'none';
+            // Resource saving: resume streams that were auto-paused for focus
+            clearFocusResourcePolicy();
             // Also exit true fullscreen if active
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -1010,6 +1076,8 @@ const PlexdStream = (function() {
             stream.wrapper.classList.add('plexd-fullscreen');
             fullscreenStreamId = streamId;
             fullscreenMode = 'browser-fill';
+            // Resource saving: pause other streams while focused
+            applyFocusResourcePolicy(streamId);
         }
         triggerLayoutUpdate();
     }
@@ -1049,6 +1117,10 @@ const PlexdStream = (function() {
 
         // Select this stream
         selectStream(streamId);
+
+        // Resource saving: pause other streams while zoomed in (will resume on exit)
+        applyFocusResourcePolicy(streamId);
+
         triggerLayoutUpdate();
     }
 
@@ -1063,6 +1135,9 @@ const PlexdStream = (function() {
             }
         });
         fullscreenStreamId = null;
+
+        // Resource saving: resume streams that were auto-paused for focus
+        clearFocusResourcePolicy();
 
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
@@ -1092,6 +1167,9 @@ const PlexdStream = (function() {
         // Clear state variables
         fullscreenStreamId = null;
         fullscreenMode = 'none';
+
+        // Resource saving: resume streams that were auto-paused for focus
+        clearFocusResourcePolicy();
 
         // Exit true fullscreen if active
         if (document.fullscreenElement) {
@@ -1130,6 +1208,8 @@ const PlexdStream = (function() {
             stream.wrapper.requestFullscreen().then(() => {
                 fullscreenMode = 'true-focused';
                 stream.wrapper.focus();
+                selectStream(streamId);
+                applyFocusResourcePolicy(streamId);
             }).catch(err => {
                 console.log('Fullscreen request failed:', err);
             });
@@ -1158,6 +1238,8 @@ const PlexdStream = (function() {
                 stream.wrapper.classList.remove('plexd-fullscreen');
             }
             fullscreenStreamId = null;
+            // Returning to grid: resume anything we auto-paused for focus
+            clearFocusResourcePolicy();
         }
 
         container.requestFullscreen().then(() => {
@@ -1285,6 +1367,9 @@ const PlexdStream = (function() {
 
         // Focus the new stream for keyboard controls
         newStream.wrapper.focus();
+
+        // Keep resource saving policy consistent while browsing focused streams
+        applyFocusResourcePolicy(newStream.id);
     }
 
     /**
@@ -1740,68 +1825,75 @@ const PlexdStream = (function() {
         // Store current position for restoration after reload
         const savedTime = video.currentTime;
         const hasFiniteDuration = video.duration && isFinite(video.duration);
+        const shouldPlay = !globalPaused;
 
-        // Check if video is just paused (simple case - just play)
-        if (video.paused && !video.ended && video.readyState >= 2 && !stream.error) {
-            video.play().catch(() => {});
-            return true;
-        }
+        // Force a HARD reload.
+        // (The previous "smart" early returns often failed to recover partially-stalled streams/files.)
 
-        // Check if stalled but has data - try seeking to unstick
-        if (video.readyState >= 2 && video.networkState === 2) {
-            // Try seeking slightly to unstick
-            video.currentTime = savedTime + 0.1;
-            video.play().catch(() => {});
-            return true;
-        }
+        // Reset recovery state for manual reload attempts
+        stream.recovery.retryCount = 0;
+        stream.recovery.isRecovering = false;
+        stream.hlsFallbackAttempted = false;
 
-        // Full reload needed - destroy and recreate
+        // Destroy and recreate streaming pipeline
         if (stream.hls) {
             stream.hls.destroy();
             stream.hls = null;
         }
 
+        // Reset the media element.
+        // Clearing src + load() is the most reliable way to force the browser to drop any stuck decode/network state.
+        try {
+            video.pause();
+        } catch (_) {}
+        video.src = '';
+        video.load();
+
         // Reload the video
         const hlsSupported = typeof Hls !== 'undefined' && Hls.isSupported && Hls.isSupported();
-        if (isHlsUrl(url) && hlsSupported) {
-            // Use the same robust HLS setup as initial playback (with recovery hooks)
-            const hls = createHlsInstance(stream, url);
-            // Restore position for VOD streams after reload (best-effort)
-            if (hasFiniteDuration && savedTime > 0) {
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    try {
-                        video.currentTime = Math.max(0, savedTime);
-                    } catch (_) {
-                        // Some streams disallow seeking until later; ignore.
-                    }
-                });
+        setTimeout(() => {
+            if (isHlsUrl(url) && hlsSupported) {
+                // Use the same robust HLS setup as initial playback (with recovery hooks)
+                const hls = createHlsInstance(stream, url);
+
+                // Restore position for VOD streams after reload (best-effort)
+                if (hasFiniteDuration && savedTime > 0) {
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {
+                            // Some streams disallow seeking until later; ignore.
+                        }
+                    });
+                }
+
+                stream.hls = hls;
+            } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS (Safari): restore VOD position once metadata is available.
+                if (hasFiniteDuration && savedTime > 0) {
+                    video.addEventListener('loadedmetadata', () => {
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {}
+                    }, { once: true });
+                }
+                video.src = url;
+                video.load();
+                if (shouldPlay) video.play().catch(() => {});
+            } else {
+                // Regular media: restore VOD position once metadata is available.
+                if (hasFiniteDuration && savedTime > 0) {
+                    video.addEventListener('loadedmetadata', () => {
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {}
+                    }, { once: true });
+                }
+                video.src = url;
+                video.load();
+                if (shouldPlay) video.play().catch(() => {});
             }
-            stream.hls = hls;
-        } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
-            // Native HLS (Safari): restore VOD position once metadata is available.
-            if (hasFiniteDuration && savedTime > 0) {
-                video.addEventListener('loadedmetadata', () => {
-                    try {
-                        video.currentTime = Math.max(0, savedTime);
-                    } catch (_) {}
-                }, { once: true });
-            }
-            video.src = url;
-            video.load();
-            video.play().catch(() => {});
-        } else {
-            // Regular media: restore VOD position once metadata is available.
-            if (hasFiniteDuration && savedTime > 0) {
-                video.addEventListener('loadedmetadata', () => {
-                    try {
-                        video.currentTime = Math.max(0, savedTime);
-                    } catch (_) {}
-                }, { once: true });
-            }
-            video.src = url;
-            video.load();
-            video.play().catch(() => {});
-        }
+        }, 0);
 
         return true;
     }
@@ -2645,6 +2737,8 @@ const PlexdStream = (function() {
             });
             fullscreenStreamId = null;
             fullscreenMode = 'none';
+            // Resource saving: resume streams that were auto-paused for focus
+            clearFocusResourcePolicy();
             triggerLayoutUpdate();
         }
     });

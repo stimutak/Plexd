@@ -125,6 +125,12 @@ body {
     background: #444;
 }
 
+/* Generic active state for toggle buttons (audio focus, clean mode, etc.) */
+.plexd-button-secondary.active {
+    background: #1d4ed8;
+    color: #fff;
+}
+
 /* Stats */
 .plexd-stats {
     display: flex;
@@ -204,6 +210,8 @@ body {
     background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
     opacity: 0;
     transition: opacity 0.2s;
+    z-index: 30; /* ensure controls stay clickable above overlays */
+    pointer-events: auto;
 }
 
 .plexd-stream:hover .plexd-controls {
@@ -605,18 +613,44 @@ body {
 }
 
 .plexd-stream.plexd-selected {
-    outline: 3px solid #555;
+    outline: 3px solid rgba(59, 130, 246, 0.95);
     outline-offset: -3px;
-    z-index: 10;
+    z-index: 12;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25), 0 10px 30px rgba(0, 0, 0, 0.45);
 }
 
 .plexd-stream.plexd-selected::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(99, 102, 241, 0.1);
+    background: rgba(59, 130, 246, 0.12);
     pointer-events: none;
     z-index: 1;
+}
+
+/* Selected badge (added in stream.js) */
+.plexd-selected-badge {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    background: rgba(59, 130, 246, 0.92);
+    color: #fff;
+    z-index: 35;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+}
+
+.plexd-stream.plexd-selected .plexd-selected-badge {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 /* ========================================
@@ -1353,6 +1387,16 @@ body {
 
 .plexd-stream:hover .plexd-rating-indicator {
     opacity: 1;
+}
+
+/* In focused/fullscreen view we always show rating (even unrated) */
+.plexd-stream.plexd-fullscreen .plexd-rating-indicator {
+    opacity: 1;
+    z-index: 40;
+    min-width: 44px;
+    height: 44px;
+    font-size: 18px;
+    padding: 0 14px;
 }
 
 /* Touch devices - always show rating indicator (tappable) */

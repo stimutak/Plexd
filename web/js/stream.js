@@ -1385,7 +1385,12 @@ const PlexdStream = (function() {
             // for rating filter/assignment and stream navigation
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
-                // Dispatch to document for app.js to handle
+                // IMPORTANT:
+                // We dispatch a synthetic event to `document` so app-level shortcuts still work
+                // in fullscreen/focused contexts. We MUST stop propagation of the original event
+                // to avoid double-handling (original bubbling + synthetic dispatch).
+                e.stopPropagation();
+                // Dispatch to document for app.js to handle (exactly once)
                 document.dispatchEvent(new KeyboardEvent('keydown', {
                     key: e.key,
                     code: e.code,
@@ -1749,6 +1754,9 @@ const PlexdStream = (function() {
         stream.health.bufferEmptyStartTime = null;
         stream.health.consecutiveStalls = 0;
 
+        stream.state = 'loading';
+        updateStreamInfo(stream);
+
         // Store current position for restoration after reload
         const savedTime = video.currentTime;
         const hasFiniteDuration = video.duration && isFinite(video.duration);
@@ -1791,23 +1799,36 @@ const PlexdStream = (function() {
         // Small delay to ensure cleanup completes
         setTimeout(() => {
             // Reload the video
-            if (isHlsUrl(url) && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                const config = getAdaptiveHlsConfig();
+            const hlsSupported = typeof Hls !== 'undefined' && Hls.isSupported && Hls.isSupported();
+            if (isHlsUrl(url) && hlsSupported) {
+                // Use the same robust HLS setup as initial playback (with recovery hooks)
                 const hls = createHlsInstance(stream, url);
                 stream.hls = hls;
-                // Restore position for VOD streams after manifest loads
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    if (hasFiniteDuration && savedTime > 0) {
-                        video.currentTime = savedTime;
-                    }
-                    video.play().catch(() => {});
-                });
+                // Restore position for VOD streams after reload (best-effort)
+                if (hasFiniteDuration && savedTime > 0) {
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {
+                            // Some streams disallow seeking until later; ignore.
+                        }
+                        video.play().catch(() => {});
+                    });
+                } else {
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        video.play().catch(() => {});
+                    });
+                }
             } else if (isHlsUrl(url) && video.canPlayType('application/vnd.apple.mpegurl')) {
                 // Safari native HLS
                 video.src = url;
                 video.addEventListener('loadedmetadata', () => {
                     if (hasFiniteDuration && savedTime > 0) {
-                        video.currentTime = savedTime;
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {
+                            // Some streams disallow seeking until later; ignore.
+                        }
                     }
                 }, { once: true });
                 video.play().catch(() => {});
@@ -1817,13 +1838,16 @@ const PlexdStream = (function() {
                 video.load();
                 video.addEventListener('loadedmetadata', () => {
                     if (hasFiniteDuration && savedTime > 0) {
-                        video.currentTime = savedTime;
+                        try {
+                            video.currentTime = Math.max(0, savedTime);
+                        } catch (_) {
+                            // Some streams disallow seeking until later; ignore.
+                        }
                     }
                 }, { once: true });
                 video.play().catch(() => {});
             }
 
-            stream.state = 'loading';
             updateStreamInfo(stream);
         }, 100);
 

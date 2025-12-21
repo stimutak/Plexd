@@ -305,7 +305,7 @@ const PlexdApp = (function() {
         focusWarning.innerHTML = 'Press <kbd>Esc</kbd> or click here to enable shortcuts';
         focusWarning.onclick = () => {
             // Reset focus to app container
-            if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+            if (isTypingTarget(document.activeElement)) {
                 document.activeElement.blur();
             }
             if (app) app.focus();
@@ -315,7 +315,7 @@ const PlexdApp = (function() {
 
         // Monitor focus changes
         document.addEventListener('focusin', (e) => {
-            if (e.target.tagName === 'INPUT') {
+            if (isTypingTarget(e.target)) {
                 // Show warning that shortcuts won't work while typing
                 focusWarning.classList.add('visible');
             } else {
@@ -326,7 +326,7 @@ const PlexdApp = (function() {
         document.addEventListener('focusout', () => {
             // Small delay to check if focus moved to another input
             setTimeout(() => {
-                if (document.activeElement.tagName !== 'INPUT') {
+                if (!isTypingTarget(document.activeElement)) {
                     focusWarning.classList.remove('visible');
                 }
             }, 50);
@@ -590,12 +590,22 @@ const PlexdApp = (function() {
         const savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
         console.log('[Plexd] Saved streams:', savedStreams.length);
 
-        // Load saved streams
+        // Load saved streams (deduped by normalized equality key)
+        const savedKeys = new Set();
+        const dedupedSavedStreams = [];
         savedStreams.forEach(url => {
-            if (url && isValidUrl(url)) {
-                addStreamSilent(url);
-            }
+            if (!url || !isValidUrl(url)) return;
+            const key = urlEqualityKey(url);
+            if (savedKeys.has(key)) return;
+            savedKeys.add(key);
+            dedupedSavedStreams.push(url);
+            addStreamSilent(url);
         });
+
+        // If localStorage contained duplicates/variants, clean it up for future runs.
+        if (dedupedSavedStreams.length !== savedStreams.length) {
+            localStorage.setItem('plexd_streams', JSON.stringify(dedupedSavedStreams));
+        }
 
         // Check for new streams in URL params
         const params = new URLSearchParams(window.location.search);
@@ -608,15 +618,18 @@ const PlexdApp = (function() {
 
             let addedCount = 0;
             urls.forEach(url => {
-                if (url && isValidUrl(url) && !savedStreams.includes(url)) {
-                    addStream(url);
-                    savedStreams.push(url);
+                if (!url || !isValidUrl(url)) return;
+                const key = urlEqualityKey(url);
+                if (savedKeys.has(key)) return;
+                if (addStream(url)) {
+                    savedKeys.add(key);
+                    dedupedSavedStreams.push(url);
                     addedCount++;
                 }
             });
 
             // Save updated list
-            localStorage.setItem('plexd_streams', JSON.stringify(savedStreams));
+            localStorage.setItem('plexd_streams', JSON.stringify(dedupedSavedStreams));
 
             if (addedCount > 0) {
                 showMessage(`Added ${addedCount} new stream(s)`, 'success');
@@ -658,6 +671,14 @@ const PlexdApp = (function() {
      * Add stream without showing message (for loading saved streams)
      */
     function addStreamSilent(url) {
+        // Avoid duplicates - equality based on normalized URL (network URLs).
+        const key = urlEqualityKey(url);
+        const existing = PlexdStream.getAllStreams().find(s => urlEqualityKey(s.url) === key);
+        if (existing) {
+            PlexdStream.selectStream(existing.id);
+            return;
+        }
+
         const stream = PlexdStream.createStream(url, {
             autoplay: true,
             muted: true
@@ -702,7 +723,7 @@ const PlexdApp = (function() {
 
         // F key for true fullscreen - toggles true fullscreen (hides browser chrome)
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            if (isTypingTarget(e.target)) return;
             
             // Don't handle if modal is open
             const activeModal = document.querySelector('.plexd-modal-overlay:not([style*="display: none"])');
@@ -760,8 +781,9 @@ const PlexdApp = (function() {
         urls.forEach(url => {
             url = url.trim();
             if (url && isValidUrl(url)) {
-                addStream(url);
-                addedCount++;
+                if (addStream(url)) {
+                    addedCount++;
+                }
             }
         });
 
@@ -779,6 +801,18 @@ const PlexdApp = (function() {
      * Add a stream to the display
      */
     function addStream(url) {
+        // Avoid duplicates - equality based on normalized URL (network URLs).
+        const key = urlEqualityKey(url);
+        const existing = PlexdStream.getAllStreams().find(s => urlEqualityKey(s.url) === key);
+        if (existing) {
+            PlexdStream.selectStream(existing.id);
+            if (existing.wrapper && existing.wrapper.focus) {
+                existing.wrapper.focus();
+            }
+            showMessage('Stream already added', 'info');
+            return false;
+        }
+
         const stream = PlexdStream.createStream(url, {
             autoplay: true,
             muted: true
@@ -795,6 +829,7 @@ const PlexdApp = (function() {
         addToHistory(url);
 
         showMessage(`Added stream: ${truncateUrl(url)}`, 'success');
+        return true;
     }
 
     /**
@@ -819,17 +854,25 @@ const PlexdApp = (function() {
             if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
                 // Resume playback for all streams when viewing all (if not globally paused)
-                if (!isGloballyPaused) {
+                // Only resume streams we auto-paused for filtering (so we don't override user pauses).
+                if (!isGloballyPaused && stream._plexdAutoPaused) {
                     PlexdStream.resumeStream(stream.id);
+                    stream._plexdAutoPaused = false;
                 }
             } else {
                 const rating = PlexdStream.getRating(stream.url, stream.fileName);
                 const isVisible = (rating === viewMode);
                 stream.wrapper.style.display = isVisible ? '' : 'none';
                 // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
-                if (isVisible && !isGloballyPaused) {
+                if (isVisible && !isGloballyPaused && stream._plexdAutoPaused) {
                     PlexdStream.resumeStream(stream.id);
+                    stream._plexdAutoPaused = false;
                 } else if (!isVisible) {
+                    // Mark as auto-paused only if it was actually playing.
+                    // This lets us resume it later without overriding user-intended pauses.
+                    if (stream.video && !stream.video.paused) {
+                        stream._plexdAutoPaused = true;
+                    }
                     PlexdStream.pauseStream(stream.id);
                 }
             }
@@ -1587,16 +1630,15 @@ const PlexdApp = (function() {
      * Handle keyboard shortcuts
      */
     function handleKeyboard(e) {
-        // Ignore if typing in input, textarea, or if a modal is open
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-        
-        // Check if any modal is open - don't process shortcuts when modals are active
+        // If a modal is open, avoid accidental destructive/global shortcuts.
+        // Let modal-specific handlers deal with Escape/etc.
         const activeModal = document.querySelector('.plexd-modal-overlay:not([style*="display: none"])');
-        if (activeModal) return;
-        
-        // Check if focus is in a button or other interactive element (but allow shortcuts)
-        // Only block if it's a form element that needs typing
-        if (e.target.isContentEditable) return;
+        if (activeModal && e.key !== 'Escape') {
+            return;
+        }
+
+        // Ignore only when typing into text-entry controls (not sliders/buttons).
+        if (isTypingTarget(e.target)) return;
 
         const selected = PlexdStream.getSelectedStream();
         const fullscreenStream = PlexdStream.getFullscreenStream();
@@ -2185,6 +2227,88 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Returns true if the element is a "typing" target where global shortcuts
+     * should not hijack keystrokes (URL bar, text inputs, editable text).
+     *
+     * Notes:
+     * - We intentionally DO NOT treat range inputs (seek bars) as typing targets.
+     *   Users expect keyboard shortcuts to keep working after interacting with controls.
+     */
+    function isTypingTarget(el) {
+        if (!el) return false;
+
+        // contenteditable elements should always be treated as typing targets
+        if (el.isContentEditable) return true;
+
+        const tag = (el.tagName || '').toUpperCase();
+        if (tag === 'TEXTAREA') return true;
+
+        if (tag !== 'INPUT') return false;
+
+        // Default to treating "text-like" input types as typing targets
+        const type = (el.getAttribute('type') || 'text').toLowerCase();
+        const nonTypingTypes = new Set([
+            'button', 'submit', 'reset', 'checkbox', 'radio',
+            'range', 'color', 'file', 'image'
+        ]);
+        return !nonTypingTypes.has(type);
+    }
+
+    /**
+     * Normalize a network URL for equality checks (dedupe, merge, persistence).
+     *
+     * We do NOT change the URL used for playback; this is only a stable key.
+     * - Lowercases protocol + hostname
+     * - Removes default ports (80/443)
+     * - Removes hash
+     * - Sorts query parameters (stable order)
+     * - Trims trailing slash (except root)
+     */
+    function normalizeUrlForEquality(url) {
+        try {
+            const u = new URL(url);
+
+            // Only normalize network URLs; blob/file/etc are intentionally left as-is.
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+                return url;
+            }
+
+            u.hash = '';
+            u.protocol = u.protocol.toLowerCase();
+            u.hostname = u.hostname.toLowerCase();
+
+            // Remove default ports
+            if ((u.protocol === 'http:' && u.port === '80') || (u.protocol === 'https:' && u.port === '443')) {
+                u.port = '';
+            }
+
+            // Trim trailing slash in pathname (but keep root "/")
+            if (u.pathname.length > 1 && u.pathname.endsWith('/')) {
+                u.pathname = u.pathname.replace(/\/+$/, '');
+            }
+
+            // Stable sort query params (preserve duplicates)
+            if (u.search) {
+                const entries = Array.from(u.searchParams.entries());
+                entries.sort((a, b) => {
+                    if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
+                    return (a[1] || '').localeCompare(b[1] || '');
+                });
+                u.search = '';
+                for (const [k, v] of entries) u.searchParams.append(k, v);
+            }
+
+            return u.toString();
+        } catch (_) {
+            return url;
+        }
+    }
+
+    function urlEqualityKey(url) {
+        return normalizeUrlForEquality((url || '').trim());
+    }
+
+    /**
      * Truncate URL for display
      */
     function truncateUrl(url, maxLength = 50) {
@@ -2221,9 +2345,15 @@ const PlexdApp = (function() {
      */
     function saveCurrentStreams() {
         const streams = PlexdStream.getAllStreams();
-        const urls = streams
-            .filter(s => shouldSaveStream(s))
-            .map(s => s.url);
+        const urls = [];
+        const seen = new Set();
+        streams.forEach(s => {
+            if (!shouldSaveStream(s)) return;
+            const key = urlEqualityKey(s.url);
+            if (seen.has(key)) return;
+            seen.add(key);
+            urls.push(s.url);
+        });
         localStorage.setItem('plexd_streams', JSON.stringify(urls));
     }
 
@@ -2288,7 +2418,15 @@ const PlexdApp = (function() {
         const name = prompt('Enter a name for this stream combination:');
         if (!name) return;
 
-        const urls = validUrlStreams.map(s => s.url);
+        // Dedupe URLs by normalized equality key to avoid saving the same stream twice
+        const urls = [];
+        const seen = new Set();
+        validUrlStreams.forEach(s => {
+            const key = urlEqualityKey(s.url);
+            if (seen.has(key)) return;
+            seen.add(key);
+            urls.push(s.url);
+        });
         // Save local files with their ratings
         const localFilesData = localFileStreams.map(s => ({
             fileName: s.fileName,
@@ -2837,19 +2975,35 @@ const PlexdApp = (function() {
                                 let changed = false;
                                 // Merge URLs from both sets (avoid duplicates)
                                 if (hasUrls) {
-                                    const existingUrls = new Set(existing[name].urls || []);
-                                    const newUrls = combo.urls.filter(url => !existingUrls.has(url));
-                                    if (newUrls.length > 0) {
-                                        existing[name].urls = [...(existing[name].urls || []), ...newUrls];
+                                    const existingUrlList = Array.isArray(existing[name].urls) ? existing[name].urls : [];
+                                    const existingKeys = new Set(existingUrlList.map(u => urlEqualityKey(u)));
+                                    const mergedUrls = [...existingUrlList];
+                                    combo.urls.forEach(url => {
+                                        if (!url || !isValidUrl(url)) return;
+                                        const key = urlEqualityKey(url);
+                                        if (existingKeys.has(key)) return;
+                                        existingKeys.add(key);
+                                        mergedUrls.push(url);
+                                    });
+                                    if (mergedUrls.length !== existingUrlList.length) {
+                                        existing[name].urls = mergedUrls;
                                         changed = true;
                                     }
                                 }
                                 // Merge local files (avoid duplicates)
                                 if (hasLocalFiles) {
-                                    const existingFiles = new Set(existing[name].localFiles || []);
-                                    const newFiles = combo.localFiles.filter(f => !existingFiles.has(f));
-                                    if (newFiles.length > 0) {
-                                        existing[name].localFiles = [...(existing[name].localFiles || []), ...newFiles];
+                                    const existingLocal = Array.isArray(existing[name].localFiles) ? existing[name].localFiles : [];
+                                    const existingFiles = new Set(existingLocal.map(f => (f || '').toLowerCase()));
+                                    const mergedFiles = [...existingLocal];
+                                    combo.localFiles.forEach(f => {
+                                        if (!f) return;
+                                        const key = (f || '').toLowerCase();
+                                        if (existingFiles.has(key)) return;
+                                        existingFiles.add(key);
+                                        mergedFiles.push(f);
+                                    });
+                                    if (mergedFiles.length !== existingLocal.length) {
+                                        existing[name].localFiles = mergedFiles;
                                         changed = true;
                                     }
                                 }
@@ -2866,7 +3020,30 @@ const PlexdApp = (function() {
                                     skipped++;
                                 }
                             } else {
-                                existing[name] = combo;
+                                // Sanitize imported combo: dedupe URLs by normalized equality key.
+                                const sanitized = { ...combo };
+                                if (hasUrls) {
+                                    const seen = new Set();
+                                    sanitized.urls = combo.urls
+                                        .filter(u => u && isValidUrl(u))
+                                        .filter(u => {
+                                            const key = urlEqualityKey(u);
+                                            if (seen.has(key)) return false;
+                                            seen.add(key);
+                                            return true;
+                                        });
+                                }
+                                if (hasLocalFiles) {
+                                    const seenFiles = new Set();
+                                    sanitized.localFiles = combo.localFiles.filter(f => {
+                                        if (!f) return false;
+                                        const key = (f || '').toLowerCase();
+                                        if (seenFiles.has(key)) return false;
+                                        seenFiles.add(key);
+                                        return true;
+                                    });
+                                }
+                                existing[name] = sanitized;
                                 imported++;
                             }
                         } else {
@@ -3660,7 +3837,8 @@ const PlexdRemote = (function() {
             tetrisMode: window.PlexdAppState?.tetrisMode || false,
             headerVisible: window.PlexdAppState?.headerVisible || false,
             cleanMode: PlexdStream.isCleanMode ? PlexdStream.isCleanMode() : false,
-            audioFocusMode: PlexdStream.getAudioFocusMode ? PlexdStream.getAudioFocusMode() !== 'off' : true,
+            // `getAudioFocusMode()` returns a boolean (true = focus on).
+            audioFocusMode: PlexdStream.getAudioFocusMode ? PlexdStream.getAudioFocusMode() : true,
             timestamp: Date.now()
         };
     }

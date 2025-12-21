@@ -198,12 +198,12 @@ const PlexdApp = (function() {
     const streamQueue = [];
     const streamHistory = [];
 
-    // View mode: 'all', or 1-5 for star ratings
+    // View mode: 'all', or 1-9 for rating slots
     let viewMode = 'all';
     window._plexdViewMode = viewMode;
 
-    // View mode cycle order: all -> 1 -> 2 -> 3 -> 4 -> 5 -> all
-    const viewModes = ['all', 1, 2, 3, 4, 5];
+    // View mode cycle order: all -> 1 -> 2 -> ... -> 9 -> all
+    const viewModes = ['all', 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
@@ -495,6 +495,9 @@ const PlexdApp = (function() {
         // Store the filename for display
         stream.fileName = fileName;
 
+        // Apply any persisted rating for this fileName immediately (blob URLs are ephemeral).
+        PlexdStream.syncRatingStatus();
+
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         updateLayout();
@@ -540,10 +543,12 @@ const PlexdApp = (function() {
         const counts = PlexdStream.getAllRatingCounts();
 
         // Update view button badges
-        for (let i = 1; i <= 5; i++) {
+        for (let i = 1; i <= 9; i++) {
             const badge = document.getElementById(`rating-${i}-count`);
             if (badge) {
-                badge.textContent = counts[i];
+                const count = counts[i] || 0;
+                badge.textContent = count ? count : '';
+                badge.dataset.count = String(count);
             }
         }
 
@@ -866,20 +871,35 @@ const PlexdApp = (function() {
                     PlexdStream.resumeStream(stream.id);
                     stream._plexdAutoPausedForFilter = false;
                 } else if (!isVisible) {
-                    // Mark as auto-paused only if it was actually playing.
-                    // This lets us resume it later without overriding user-intended pauses.
-                    if (stream.video && !stream.video.paused) {
-                        stream._plexdAutoPausedForFilter = true;
+                    // IMPORTANT:
+                    // Pausing live/HLS streams frequently causes an apparent "restart" when shown again.
+                    // To avoid that UX regression, we only auto-pause streams that look safe to pause
+                    // (finite-duration files/VOD). Live/HLS streams stay playing but hidden.
+                    const duration = stream.video ? stream.video.duration : 0;
+                    const isFiniteDuration = duration && Number.isFinite(duration) && duration > 0;
+                    const isLocalFile = stream.url && stream.url.startsWith('blob:');
+                    const isHlsLike = !!stream.hls || (stream.url && stream.url.toLowerCase().includes('.m3u8'));
+
+                    const safeToAutoPause = isLocalFile || (isFiniteDuration && !isHlsLike);
+
+                    if (safeToAutoPause) {
+                        // Mark as auto-paused only if it was actually playing.
+                        // This lets us resume it later without overriding user-intended pauses.
+                        if (stream.video && !stream.video.paused) {
+                            stream._plexdAutoPausedForFilter = true;
+                        }
+                        PlexdStream.pauseStream(stream.id);
+                    } else {
+                        // Not safe to pause: do not touch playback state.
+                        stream._plexdAutoPausedForFilter = false;
                     }
-                    PlexdStream.pauseStream(stream.id);
                 }
             }
         });
 
         if (streamsToShow.length === 0) {
             if (viewMode !== 'all' && allStreams.length > 0) {
-                const stars = '★'.repeat(viewMode);
-                showEmptyState(`No ${stars} Streams`, `Rate streams with ${viewMode} star${viewMode > 1 ? 's' : ''} to see them here`);
+                showEmptyState(`No ★${viewMode} Streams`, `Assign streams to slot ${viewMode} to see them here`);
             } else {
                 showEmptyState();
             }
@@ -943,8 +963,7 @@ const PlexdApp = (function() {
             showMessage('View: All Streams', 'info');
         } else {
             const count = PlexdStream.getStreamsByRating(mode).length;
-            const stars = '★'.repeat(mode);
-            showMessage(`View: ${stars} (${count} streams)`, 'info');
+            showMessage(`View: ★${mode} (${count} streams)`, 'info');
         }
     }
 
@@ -962,7 +981,7 @@ const PlexdApp = (function() {
             indicator.style.display = 'none';
         } else {
             const count = PlexdStream.getStreamsByRating(viewMode).length;
-            starsEl.textContent = '★'.repeat(viewMode);
+            starsEl.textContent = `★${viewMode}`;
             countEl.textContent = `(${count})`;
             indicator.style.display = 'flex';
         }
@@ -984,7 +1003,7 @@ const PlexdApp = (function() {
         const allBtn = document.getElementById('view-all-btn');
         if (allBtn) allBtn.classList.toggle('active', viewMode === 'all');
 
-        for (let i = 1; i <= 5; i++) {
+        for (let i = 1; i <= 9; i++) {
             const btn = document.getElementById(`view-${i}-btn`);
             if (btn) btn.classList.toggle('active', viewMode === i);
         }
@@ -1832,8 +1851,7 @@ const PlexdApp = (function() {
                             if (streams.length > 0) {
                                 PlexdStream.enterFocusedMode(streams[0].id);
                             } else if (viewMode !== 'all') {
-                                const stars = '★'.repeat(viewMode);
-                                showMessage(`No ${stars} streams to show`, 'warning');
+                                showMessage(`No ★${viewMode} streams to show`, 'warning');
                             }
                         }
                     }
@@ -1918,8 +1936,7 @@ const PlexdApp = (function() {
                 // Rate selected stream (cycle through ratings)
                 if (selected) {
                     const newRating = PlexdStream.cycleRating(selected.id);
-                    const stars = '★'.repeat(newRating);
-                    showMessage(`Rated: ${stars}`, 'info');
+                    showMessage(newRating ? `Rated: ★${newRating}` : 'Rating cleared', 'info');
                     // If in focus mode with filter active and new rating doesn't match, exit
                     const isFullscreen = PlexdStream.getFullscreenMode() !== 'none';
                     if (isFullscreen && viewMode !== 'all' && newRating !== viewMode) {
@@ -2033,101 +2050,19 @@ const PlexdApp = (function() {
      * Treats local files and remote streams equally
      */
     function switchFullscreenStream(direction) {
-        // Get streams based on current view mode filter
-        let streams;
-        if (viewMode === 'all') {
-            streams = PlexdStream.getAllStreams();
-        } else {
-            streams = PlexdStream.getStreamsByRating(viewMode);
-        }
-
         const fullscreenStream = PlexdStream.getFullscreenStream();
         if (!fullscreenStream) return;
 
-        // If current stream isn't in filtered set (e.g., local file with different rating),
-        // fall back to all streams to allow navigation
-        let currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
-        if (currentIndex === -1) {
-            // Current stream not in filtered set - use all streams instead
-            streams = PlexdStream.getAllStreams();
-            currentIndex = streams.findIndex(s => s.id === fullscreenStream.id);
-            if (currentIndex === -1) return; // Stream truly doesn't exist
-        }
+        const nextId = PlexdStream.getSpatialNeighborStreamId(fullscreenStream.id, direction);
+        if (!nextId || nextId === fullscreenStream.id) return;
 
-        if (streams.length <= 1) return;
-
-        // Calculate grid dimensions based on number of streams
-        const count = streams.length;
-        const cols = PlexdStream.getGridCols() || Math.ceil(Math.sqrt(count));
-        const rows = Math.ceil(count / cols);
-
-        // Get current row and column
-        const currentRow = Math.floor(currentIndex / cols);
-        const currentCol = currentIndex % cols;
-
-        let newRow = currentRow;
-        let newCol = currentCol;
-
-        // Calculate new position based on direction
-        switch (direction) {
-            case 'right':
-                newCol = (currentCol + 1) % cols;
-                // If we wrapped and that position doesn't exist, go to first of next row
-                if (newRow * cols + newCol >= count) {
-                    newRow = (currentRow + 1) % rows;
-                    newCol = 0;
-                }
-                break;
-            case 'left':
-                newCol = currentCol - 1;
-                if (newCol < 0) {
-                    newCol = cols - 1;
-                    newRow = (currentRow - 1 + rows) % rows;
-                }
-                // Make sure position exists
-                while (newRow * cols + newCol >= count && newCol > 0) {
-                    newCol--;
-                }
-                break;
-            case 'down':
-                newRow = (currentRow + 1) % rows;
-                // If that position doesn't exist (incomplete last row), wrap to top
-                if (newRow * cols + newCol >= count) {
-                    newRow = 0;
-                }
-                break;
-            case 'up':
-                newRow = currentRow - 1;
-                if (newRow < 0) {
-                    // Go to last row
-                    newRow = rows - 1;
-                    // Make sure position exists in last row
-                    if (newRow * cols + newCol >= count) {
-                        newRow = Math.floor((count - 1) / cols);
-                        newCol = Math.min(newCol, (count - 1) % cols);
-                    }
-                }
-                break;
-        }
-
-        // Calculate new index
-        let newIndex = newRow * cols + newCol;
-
-        // Safety clamp
-        newIndex = Math.max(0, Math.min(count - 1, newIndex));
-
-        // Don't switch if same stream
-        if (newIndex === currentIndex) return;
-
-        const newStream = streams[newIndex];
         const mode = PlexdStream.getFullscreenMode();
-
-        // Switch to new stream while staying in focused mode
-        PlexdStream.enterFocusedMode(newStream.id);
+        PlexdStream.enterFocusedMode(nextId);
 
         // If was in true-focused mode, ensure wrapper gets focus for keyboard events
         if (mode === 'true-focused') {
-            newStream.wrapper.focus();
+            const nextStream = PlexdStream.getStream(nextId);
+            if (nextStream && nextStream.wrapper) nextStream.wrapper.focus();
         }
     }
 

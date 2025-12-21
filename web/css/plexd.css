@@ -597,6 +597,20 @@ body {
     padding: 16px;
 }
 
+/* Hide controls for non-focused streams when in fullscreen/focused mode */
+.plexd-app:has(.plexd-stream.plexd-fullscreen) .plexd-stream:not(.plexd-fullscreen) .plexd-controls {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
+}
+
+/* Fallback for browsers without :has() support */
+.plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-controls {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
+}
+
 .plexd-stream.plexd-fullscreen .plexd-btn {
     width: 40px;
     height: 40px;

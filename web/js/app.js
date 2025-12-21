@@ -278,13 +278,11 @@ const PlexdApp = (function() {
         loadStreamsFromUrl();
 
         // Sync rating status for loaded streams and auto-assign ratings to unrated videos
-        // Only assign ratings if streams don't already have saved ratings
         setTimeout(() => {
             PlexdStream.syncRatingStatus();
-            // distributeRatingsEvenly() now only assigns to streams without saved ratings
             const assigned = PlexdStream.distributeRatingsEvenly();
             if (assigned > 0) {
-                console.log(`[Plexd] Auto-assigned ratings to ${assigned} unrated videos`);
+                console.log(`[Plexd] Auto-assigned ratings to ${assigned} videos`);
             }
         }, 100);
 
@@ -494,18 +492,14 @@ const PlexdApp = (function() {
             muted: true
         });
 
-        // Store the filename for display and rating persistence
+        // Store the filename for display
         stream.fileName = fileName;
 
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         updateLayout();
 
-        // Sync rating status first (restores saved ratings for this fileName)
-        PlexdStream.syncRatingStatus();
-        
-        // Auto-assign rating only if no saved rating exists
-        // distributeRatingsEvenly() now only assigns to streams without saved ratings
+        // Auto-assign rating to the new video
         PlexdStream.distributeRatingsEvenly();
 
         // Note: We don't add file streams to history since object URLs are temporary
@@ -2791,13 +2785,12 @@ const PlexdApp = (function() {
                 addStreamFromFile(file.url, file.fileName);
                 localLoaded++;
 
-                // Restore rating if saved (ratings are now automatically loaded via syncRatingStatus)
-                // But we can also explicitly restore here for immediate feedback
+                // Restore rating if saved
                 const savedRating = localFileRatings[originalFileName] || localFileRatings[file.fileName];
                 if (savedRating && savedRating > 0) {
                     // Find the just-added stream and set its rating
                     const streams = PlexdStream.getAllStreams();
-                    const newStream = streams.find(s => s.url === file.url && s.fileName === file.fileName);
+                    const newStream = streams.find(s => s.url === file.url);
                     if (newStream) {
                         PlexdStream.setRating(newStream.id, savedRating);
                         console.log(`[Plexd] Restored rating ${savedRating} for ${file.fileName}`);

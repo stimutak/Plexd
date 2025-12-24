@@ -2045,6 +2045,16 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case 'q':
+            case 'Q':
+                // Q: Random seek selected stream, Shift+Q: Random seek ALL streams
+                e.preventDefault();
+                if (e.shiftKey) {
+                    randomSeekAll();
+                } else {
+                    randomSeekSelected();
+                }
+                break;
         }
     }
 
@@ -3472,6 +3482,62 @@ const PlexdApp = (function() {
         showMessage(`Closed ${count} stream(s)`, 'info');
     }
 
+    /**
+     * Seek all streams to random positions with retry logic
+     * Updates the button with feedback
+     */
+    async function randomSeekAll() {
+        const btn = document.getElementById('random-seek-all-btn');
+        const originalText = btn ? btn.innerHTML : '';
+
+        if (btn) btn.innerHTML = '⏳';
+
+        try {
+            const successCount = await PlexdStream.seekAllToRandomPosition();
+            const totalCount = PlexdStream.getStreamCount();
+
+            if (btn) {
+                btn.innerHTML = successCount === totalCount ? '✓' : `${successCount}/${totalCount}`;
+                setTimeout(() => { btn.innerHTML = '🔀'; }, 1500);
+            }
+
+            if (successCount === totalCount) {
+                showMessage(`All ${successCount} streams playing`, 'success');
+            } else if (successCount > 0) {
+                showMessage(`${successCount}/${totalCount} streams playing`, 'warning');
+            } else {
+                showMessage('Could not start any streams', 'error');
+            }
+        } catch (e) {
+            if (btn) btn.innerHTML = '✗';
+            setTimeout(() => { if (btn) btn.innerHTML = '🔀'; }, 1500);
+            showMessage('Random seek failed', 'error');
+        }
+    }
+
+    /**
+     * Seek selected or focused stream to random position
+     */
+    async function randomSeekSelected() {
+        const selected = PlexdStream.getSelectedStream();
+        const fullscreen = PlexdStream.getFullscreenStream();
+        const target = fullscreen || selected;
+
+        if (!target) {
+            showMessage('Select a stream first', 'info');
+            return;
+        }
+
+        showMessage('Seeking...', 'info');
+        const success = await PlexdStream.seekToRandomPosition(target.id);
+
+        if (success) {
+            showMessage('Playing from random position', 'success');
+        } else {
+            showMessage('Could not seek stream', 'warning');
+        }
+    }
+
     // Public API
     return {
         init,
@@ -3514,7 +3580,9 @@ const PlexdApp = (function() {
         toggleMuteAll,
         toggleAudioFocus,
         toggleCleanMode,
-        toggleGlobalFullscreen
+        toggleGlobalFullscreen,
+        randomSeekAll,
+        randomSeekSelected
     };
 })();
 

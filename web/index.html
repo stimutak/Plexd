@@ -70,6 +70,7 @@
                 <button id="audio-focus-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleAudioFocus()" title="Audio focus mode">🎧</button>
                 <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls">👁</button>
                 <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="True fullscreen (F key)">⛶</button>
+                <button id="random-seek-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.randomSeekAll()" title="Random position all streams (Q key)">🔀</button>
 
                 <!-- Panels -->
                 <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list (S)">Strms</button>
@@ -156,6 +157,7 @@
             <kbd>C</kbd> Copy URL &nbsp;
             <kbd>1-9</kbd> Filter/Rate &nbsp;
             <kbd>G</kbd> Rate &nbsp;
+            <kbd>Q</kbd> Random &nbsp;
             <kbd>?</kbd> Hide
         </div>
     </div>
@@ -164,8 +166,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=19"></script>
-    <script src="js/stream.js?v=19"></script>
-    <script src="js/app.js?v=19"></script>
+    <script src="js/grid.js?v=20"></script>
+    <script src="js/stream.js?v=20"></script>
+    <script src="js/app.js?v=20"></script>
 </body>
 </html>

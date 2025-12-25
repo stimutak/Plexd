@@ -1698,8 +1698,8 @@ const PlexdApp = (function() {
                 if (selected) {
                     PlexdStream.toggleMute(selected.id);
                 } else {
-                    PlexdStream.muteAll();
-                    showMessage('All streams muted', 'info');
+                    const muted = PlexdStream.toggleMuteAll();
+                    showMessage(muted ? 'All streams muted' : 'All streams unmuted', 'info');
                 }
                 break;
             case 'a':

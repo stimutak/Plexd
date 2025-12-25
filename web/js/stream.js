@@ -19,7 +19,8 @@ const PlexdStream = (function() {
     let selectedStreamId = null;
 
     // Audio focus mode - when true, unmuting one mutes all others
-    let audioFocusMode = true;
+    // Load from localStorage, default to true
+    let audioFocusMode = localStorage.getItem('plexd_audio_focus') !== 'false';
 
     // Show stream info overlay
     let showInfoOverlay = false;
@@ -624,7 +625,9 @@ const PlexdStream = (function() {
         const muteBtn = document.createElement('button');
         muteBtn.className = 'plexd-btn plexd-mute-btn';
         muteBtn.innerHTML = '&#128263;'; // Speaker icon
-        muteBtn.title = 'Toggle audio (audio focus: unmute one mutes others)';
+        muteBtn.title = audioFocusMode
+            ? 'Toggle audio (focus ON: unmute one mutes others)'
+            : 'Toggle audio (focus OFF: independent)';
         muteBtn.onclick = (e) => {
             e.stopPropagation();
             toggleMute(streamId);
@@ -2346,7 +2349,23 @@ const PlexdStream = (function() {
      */
     function toggleAudioFocus() {
         audioFocusMode = !audioFocusMode;
+        localStorage.setItem('plexd_audio_focus', audioFocusMode);
+        // Update all mute button tooltips to reflect new mode
+        updateAllMuteButtonTooltips();
         return audioFocusMode;
+    }
+
+    /**
+     * Update all mute button tooltips to reflect current audio focus mode
+     */
+    function updateAllMuteButtonTooltips() {
+        const tooltip = audioFocusMode
+            ? 'Toggle audio (focus ON: unmute one mutes others)'
+            : 'Toggle audio (focus OFF: independent)';
+        streams.forEach(stream => {
+            const muteBtn = stream.controls.querySelector('.plexd-mute-btn');
+            if (muteBtn) muteBtn.title = tooltip;
+        });
     }
 
     /**

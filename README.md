@@ -34,10 +34,45 @@ Plexd enables simultaneous playback of multiple video streams in a single applic
 
 ### Global Controls (Header)
 - **⏸ Pause/Play All**: Toggle playback for all streams
-- **🔇 Mute All**: Mute/unmute all streams at once
-- **🎧 Audio Focus**: Unmuting one stream automatically mutes others
+- **🔇 Mute All**: Toggle mute for all streams
+- **🎧 Audio Focus**: Toggle audio focus mode (see Audio System below)
 - **👁 Clean Mode**: Hide all per-stream controls for distraction-free viewing
 - **⛶ Global Fullscreen**: Fullscreen the entire grid view
+- **🔀 Random Seek All**: Jump all streams to random positions
+
+### Audio System
+
+Plexd has a flexible audio system with two modes: **Audio Focus** and **Independent**.
+
+#### Audio Focus Mode (🎧 ON - Default)
+When Audio Focus is enabled (headphone icon highlighted):
+- **Unmuting one stream automatically mutes all others**
+- Only one stream can have audio at a time
+- Useful for quickly switching audio between streams
+- Click a stream's mute button (🔊) to hear that stream; others go silent
+
+#### Independent Mode (🔈 OFF)
+When Audio Focus is disabled (speaker icon):
+- **Streams can be unmuted independently**
+- Multiple streams can play audio simultaneously
+- Useful for ambient/background viewing of multiple sources
+- Click mute buttons to toggle each stream individually
+
+#### Audio Controls
+
+| Control | Location | Behavior |
+|---------|----------|----------|
+| 🔊/🔇 per-stream | Stream overlay | Toggle mute for that stream (audio focus applies) |
+| 🎧/🔈 global | Header bar | Toggle audio focus mode ON/OFF |
+| M key (with selection) | Keyboard | Toggle mute on selected stream |
+| M key (no selection) | Keyboard | Toggle mute ALL streams |
+| A key | Keyboard | Toggle audio focus mode |
+
+#### Important Notes
+- **Streams start muted** - Browser autoplay policy requires videos to start muted
+- **Audio focus state persists** - Your preference is saved across sessions
+- **Mute button tooltip** - Hover to see current mode (focus ON/OFF)
+- **M key without selection** - Now toggles (mute all ↔ unmute all), not just mute
 
 ### Navigation
 - **Keyboard Navigation**: Arrow keys to select streams in grid
@@ -59,22 +94,27 @@ Plexd enables simultaneous playback of multiple video streams in a single applic
 
 | Key | Action |
 |-----|--------|
-| Arrow Keys | Navigate between streams |
-| Enter/Z | Toggle fullscreen on selected |
-| Space | Play/pause selected (or all) |
-| M | Mute selected (or all) |
-| P | Picture-in-Picture |
-| A | Toggle audio focus mode |
+| Arrow Keys | Navigate between streams (in grid/coverflow) |
+| Enter/Z | Toggle focused fullscreen on selected stream |
+| Space | Play/pause selected stream (or toggle all if none selected) |
+| M | Toggle mute on selected stream (or toggle all if none selected) |
+| A | Toggle audio focus mode (🎧 ON / 🔈 OFF) |
+| P | Picture-in-Picture for selected stream |
 | I | Toggle stream info overlay |
-| F | True fullscreen (browser API) |
+| F | Toggle true fullscreen (grid view, hides browser chrome) |
 | T | Toggle Tetris layout mode |
-| V | Cycle view modes (All → 1★ → 2★ → ... → 5★) |
+| V | Cycle view modes (All → 1★ → 2★ → ... → 9★) |
 | G | Cycle rating on selected stream |
-| 1-5 | Set rating directly on selected stream |
-| 0 | Clear rating on selected stream |
-| Delete | Remove selected stream |
+| Q | Random seek on selected/focused stream |
+| Shift+Q | Random seek ALL streams |
+| 0 | Show all streams (exit rating filter) |
+| 1-9 (in grid) | Filter by rating slot |
+| 1-9 (in focused fullscreen) | Assign rating to focused stream |
+| Shift+1-9 | Opposite action (assign in grid, filter in fullscreen) |
+| Shift+0 | Clear rating on selected/focused stream |
+| Delete/Backspace | Remove selected stream |
 | Ctrl+S | Save stream combination |
-| Esc | Exit fullscreen / deselect |
+| Esc | Exit fullscreen / deselect / clear state |
 | ? | Toggle keyboard shortcuts hint |
 
 ## Quick Start
@@ -184,7 +224,8 @@ All data stored in localStorage:
 | `plexd_queue` | Queued stream URLs |
 | `plexd_history` | Last 50 played streams with timestamps |
 | `plexd_combinations` | Saved stream sets with names |
-| `plexd_ratings` | Stream ratings (URL → 1-5) |
+| `plexd_ratings` | Stream ratings (URL → 1-9) |
+| `plexd_audio_focus` | Audio focus mode preference (true/false) |
 
 ## Performance Targets
 

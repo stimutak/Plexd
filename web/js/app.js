@@ -2010,17 +2010,20 @@ const PlexdApp = (function() {
             case '7':
             case '8':
             case '9':
-                // Context-aware: fullscreen = assign slot number, grid = filter by slot
-                // Shift+N: opposite action (grid = assign, fullscreen = filter)
+                // Context-aware: focused fullscreen = assign slot number, grid = filter by slot
+                // Shift+N: opposite action (grid = assign, focused = filter)
+                // Note: true-grid mode (F key) has no focused stream, so treat as grid mode for filtering
                 if (!e.ctrlKey && !e.metaKey) {
                     const slotNum = parseInt(e.key);
-                    const isFullscreen = PlexdStream.getFullscreenMode() !== 'none';
-                    const doAssign = e.shiftKey ? !isFullscreen : isFullscreen;
+                    const fullscreenMode = PlexdStream.getFullscreenMode();
+                    // Only consider "focused" fullscreen modes where there's an actual stream to assign to
+                    const isFocusedFullscreen = fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill';
+                    const doAssign = e.shiftKey ? !isFocusedFullscreen : isFocusedFullscreen;
                     const doFilter = !doAssign;
 
                     if (doAssign) {
                         // Assign slot number to stream
-                        const targetStream = isFullscreen
+                        const targetStream = isFocusedFullscreen
                             ? PlexdStream.getFullscreenStream()
                             : selected;
                         if (targetStream) {
@@ -2028,13 +2031,13 @@ const PlexdApp = (function() {
                             showMessage(`Assigned to slot ${slotNum}`, 'info');
                             // If in focus mode with a filter active and new slot doesn't match,
                             // exit focus mode to avoid being stuck viewing a hidden stream
-                            if (isFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
+                            if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
                                 PlexdStream.exitFocusedMode();
                             }
                         }
                     } else {
-                        // Filter action - if in focus mode, exit first to show filtered grid
-                        if (isFullscreen) {
+                        // Filter action - if in focused fullscreen, exit first to show filtered grid
+                        if (isFocusedFullscreen) {
                             PlexdStream.exitFocusedMode();
                         }
                         const count = PlexdStream.getStreamsByRating(slotNum).length;

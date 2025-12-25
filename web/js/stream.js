@@ -28,6 +28,11 @@ const PlexdStream = (function() {
     // Current grid layout for navigation
     let gridCols = 1;
 
+    // Cached layout order for consistent navigation (row-major order from last layout)
+    // This is updated by the layout engine and used for fullscreen navigation
+    let cachedLayoutOrder = [];
+    let cachedLayoutRows = [];
+
     // Ratings map - stores stream URL -> rating slot (1-9, 0 = unrated)
     // For blob URLs (local files), also stores fileName -> rating for persistence across sessions
     const ratings = new Map();
@@ -2419,6 +2424,65 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Update cached layout order from the layout engine.
+     * This is called after layout is applied to store a consistent navigation order.
+     * @param {Array} cells - Array of {streamId, x, y, width, height} from layout engine
+     */
+    function updateLayoutOrder(cells) {
+        if (!cells || cells.length === 0) {
+            cachedLayoutOrder = [];
+            cachedLayoutRows = [];
+            return;
+        }
+
+        // Sort cells by row (y) then column (x) to get row-major order
+        const sorted = [...cells].sort((a, b) => {
+            // Group into rows with tolerance (items within 50px Y are same row)
+            const rowA = Math.floor(a.y / 50);
+            const rowB = Math.floor(b.y / 50);
+            if (rowA !== rowB) return rowA - rowB;
+            return a.x - b.x;
+        });
+
+        // Build row structure for up/down navigation
+        const rows = [];
+        let currentRow = [];
+        let lastRowIndex = -1;
+
+        for (const cell of sorted) {
+            const rowIndex = Math.floor(cell.y / 50);
+            if (lastRowIndex !== -1 && rowIndex !== lastRowIndex) {
+                if (currentRow.length > 0) {
+                    rows.push([...currentRow]);
+                }
+                currentRow = [];
+            }
+            currentRow.push(cell.streamId);
+            lastRowIndex = rowIndex;
+        }
+        if (currentRow.length > 0) {
+            rows.push(currentRow);
+        }
+
+        cachedLayoutOrder = sorted.map(c => c.streamId);
+        cachedLayoutRows = rows;
+    }
+
+    /**
+     * Get cached layout order
+     */
+    function getLayoutOrder() {
+        return cachedLayoutOrder;
+    }
+
+    /**
+     * Get cached layout rows
+     */
+    function getLayoutRows() {
+        return cachedLayoutRows;
+    }
+
+    /**
      * Compute grid columns from actual DOM positions
      */
     function computeGridCols() {
@@ -2543,14 +2607,76 @@ const PlexdStream = (function() {
 
     /**
      * Get the next stream id in a direction based on spatial layout.
-     * - Right/Left: strict row-major cycling through every visible clip (wraps).
-     * - Up/Down: nearest X in the previous/next row (wraps rows).
+     * Uses cached layout order when available for consistent navigation.
+     * - Right/Left: row-major cycling through visible clips (wraps).
+     * - Up/Down: same column position in previous/next row (wraps rows).
      */
     function getSpatialNeighborStreamId(currentStreamId, direction) {
         const navigable = getNavigableStreams();
         if (navigable.length === 0) return null;
         if (navigable.length === 1) return navigable[0].id;
 
+        const navigableIds = new Set(navigable.map(s => s.id));
+
+        // Use cached layout if available and contains the current stream
+        const useCache = cachedLayoutOrder.length > 0 &&
+                         cachedLayoutRows.length > 0 &&
+                         cachedLayoutOrder.includes(currentStreamId);
+
+        if (useCache) {
+            // Filter cached order to only include currently navigable streams
+            const order = cachedLayoutOrder.filter(id => navigableIds.has(id));
+            const rows = cachedLayoutRows.map(row => row.filter(id => navigableIds.has(id)))
+                                         .filter(row => row.length > 0);
+
+            if (order.length === 0) {
+                // Fall back to DOM-based navigation
+                return getSpatialNeighborFromDOM(navigable, currentStreamId, direction);
+            }
+
+            const currentIdx = order.indexOf(currentStreamId);
+            const idx = currentIdx === -1 ? 0 : currentIdx;
+
+            if (direction === 'right' || direction === 'left') {
+                const delta = direction === 'right' ? 1 : -1;
+                const nextIdx = (idx + delta + order.length) % order.length;
+                return order[nextIdx];
+            }
+
+            // Up/down: find current row and column position
+            let currentRow = -1;
+            let currentCol = -1;
+            for (let r = 0; r < rows.length; r++) {
+                const colIdx = rows[r].indexOf(currentStreamId);
+                if (colIdx !== -1) {
+                    currentRow = r;
+                    currentCol = colIdx;
+                    break;
+                }
+            }
+
+            if (currentRow === -1) {
+                // Current stream not in rows, fall back
+                return getSpatialNeighborFromDOM(navigable, currentStreamId, direction);
+            }
+
+            const rowDelta = direction === 'down' ? 1 : -1;
+            const targetRow = (currentRow + rowDelta + rows.length) % rows.length;
+            const targetRowItems = rows[targetRow];
+
+            // Try to stay in same column, or closest available
+            const targetCol = Math.min(currentCol, targetRowItems.length - 1);
+            return targetRowItems[targetCol];
+        }
+
+        // No cache or current stream not in cache - use DOM-based navigation
+        return getSpatialNeighborFromDOM(navigable, currentStreamId, direction);
+    }
+
+    /**
+     * Fallback: Get spatial neighbor using DOM positions
+     */
+    function getSpatialNeighborFromDOM(navigable, currentStreamId, direction) {
         const rows = buildSpatialRows(navigable);
         const flat = rows.flatMap(r => r.items);
 
@@ -3355,6 +3481,9 @@ const PlexdStream = (function() {
         getSpatialNeighborStreamId,
         setGridCols,
         getGridCols,
+        updateLayoutOrder,
+        getLayoutOrder,
+        getLayoutRows,
         reorderStreams,
         seekRelative,
         seekTo,

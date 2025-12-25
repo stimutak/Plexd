@@ -256,6 +256,11 @@ const PlexdGrid = (function() {
                 }
             }
         });
+
+        // Update navigation order cache in PlexdStream for consistent arrow key navigation
+        if (typeof PlexdStream !== 'undefined' && PlexdStream.updateLayoutOrder) {
+            PlexdStream.updateLayoutOrder(layout.cells);
+        }
     }
 
     // =========================================================================

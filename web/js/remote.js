@@ -1,8 +1,6 @@
 /**
  * Plexd Remote Control
- *
- * Mobile-optimized remote control for Plexd via BroadcastChannel + localStorage
- * Works both same-device (BroadcastChannel) and cross-device (localStorage)
+ * iPhone-optimized remote with gesture-based navigation
  */
 
 const PlexdRemoteClient = (function() {
@@ -14,7 +12,8 @@ const PlexdRemoteClient = (function() {
     let lastStateTime = 0;
     let connectionCheckInterval = null;
     let statePollInterval = null;
-    let selectedStreamId = null;
+    let quickActionsVisible = false;
+    let quickActionsTimeout = null;
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
@@ -26,10 +25,53 @@ const PlexdRemoteClient = (function() {
      * Initialize the remote control
      */
     function init() {
-        // Cache DOM elements
         cacheElements();
+        setupBroadcastChannel();
+        startStatePoll();
+        setupStorageListener();
+        setupEventListeners();
+        setupGestures();
 
-        // Set up BroadcastChannel for same-browser communication
+        // Request initial state
+        send('ping');
+
+        // Check connection status periodically
+        connectionCheckInterval = setInterval(checkConnection, 1000);
+
+        console.log('Plexd remote initialized');
+    }
+
+    /**
+     * Cache DOM element references
+     */
+    function cacheElements() {
+        elements.connectionStatus = document.getElementById('connection-status');
+        elements.streamPosition = document.getElementById('stream-position');
+        elements.emptyState = document.getElementById('empty-state');
+        elements.nowPlaying = document.getElementById('now-playing');
+        elements.nowPlayingArea = document.getElementById('now-playing-area');
+        elements.streamName = document.getElementById('stream-name');
+        elements.streamTime = document.getElementById('stream-time');
+        elements.streamProgress = document.getElementById('stream-progress');
+        elements.playState = document.getElementById('play-state');
+        elements.streamRating = document.getElementById('stream-rating');
+        elements.audioState = document.getElementById('audio-state');
+        elements.quickActions = document.getElementById('quick-actions');
+        elements.btnPrev = document.getElementById('btn-prev');
+        elements.btnNext = document.getElementById('btn-next');
+        elements.btnPlayPause = document.getElementById('btn-play-pause');
+        elements.playPauseIcon = document.getElementById('play-pause-icon');
+        elements.btnMute = document.getElementById('btn-mute');
+        elements.btnRating = document.getElementById('btn-rating');
+        elements.btnFullscreen = document.getElementById('btn-fullscreen');
+        elements.btnViewMode = document.getElementById('btn-view-mode');
+        elements.viewModeIcon = document.getElementById('view-mode-icon');
+    }
+
+    /**
+     * Set up BroadcastChannel for same-browser communication
+     */
+    function setupBroadcastChannel() {
         if (typeof BroadcastChannel !== 'undefined') {
             channel = new BroadcastChannel('plexd-remote');
             channel.onmessage = (event) => {
@@ -39,11 +81,12 @@ const PlexdRemoteClient = (function() {
                 }
             };
         }
+    }
 
-        // Set up localStorage polling for cross-device
-        startStatePoll();
-
-        // Listen for storage events (cross-tab on same device)
+    /**
+     * Set up localStorage listener for cross-tab communication
+     */
+    function setupStorageListener() {
         window.addEventListener('storage', (e) => {
             if (e.key === STATE_KEY && e.newValue) {
                 try {
@@ -53,17 +96,6 @@ const PlexdRemoteClient = (function() {
                 }
             }
         });
-
-        // Set up event listeners
-        setupEventListeners();
-
-        // Request initial state
-        send('ping');
-
-        // Check connection status periodically
-        connectionCheckInterval = setInterval(checkConnection, 1000);
-
-        console.log('Plexd remote client initialized');
     }
 
     /**
@@ -72,7 +104,6 @@ const PlexdRemoteClient = (function() {
     function startStatePoll() {
         statePollInterval = setInterval(async () => {
             try {
-                // Try HTTP API first (for cross-device)
                 const res = await fetch('/api/remote/state');
                 if (res.ok) {
                     const newState = await res.json();
@@ -82,10 +113,10 @@ const PlexdRemoteClient = (function() {
                     return;
                 }
             } catch (e) {
-                // API not available, fall back to localStorage
+                // API not available
             }
 
-            // localStorage fallback (same device)
+            // localStorage fallback
             const stateData = localStorage.getItem(STATE_KEY);
             if (stateData) {
                 try {
@@ -101,89 +132,231 @@ const PlexdRemoteClient = (function() {
     }
 
     /**
-     * Cache DOM element references
-     */
-    function cacheElements() {
-        elements.connectionStatus = document.getElementById('connection-status');
-        elements.statusText = elements.connectionStatus?.querySelector('.status-text');
-        elements.streamList = document.getElementById('stream-list');
-
-        elements.btnPrev = document.getElementById('btn-prev');
-        elements.btnNext = document.getElementById('btn-next');
-        elements.btnPauseAll = document.getElementById('btn-pause-all');
-        elements.btnMuteAll = document.getElementById('btn-mute-all');
-        elements.btnSeekBack = document.getElementById('btn-seek-back');
-        elements.btnSeekFwd = document.getElementById('btn-seek-fwd');
-        elements.btnFullscreen = document.getElementById('btn-fullscreen');
-        elements.btnViewMode = document.getElementById('btn-view-mode');
-        elements.btnTetris = document.getElementById('btn-tetris');
-        elements.btnCoverflow = document.getElementById('btn-coverflow');
-        elements.btnClean = document.getElementById('btn-clean');
-    }
-
-    /**
      * Set up event listeners for controls
      */
     function setupEventListeners() {
-        // Navigation
-        elements.btnPrev?.addEventListener('click', () => send('selectNext', { direction: 'left' }));
-        elements.btnNext?.addEventListener('click', () => send('selectNext', { direction: 'right' }));
-
-        // Playback
-        elements.btnPauseAll?.addEventListener('click', () => send('togglePauseAll'));
-        elements.btnMuteAll?.addEventListener('click', () => send('toggleMuteAll'));
-
-        // Seek
-        elements.btnSeekBack?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                send('seekRelative', { streamId: selectedStreamId, offset: -10 });
-            }
-        });
-        elements.btnSeekFwd?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                send('seekRelative', { streamId: selectedStreamId, offset: 10 });
-            }
+        // Main controls
+        elements.btnPrev?.addEventListener('click', () => {
+            send('selectNext', { direction: 'left' });
+            hapticFeedback();
         });
 
-        // View controls
-        elements.btnFullscreen?.addEventListener('click', () => send('toggleGlobalFullscreen'));
-        elements.btnViewMode?.addEventListener('click', () => send('cycleViewMode'));
-        elements.btnTetris?.addEventListener('click', () => send('toggleTetrisMode'));
-        elements.btnCoverflow?.addEventListener('click', () => send('toggleCoverflowMode'));
-        elements.btnClean?.addEventListener('click', () => send('toggleCleanMode'));
+        elements.btnNext?.addEventListener('click', () => {
+            send('selectNext', { direction: 'right' });
+            hapticFeedback();
+        });
 
-        // Swipe gestures on stream list
-        setupSwipeGestures();
+        elements.btnPlayPause?.addEventListener('click', () => {
+            send('togglePauseAll');
+            hapticFeedback();
+        });
+
+        // Quick action buttons
+        elements.btnMute?.addEventListener('click', () => {
+            if (state?.selectedStreamId) {
+                send('toggleMute', { streamId: state.selectedStreamId });
+                hapticFeedback();
+            }
+        });
+
+        elements.btnRating?.addEventListener('click', () => {
+            if (state?.selectedStreamId) {
+                send('cycleRating', { streamId: state.selectedStreamId });
+                hapticFeedback();
+            }
+        });
+
+        elements.btnFullscreen?.addEventListener('click', () => {
+            if (state?.selectedStreamId) {
+                send('enterFullscreen', { streamId: state.selectedStreamId });
+                hapticFeedback();
+                hideQuickActions();
+            }
+        });
+
+        elements.btnViewMode?.addEventListener('click', () => {
+            send('cycleViewMode');
+            hapticFeedback();
+        });
+
+        // Tap on now playing card to show quick actions
+        elements.nowPlaying?.addEventListener('click', (e) => {
+            if (!e.target.closest('button')) {
+                toggleQuickActions();
+                hapticFeedback();
+            }
+        });
+
+        // Tap outside quick actions to close
+        document.addEventListener('click', (e) => {
+            if (quickActionsVisible &&
+                !e.target.closest('.quick-actions') &&
+                !e.target.closest('.now-playing-content')) {
+                hideQuickActions();
+            }
+        });
     }
 
     /**
-     * Set up swipe gestures for stream selection
+     * Set up swipe gestures for navigation
      */
-    function setupSwipeGestures() {
+    function setupGestures() {
         let touchStartX = 0;
         let touchStartY = 0;
+        let touchStartTime = 0;
+        let isSwiping = false;
 
-        elements.streamList?.addEventListener('touchstart', (e) => {
+        const area = elements.nowPlayingArea;
+        if (!area) return;
+
+        area.addEventListener('touchstart', (e) => {
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
+            touchStartTime = Date.now();
+            isSwiping = false;
         }, { passive: true });
 
-        elements.streamList?.addEventListener('touchend', (e) => {
-            const touchEndX = e.changedTouches[0].clientX;
-            const touchEndY = e.changedTouches[0].clientY;
+        area.addEventListener('touchmove', (e) => {
+            if (!touchStartX) return;
 
-            const deltaX = touchEndX - touchStartX;
-            const deltaY = touchEndY - touchStartY;
+            const deltaX = e.touches[0].clientX - touchStartX;
+            const deltaY = e.touches[0].clientY - touchStartY;
 
-            // Only handle horizontal swipes (not vertical scrolling)
-            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
-                if (deltaX > 0) {
-                    send('selectNext', { direction: 'left' });
-                } else {
-                    send('selectNext', { direction: 'right' });
-                }
+            // If horizontal movement is dominant, we're swiping
+            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 20) {
+                isSwiping = true;
+                showSwipeIndicator(deltaX > 0 ? 'left' : 'right');
             }
         }, { passive: true });
+
+        area.addEventListener('touchend', (e) => {
+            hideSwipeIndicators();
+
+            if (!touchStartX) return;
+
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = touchEndY - touchStartY;
+            const duration = Date.now() - touchStartTime;
+
+            // Swipe detection: horizontal, fast enough, long enough
+            if (Math.abs(deltaX) > Math.abs(deltaY) &&
+                Math.abs(deltaX) > 60 &&
+                duration < 500) {
+
+                if (deltaX > 0) {
+                    send('selectNext', { direction: 'left' });
+                    showToast('Previous');
+                } else {
+                    send('selectNext', { direction: 'right' });
+                    showToast('Next');
+                }
+                hapticFeedback();
+            }
+
+            touchStartX = 0;
+            touchStartY = 0;
+        }, { passive: true });
+    }
+
+    /**
+     * Show swipe direction indicator
+     */
+    function showSwipeIndicator(direction) {
+        // Create or get indicators
+        let leftIndicator = document.querySelector('.swipe-indicator.left');
+        let rightIndicator = document.querySelector('.swipe-indicator.right');
+
+        if (!leftIndicator) {
+            leftIndicator = document.createElement('div');
+            leftIndicator.className = 'swipe-indicator left';
+            leftIndicator.textContent = '‹';
+            document.body.appendChild(leftIndicator);
+        }
+
+        if (!rightIndicator) {
+            rightIndicator = document.createElement('div');
+            rightIndicator.className = 'swipe-indicator right';
+            rightIndicator.textContent = '›';
+            document.body.appendChild(rightIndicator);
+        }
+
+        leftIndicator.classList.toggle('visible', direction === 'left');
+        rightIndicator.classList.toggle('visible', direction === 'right');
+    }
+
+    /**
+     * Hide swipe indicators
+     */
+    function hideSwipeIndicators() {
+        document.querySelectorAll('.swipe-indicator').forEach(el => {
+            el.classList.remove('visible');
+        });
+    }
+
+    /**
+     * Toggle quick actions panel
+     */
+    function toggleQuickActions() {
+        if (quickActionsVisible) {
+            hideQuickActions();
+        } else {
+            showQuickActions();
+        }
+    }
+
+    /**
+     * Show quick actions panel
+     */
+    function showQuickActions() {
+        if (!elements.quickActions || !state?.selectedStreamId) return;
+
+        elements.quickActions.classList.remove('hidden');
+        quickActionsVisible = true;
+
+        // Auto-hide after 5 seconds
+        clearTimeout(quickActionsTimeout);
+        quickActionsTimeout = setTimeout(hideQuickActions, 5000);
+    }
+
+    /**
+     * Hide quick actions panel
+     */
+    function hideQuickActions() {
+        if (!elements.quickActions) return;
+
+        elements.quickActions.classList.add('hidden');
+        quickActionsVisible = false;
+        clearTimeout(quickActionsTimeout);
+    }
+
+    /**
+     * Show a toast notification
+     */
+    function showToast(message) {
+        // Remove existing toast
+        const existing = document.querySelector('.toast');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('fade-out');
+            setTimeout(() => toast.remove(), 200);
+        }, 1000);
+    }
+
+    /**
+     * Trigger haptic feedback if available
+     */
+    function hapticFeedback() {
+        if ('vibrate' in navigator) {
+            navigator.vibrate(10);
+        }
     }
 
     /**
@@ -201,7 +374,7 @@ const PlexdRemoteClient = (function() {
             channel.postMessage(command);
         }
 
-        // HTTP API for cross-device (iPhone to MBP)
+        // HTTP API for cross-device
         fetch('/api/remote/command', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -222,19 +395,18 @@ const PlexdRemoteClient = (function() {
     function handleStateUpdate(newState) {
         state = newState;
         lastStateTime = Date.now();
-        selectedStreamId = state.selectedStreamId;
 
         if (!connected) {
             connected = true;
             updateConnectionStatus(true);
         }
 
-        renderStreamList();
+        updateNowPlaying();
         updateControls();
     }
 
     /**
-     * Check if we're still connected (receiving updates)
+     * Check if we're still connected
      */
     function checkConnection() {
         const timeSinceLastUpdate = Date.now() - lastStateTime;
@@ -242,7 +414,6 @@ const PlexdRemoteClient = (function() {
         if (connected && timeSinceLastUpdate > 2000) {
             connected = false;
             updateConnectionStatus(false);
-            // Try to reconnect
             send('ping');
         }
     }
@@ -253,139 +424,80 @@ const PlexdRemoteClient = (function() {
     function updateConnectionStatus(isConnected) {
         if (!elements.connectionStatus) return;
 
-        if (isConnected) {
-            elements.connectionStatus.classList.remove('disconnected');
-            elements.connectionStatus.classList.add('connected');
-            if (elements.statusText) {
-                elements.statusText.textContent = 'Connected';
-            }
-        } else {
-            elements.connectionStatus.classList.remove('connected');
-            elements.connectionStatus.classList.add('disconnected');
-            if (elements.statusText) {
-                elements.statusText.textContent = 'Disconnected';
-            }
-        }
+        elements.connectionStatus.classList.toggle('connected', isConnected);
+        elements.connectionStatus.classList.toggle('disconnected', !isConnected);
     }
 
     /**
-     * Show error message
+     * Update the Now Playing display
      */
-    function showError(message) {
-        if (elements.streamList) {
-            elements.streamList.innerHTML = `
-                <div class="empty-state error">
-                    <p>${escapeHtml(message)}</p>
-                </div>
-            `;
-        }
-    }
+    function updateNowPlaying() {
+        if (!state) return;
 
-    /**
-     * Render the stream list
-     */
-    function renderStreamList() {
-        if (!state || !elements.streamList) return;
+        // Show/hide states
+        const hasStreams = state.streams && state.streams.length > 0;
+        elements.emptyState?.classList.toggle('hidden', hasStreams);
+        elements.nowPlaying?.classList.toggle('hidden', !hasStreams);
 
-        if (state.streams.length === 0) {
-            elements.streamList.innerHTML = `
-                <div class="empty-state">
-                    <p>No streams playing</p>
-                    <p class="hint">Add streams in the main Plexd app</p>
-                </div>
-            `;
+        if (!hasStreams) {
+            elements.streamPosition.textContent = '-';
             return;
         }
 
-        elements.streamList.innerHTML = state.streams.map(stream => {
-            const isSelected = stream.id === state.selectedStreamId;
-            const isFullscreen = stream.id === state.fullscreenStreamId;
-            const displayName = stream.fileName || getDisplayName(stream.url);
-            const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
-            const rating = stream.rating || 0;
-            const ratingStars = rating > 0 ? '★'.repeat(rating) : '';
-            const ratingClass = rating > 0 ? `rating-${rating}` : '';
+        // Find selected stream or use first
+        const selectedId = state.selectedStreamId;
+        let stream = state.streams.find(s => s.id === selectedId);
+        let streamIndex = state.streams.findIndex(s => s.id === selectedId);
 
-            return `
-                <div class="stream-item ${isSelected ? 'selected' : ''} ${isFullscreen ? 'fullscreen' : ''} ${ratingClass}"
-                     data-stream-id="${stream.id}">
-                    <div class="stream-info">
-                        <div class="stream-name">${escapeHtml(displayName)}</div>
-                        <div class="stream-meta">
-                            <span class="stream-state ${stream.paused ? 'paused' : 'playing'}">
-                                ${stream.paused ? '⏸' : '▶'}
-                            </span>
-                            <span class="stream-time">${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}</span>
-                            ${ratingStars ? `<span class="stream-rating ${ratingClass}">${ratingStars}</span>` : ''}
-                            ${stream.muted ? '' : '<span class="stream-audio">🔊</span>'}
-                        </div>
-                    </div>
-                    <div class="stream-progress">
-                        <div class="stream-progress-bar" style="width: ${progress}%"></div>
-                    </div>
-                    <div class="stream-actions">
-                        <button class="stream-btn play-btn" data-action="togglePause" title="${stream.paused ? 'Play' : 'Pause'}">
-                            ${stream.paused ? '▶' : '⏸'}
-                        </button>
-                        <button class="stream-btn mute-btn ${stream.muted ? '' : 'active'}" data-action="toggleMute" title="${stream.muted ? 'Unmute' : 'Mute'}">
-                            ${stream.muted ? '🔇' : '🔊'}
-                        </button>
-                        <button class="stream-btn rating-btn ${ratingClass}" data-action="cycleRating" title="Rate">
-                            ${rating > 0 ? '★' : '☆'}
-                        </button>
-                        <button class="stream-btn fullscreen-btn ${isFullscreen ? 'active' : ''}" data-action="enterFullscreen" title="Fullscreen">
-                            ⛶
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+        if (!stream) {
+            stream = state.streams[0];
+            streamIndex = 0;
+        }
 
-        // Add click handlers for stream items
-        elements.streamList.querySelectorAll('.stream-item').forEach(item => {
-            const streamId = item.dataset.streamId;
+        // Update position counter
+        elements.streamPosition.textContent = `${streamIndex + 1} / ${state.streams.length}`;
 
-            // Tap to select
-            item.addEventListener('click', (e) => {
-                if (e.target.closest('.stream-btn')) return; // Don't select if clicking a button
-                send('selectStream', { streamId });
-            });
+        // Update stream info
+        const displayName = stream.fileName || getDisplayName(stream.url);
+        elements.streamName.textContent = displayName;
 
-            // Double tap for fullscreen
-            let lastTap = 0;
-            item.addEventListener('touchend', (e) => {
-                if (e.target.closest('.stream-btn')) return;
-                const now = Date.now();
-                if (now - lastTap < 300) {
-                    send('enterFullscreen', { streamId });
-                }
-                lastTap = now;
-            });
-        });
+        // Time display
+        const currentTime = formatTime(stream.currentTime);
+        const duration = formatTime(stream.duration);
+        elements.streamTime.textContent = `${currentTime} / ${duration}`;
 
-        // Add click handlers for stream action buttons
-        elements.streamList.querySelectorAll('.stream-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const streamId = btn.closest('.stream-item').dataset.streamId;
-                const action = btn.dataset.action;
+        // Progress bar
+        const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
+        elements.streamProgress.style.width = `${progress}%`;
 
-                switch (action) {
-                    case 'togglePause':
-                        send('togglePause', { streamId });
-                        break;
-                    case 'toggleMute':
-                        send('toggleMute', { streamId });
-                        break;
-                    case 'cycleRating':
-                        send('cycleRating', { streamId });
-                        break;
-                    case 'enterFullscreen':
-                        send('enterFullscreen', { streamId });
-                        break;
-                }
-            });
-        });
+        // Play state
+        elements.playState.textContent = stream.paused ? '⏸' : '▶';
+        elements.playState.classList.toggle('paused', stream.paused);
+
+        // Rating
+        const rating = stream.rating || 0;
+        elements.streamRating.textContent = rating > 0 ? '★'.repeat(rating) : '';
+
+        // Audio state
+        elements.audioState.textContent = stream.muted ? '🔇' : '🔊';
+        elements.audioState.classList.toggle('muted', stream.muted);
+
+        // Update quick action buttons
+        if (elements.btnMute) {
+            elements.btnMute.classList.toggle('active', !stream.muted);
+            elements.btnMute.querySelector('.quick-icon').textContent = stream.muted ? '🔇' : '🔊';
+            elements.btnMute.querySelector('.quick-label').textContent = stream.muted ? 'Unmute' : 'Mute';
+        }
+
+        if (elements.btnRating) {
+            const ratingIcon = rating > 0 ? '★' : '☆';
+            elements.btnRating.querySelector('.quick-icon').textContent = ratingIcon;
+        }
+
+        const isFullscreen = stream.id === state.fullscreenStreamId;
+        if (elements.btnFullscreen) {
+            elements.btnFullscreen.classList.toggle('active', isFullscreen);
+        }
     }
 
     /**
@@ -394,50 +506,27 @@ const PlexdRemoteClient = (function() {
     function updateControls() {
         if (!state) return;
 
-        // Check if any stream is paused
-        const allPaused = state.streams.length > 0 && state.streams.every(s => s.paused);
-        const anyPlaying = state.streams.some(s => !s.paused);
+        // Play/Pause button state
+        const anyPlaying = state.streams && state.streams.some(s => !s.paused);
 
-        if (elements.btnPauseAll) {
-            elements.btnPauseAll.querySelector('.icon').textContent = anyPlaying ? '⏸' : '▶';
-            elements.btnPauseAll.classList.toggle('active', anyPlaying);
+        if (elements.btnPlayPause) {
+            elements.btnPlayPause.classList.toggle('paused', !anyPlaying);
         }
 
-        // Check if any stream is unmuted
-        const anyUnmuted = state.streams.some(s => !s.muted);
-        if (elements.btnMuteAll) {
-            elements.btnMuteAll.querySelector('.icon').textContent = anyUnmuted ? '🔊' : '🔇';
-            elements.btnMuteAll.classList.toggle('active', anyUnmuted);
-        }
-
-        // Fullscreen state
-        if (elements.btnFullscreen) {
-            elements.btnFullscreen.classList.toggle('active', state.fullscreenMode !== 'none');
+        if (elements.playPauseIcon) {
+            elements.playPauseIcon.textContent = anyPlaying ? '⏸' : '▶';
+            // Adjust centering for pause icon
+            elements.playPauseIcon.style.marginLeft = anyPlaying ? '0' : '4px';
         }
 
         // View mode
+        if (elements.viewModeIcon) {
+            const viewText = state.viewMode === 'all' ? '★' : '★'.repeat(state.viewMode);
+            elements.viewModeIcon.textContent = viewText;
+        }
+
         if (elements.btnViewMode) {
-            const viewText = state.viewMode === 'all' ? 'All' : '★'.repeat(state.viewMode);
-            elements.btnViewMode.querySelector('.icon').textContent = viewText;
-        }
-
-        // Tetris mode
-        if (elements.btnTetris) {
-            elements.btnTetris.classList.toggle('active', state.tetrisMode);
-        }
-
-        // Clean mode
-        if (elements.btnClean) {
-            elements.btnClean.classList.toggle('active', state.cleanMode);
-        }
-
-        // Enable/disable seek buttons based on selection
-        const hasSelection = state.selectedStreamId !== null;
-        if (elements.btnSeekBack) {
-            elements.btnSeekBack.disabled = !hasSelection;
-        }
-        if (elements.btnSeekFwd) {
-            elements.btnSeekFwd.disabled = !hasSelection;
+            elements.btnViewMode.classList.toggle('active', state.viewMode !== 'all');
         }
     }
 
@@ -449,11 +538,12 @@ const PlexdRemoteClient = (function() {
             const urlObj = new URL(url);
             const pathname = urlObj.pathname;
             const filename = pathname.split('/').pop() || urlObj.hostname;
-            // Decode and truncate
             const decoded = decodeURIComponent(filename);
-            return decoded.length > 40 ? decoded.substring(0, 37) + '...' : decoded;
+            // Remove file extension for cleaner display
+            const withoutExt = decoded.replace(/\.[^/.]+$/, '');
+            return withoutExt.length > 50 ? withoutExt.substring(0, 47) + '...' : withoutExt;
         } catch (e) {
-            return url.substring(0, 40);
+            return url.substring(0, 50);
         }
     }
 
@@ -474,20 +564,14 @@ const PlexdRemoteClient = (function() {
     }
 
     /**
-     * Escape HTML for safe rendering
-     */
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    /**
      * Cleanup
      */
     function destroy() {
         if (connectionCheckInterval) {
             clearInterval(connectionCheckInterval);
+        }
+        if (statePollInterval) {
+            clearInterval(statePollInterval);
         }
         if (channel) {
             channel.close();

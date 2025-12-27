@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0a0a0a">
+    <meta name="theme-color" content="#000000">
 
     <title>Plexd Remote</title>
 
@@ -13,69 +13,76 @@
 </head>
 <body>
     <div class="remote-app">
-        <!-- Connection Status -->
+        <!-- Minimal Header - Connection only -->
         <header class="remote-header">
-            <div class="remote-logo">Plex<span>d</span> Remote</div>
             <div id="connection-status" class="connection-status disconnected">
                 <span class="status-dot"></span>
-                <span class="status-text">Connecting...</span>
+            </div>
+            <div class="stream-counter">
+                <span id="stream-position">-</span>
             </div>
         </header>
 
-        <!-- Stream List -->
-        <main class="remote-main">
-            <div id="stream-list" class="stream-list">
-                <div class="empty-state">
-                    <p>Waiting for connection to Plexd...</p>
-                    <p class="hint">Make sure the main Plexd app is open in another tab/window on the same device or network.</p>
+        <!-- Now Playing - The main focus area -->
+        <main class="now-playing-area" id="now-playing-area">
+            <!-- Empty state -->
+            <div id="empty-state" class="empty-state">
+                <p>Waiting for Plexd...</p>
+            </div>
+
+            <!-- Now Playing Card (hidden until connected) -->
+            <div id="now-playing" class="now-playing hidden">
+                <div class="now-playing-content">
+                    <div class="stream-name" id="stream-name">No stream selected</div>
+                    <div class="stream-time" id="stream-time">0:00 / 0:00</div>
+                    <div class="stream-progress">
+                        <div class="stream-progress-bar" id="stream-progress"></div>
+                    </div>
+                    <div class="stream-status">
+                        <span class="play-state" id="play-state">⏸</span>
+                        <span class="rating" id="stream-rating"></span>
+                        <span class="audio-state" id="audio-state">🔊</span>
+                    </div>
                 </div>
+                <div class="swipe-hint">← swipe to change stream →</div>
             </div>
         </main>
 
-        <!-- Global Controls -->
-        <footer class="remote-controls">
-            <!-- Transport Controls -->
-            <div class="control-row transport-controls">
-                <button id="btn-prev" class="control-btn nav-btn" title="Previous">
-                    <span class="icon">◀</span>
+        <!-- Quick Actions - Swipe up area -->
+        <div id="quick-actions" class="quick-actions hidden">
+            <div class="quick-actions-handle"></div>
+            <div class="quick-actions-grid">
+                <button class="quick-btn" id="btn-mute" data-action="toggleMute">
+                    <span class="quick-icon">🔇</span>
+                    <span class="quick-label">Mute</span>
                 </button>
-                <button id="btn-pause-all" class="control-btn large-btn" title="Play/Pause All">
-                    <span class="icon">⏸</span>
+                <button class="quick-btn" id="btn-rating" data-action="cycleRating">
+                    <span class="quick-icon">★</span>
+                    <span class="quick-label">Rate</span>
                 </button>
-                <button id="btn-next" class="control-btn nav-btn" title="Next">
-                    <span class="icon">▶</span>
+                <button class="quick-btn" id="btn-fullscreen" data-action="enterFullscreen">
+                    <span class="quick-icon">⛶</span>
+                    <span class="quick-label">Full</span>
                 </button>
-            </div>
-
-            <!-- Seek Controls -->
-            <div class="control-row seek-controls">
-                <button id="btn-seek-back" class="control-btn" title="Skip -10s">
-                    <span class="icon">-10s</span>
-                </button>
-                <button id="btn-mute-all" class="control-btn" title="Mute/Unmute All">
-                    <span class="icon">🔇</span>
-                </button>
-                <button id="btn-seek-fwd" class="control-btn" title="Skip +10s">
-                    <span class="icon">+10s</span>
+                <button class="quick-btn" id="btn-view-mode" data-action="cycleViewMode">
+                    <span class="quick-icon" id="view-mode-icon">★</span>
+                    <span class="quick-label">Filter</span>
                 </button>
             </div>
+        </div>
 
-            <!-- View Controls -->
-            <div class="control-row view-controls">
-                <button id="btn-fullscreen" class="control-btn" title="Fullscreen">
-                    <span class="icon">⛶</span>
+        <!-- Main Controls - Thumb zone -->
+        <footer class="main-controls">
+            <!-- Navigation row -->
+            <div class="nav-row">
+                <button id="btn-prev" class="nav-btn" aria-label="Previous stream">
+                    <span class="nav-icon">‹</span>
                 </button>
-                <button id="btn-view-mode" class="control-btn" title="View Mode">
-                    <span class="icon">All</span>
+                <button id="btn-play-pause" class="play-pause-btn" aria-label="Play/Pause all">
+                    <span class="play-pause-icon" id="play-pause-icon">▶</span>
                 </button>
-                <button id="btn-tetris" class="control-btn" title="Tetris Mode">
-                    <span class="icon">T</span>
-                </button>
-                <button id="btn-coverflow" class="control-btn" title="Coverflow Mode">
-                    <span class="icon">C</span>
-                </button>
-                <button id="btn-clean" class="control-btn" title="Clean Mode">
-                    <span class="icon">👁</span>
+                <button id="btn-next" class="nav-btn" aria-label="Next stream">
+                    <span class="nav-icon">›</span>
                 </button>
             </div>
         </footer>

@@ -1,6 +1,6 @@
 /**
  * Plexd Remote Control Styles
- * Mobile-optimized CSS for iPhone remote control
+ * iPhone-optimized, thumb-friendly design
  */
 
 /* ========================================
@@ -16,77 +16,67 @@
 html, body {
     height: 100%;
     overflow: hidden;
-    touch-action: manipulation; /* Prevent double-tap zoom */
+    touch-action: manipulation;
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-    background: #0a0a0a;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    background: #000;
     color: #fff;
-    line-height: 1.4;
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.hidden {
+    display: none !important;
 }
 
 /* ========================================
-   Layout
+   Layout - Full screen app
    ======================================== */
 
 .remote-app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    height: 100dvh; /* Dynamic viewport height for mobile */
+    height: 100dvh;
     width: 100vw;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* ========================================
-   Header
+   Minimal Header
    ======================================== */
 
 .remote-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 16px;
-    background: #161616;
-    border-bottom: 1px solid #2a2a2a;
+    padding: 8px 20px;
     flex-shrink: 0;
-    /* Safe area for notch */
-    padding-top: max(12px, env(safe-area-inset-top));
+    height: 40px;
 }
 
-.remote-logo {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: #fff;
-    letter-spacing: -0.5px;
-}
-
-.remote-logo span {
-    color: #888;
-}
-
-/* Connection Status */
+/* Connection status - just a dot */
 .connection-status {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #888;
 }
 
 .status-dot {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
-    background: #666;
-    transition: background 0.3s;
+    background: #333;
+    transition: all 0.3s;
 }
 
 .connection-status.connected .status-dot {
     background: #22c55e;
-    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.6);
 }
 
 .connection-status.disconnected .status-dot {
@@ -96,359 +86,391 @@ body {
 
 @keyframes pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+    50% { opacity: 0.3; }
+}
+
+/* Stream counter */
+.stream-counter {
+    font-size: 14px;
+    color: #666;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
 }
 
 /* ========================================
-   Main Content (Stream List)
+   Now Playing Area - Main content
    ======================================== */
 
-.remote-main {
+.now-playing-area {
     flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    overflow: hidden;
+    position: relative;
 }
 
-.stream-list {
-    padding: 8px;
-}
-
-/* Empty State */
+/* Empty state */
 .empty-state {
+    text-align: center;
+    color: #444;
+    font-size: 18px;
+}
+
+/* Now Playing Card */
+.now-playing {
+    width: 100%;
+    max-width: 350px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-height: 200px;
-    padding: 32px 16px;
+    gap: 16px;
+}
+
+.now-playing-content {
+    width: 100%;
+    background: linear-gradient(145deg, #1a1a1a 0%, #111 100%);
+    border-radius: 20px;
+    padding: 28px 24px;
     text-align: center;
-    color: #666;
-}
-
-.empty-state p {
-    margin-bottom: 8px;
-    font-size: 16px;
-}
-
-.empty-state .hint {
-    font-size: 13px;
-    color: #555;
-}
-
-.empty-state.error p {
-    color: #ef4444;
-}
-
-/* Stream Item */
-.stream-item {
-    background: #1a1a1a;
-    border-radius: 12px;
-    padding: 12px;
-    margin-bottom: 8px;
-    border: 2px solid transparent;
-    transition: all 0.2s ease;
-}
-
-.stream-item:active {
-    transform: scale(0.98);
-    background: #252525;
-}
-
-.stream-item.selected {
-    border-color: #555;
-    background: #222;
-}
-
-.stream-item.fullscreen {
-    border-color: #3b82f6;
-    background: rgba(59, 130, 246, 0.1);
-}
-
-/* Rating colors */
-.stream-item.rating-1 { border-left: 3px solid #ef4444; }
-.stream-item.rating-2 { border-left: 3px solid #f97316; }
-.stream-item.rating-3 { border-left: 3px solid #eab308; }
-.stream-item.rating-4 { border-left: 3px solid #84cc16; }
-.stream-item.rating-5 { border-left: 3px solid #22c55e; }
-
-.stream-info {
-    margin-bottom: 8px;
+    border: 1px solid #222;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 .stream-name {
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 20px;
+    font-weight: 600;
     color: #fff;
-    margin-bottom: 4px;
+    margin-bottom: 12px;
+    line-height: 1.3;
     word-break: break-word;
-}
-
-.stream-meta {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    color: #888;
-}
-
-.stream-state {
-    font-size: 12px;
-}
-
-.stream-state.playing {
-    color: #22c55e;
-}
-
-.stream-state.paused {
-    color: #888;
-}
-
-.stream-rating {
-    font-size: 11px;
-}
-
-.stream-rating.rating-1 { color: #ef4444; }
-.stream-rating.rating-2 { color: #f97316; }
-.stream-rating.rating-3 { color: #eab308; }
-.stream-rating.rating-4 { color: #84cc16; }
-.stream-rating.rating-5 { color: #22c55e; }
-
-.stream-audio {
-    font-size: 11px;
-}
-
-/* Progress Bar */
-.stream-progress {
-    height: 4px;
-    background: #333;
-    border-radius: 2px;
-    margin-bottom: 10px;
+    max-height: 3.9em; /* 3 lines max */
     overflow: hidden;
+}
+
+.stream-time {
+    font-size: 32px;
+    font-weight: 300;
+    color: #888;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -1px;
+    margin-bottom: 16px;
+}
+
+.stream-progress {
+    height: 6px;
+    background: #2a2a2a;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 20px;
 }
 
 .stream-progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #6366f1);
-    border-radius: 2px;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+    border-radius: 3px;
     transition: width 0.3s ease;
+    width: 0%;
 }
 
-/* Stream Actions */
-.stream-actions {
+.stream-status {
     display: flex;
-    gap: 8px;
     justify-content: center;
-}
-
-.stream-btn {
-    width: 44px;
-    height: 44px;
-    display: flex;
     align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 10px;
-    background: #333;
-    color: #fff;
-    font-size: 18px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    -webkit-tap-highlight-color: transparent;
+    gap: 20px;
+    font-size: 24px;
 }
 
-.stream-btn:active {
-    transform: scale(0.92);
-    background: #444;
+.play-state {
+    color: #22c55e;
 }
 
-.stream-btn.active {
-    background: #3b82f6;
+.play-state.paused {
+    color: #666;
 }
 
-.stream-btn.rating-btn.rating-1 { color: #ef4444; }
-.stream-btn.rating-btn.rating-2 { color: #f97316; }
-.stream-btn.rating-btn.rating-3 { color: #eab308; }
-.stream-btn.rating-btn.rating-4 { color: #84cc16; }
-.stream-btn.rating-btn.rating-5 { color: #22c55e; }
+.rating {
+    color: #eab308;
+    font-size: 16px;
+    letter-spacing: 2px;
+}
+
+.audio-state {
+    font-size: 20px;
+}
+
+.audio-state.muted {
+    opacity: 0.3;
+}
+
+/* Swipe hint */
+.swipe-hint {
+    font-size: 13px;
+    color: #333;
+    text-align: center;
+    animation: fadeHint 3s ease-in-out infinite;
+}
+
+@keyframes fadeHint {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.6; }
+}
 
 /* ========================================
-   Footer Controls
+   Quick Actions - Pull up tray
    ======================================== */
 
-.remote-controls {
-    background: #161616;
-    border-top: 1px solid #2a2a2a;
-    padding: 12px 16px;
-    /* Safe area for home indicator */
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
-    flex-shrink: 0;
+.quick-actions {
+    position: fixed;
+    bottom: 160px; /* Above main controls */
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(30, 30, 30, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 20px;
+    padding: 16px 20px;
+    border: 1px solid #333;
+    z-index: 100;
+    animation: slideUp 0.2s ease-out;
 }
 
-.control-row {
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+.quick-actions-handle {
+    width: 40px;
+    height: 4px;
+    background: #444;
+    border-radius: 2px;
+    margin: 0 auto 12px;
+}
+
+.quick-actions-grid {
     display: flex;
-    justify-content: center;
-    gap: 12px;
-    margin-bottom: 10px;
+    gap: 16px;
 }
 
-.control-row:last-child {
-    margin-bottom: 0;
-}
-
-/* Control Buttons */
-.control-btn {
+.quick-btn {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 12px;
+    gap: 6px;
+    padding: 12px 16px;
     background: #2a2a2a;
+    border: none;
+    border-radius: 14px;
     color: #fff;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: all 0.15s;
+    min-width: 64px;
     -webkit-tap-highlight-color: transparent;
 }
 
-.control-btn .icon {
-    font-size: 18px;
-}
-
-.control-btn:active {
+.quick-btn:active {
     transform: scale(0.92);
     background: #3a3a3a;
 }
 
-.control-btn.active {
+.quick-btn.active {
     background: #3b82f6;
 }
 
-.control-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+.quick-icon {
+    font-size: 24px;
 }
 
-.control-btn:disabled:active {
-    transform: none;
+.quick-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-/* Transport Controls (large) */
-.transport-controls .control-btn {
-    width: 60px;
-    height: 60px;
-}
-
-.transport-controls .large-btn {
-    width: 80px;
-    height: 80px;
-    border-radius: 40px;
-    background: #3b82f6;
-}
-
-.transport-controls .large-btn .icon {
-    font-size: 28px;
-}
-
-.transport-controls .large-btn:active {
-    background: #2563eb;
-}
-
-.transport-controls .nav-btn {
-    background: #333;
-}
-
-/* Seek Controls */
-.seek-controls .control-btn {
-    width: 60px;
-    height: 48px;
-}
-
-.seek-controls .control-btn .icon {
-    font-size: 14px;
-    font-weight: 600;
-}
-
-/* View Controls */
-.view-controls .control-btn {
-    width: 56px;
-    height: 44px;
-}
-
-.view-controls .control-btn .icon {
-    font-size: 16px;
+.quick-btn.active .quick-label {
+    color: #fff;
 }
 
 /* ========================================
-   Dark Mode Scrollbar (WebKit)
+   Main Controls - Thumb zone at bottom
    ======================================== */
 
-::-webkit-scrollbar {
-    width: 4px;
+.main-controls {
+    flex-shrink: 0;
+    padding: 16px 24px 24px;
+    background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%);
 }
 
-::-webkit-scrollbar-track {
-    background: transparent;
+.nav-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 24px;
 }
 
-::-webkit-scrollbar-thumb {
-    background: #444;
-    border-radius: 2px;
+/* Navigation buttons - Large for thumb */
+.nav-btn {
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #1a1a1a;
+    border: 2px solid #333;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.nav-btn:active {
+    transform: scale(0.92);
+    background: #2a2a2a;
+    border-color: #444;
+}
+
+.nav-icon {
+    font-size: 40px;
+    font-weight: 300;
+    color: #fff;
+    line-height: 1;
+}
+
+/* Play/Pause - The main button */
+.play-pause-btn {
+    width: 96px;
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(145deg, #3b82f6, #2563eb);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.play-pause-btn:active {
+    transform: scale(0.92);
+    box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+}
+
+.play-pause-btn.paused {
+    background: linear-gradient(145deg, #22c55e, #16a34a);
+    box-shadow: 0 4px 20px rgba(34, 197, 94, 0.4);
+}
+
+.play-pause-icon {
+    font-size: 44px;
+    color: #fff;
+    line-height: 1;
+    /* Slight offset for visual centering of play icon */
+    margin-left: 4px;
+}
+
+.play-pause-btn.paused .play-pause-icon {
+    margin-left: 0;
 }
 
 /* ========================================
-   Landscape Mode Adjustments
+   Landscape Mode - Compact layout
    ======================================== */
 
 @media (orientation: landscape) and (max-height: 500px) {
     .remote-header {
-        padding: 8px 16px;
+        padding: 4px 20px;
+        height: 32px;
     }
 
-    .stream-list {
-        padding: 6px;
+    .now-playing-area {
+        padding: 12px;
+        flex-direction: row;
     }
 
-    .stream-item {
-        padding: 10px;
-        margin-bottom: 6px;
+    .now-playing {
+        max-width: none;
+        flex-direction: row;
+        align-items: center;
+        gap: 24px;
     }
 
-    .remote-controls {
-        padding: 8px 16px;
+    .now-playing-content {
+        flex: 1;
+        padding: 16px 20px;
     }
 
-    .control-row {
-        margin-bottom: 6px;
-        gap: 8px;
+    .stream-name {
+        font-size: 16px;
+        margin-bottom: 8px;
     }
 
-    .transport-controls .control-btn {
-        width: 48px;
-        height: 48px;
+    .stream-time {
+        font-size: 24px;
+        margin-bottom: 10px;
     }
 
-    .transport-controls .large-btn {
-        width: 64px;
-        height: 64px;
+    .stream-progress {
+        margin-bottom: 10px;
     }
 
-    .seek-controls .control-btn,
-    .view-controls .control-btn {
-        width: 48px;
-        height: 40px;
+    .swipe-hint {
+        display: none;
+    }
+
+    .main-controls {
+        padding: 8px 20px 12px;
+    }
+
+    .nav-row {
+        gap: 16px;
+    }
+
+    .nav-btn {
+        width: 56px;
+        height: 56px;
+    }
+
+    .nav-icon {
+        font-size: 32px;
+    }
+
+    .play-pause-btn {
+        width: 72px;
+        height: 72px;
+    }
+
+    .play-pause-icon {
+        font-size: 36px;
+    }
+
+    .quick-actions {
+        bottom: 100px;
     }
 }
 
 /* ========================================
-   Large Screen Adjustments
+   iPad/Tablet - Constrained width
    ======================================== */
 
 @media (min-width: 768px) {
     .remote-app {
-        max-width: 480px;
+        max-width: 420px;
         margin: 0 auto;
-        border-left: 1px solid #2a2a2a;
-        border-right: 1px solid #2a2a2a;
+        border-left: 1px solid #1a1a1a;
+        border-right: 1px solid #1a1a1a;
     }
 }
 
@@ -457,8 +479,89 @@ body {
    ======================================== */
 
 @media (prefers-reduced-motion: reduce) {
-    * {
+    *, *::before, *::after {
         transition: none !important;
         animation: none !important;
+    }
+}
+
+/* Focus states for accessibility */
+button:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
+
+/* ========================================
+   Swipe Indicator Overlay
+   ======================================== */
+
+.swipe-indicator {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 48px;
+    color: #3b82f6;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+    z-index: 200;
+}
+
+.swipe-indicator.left {
+    left: 24px;
+}
+
+.swipe-indicator.right {
+    right: 24px;
+}
+
+.swipe-indicator.visible {
+    opacity: 0.8;
+}
+
+/* ========================================
+   Toast Notifications
+   ======================================== */
+
+.toast {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(40, 40, 40, 0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    z-index: 300;
+    animation: toastIn 0.2s ease-out;
+}
+
+.toast.fade-out {
+    animation: toastOut 0.2s ease-in forwards;
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+@keyframes toastOut {
+    from {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-10px);
     }
 }

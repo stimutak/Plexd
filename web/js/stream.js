@@ -2426,6 +2426,7 @@ const PlexdStream = (function() {
     /**
      * Update cached layout order from the layout engine.
      * This is called after layout is applied to store a consistent navigation order.
+     * Navigation order is row-major: top-left → top-right → next-row-left → ... → bottom-right
      * @param {Array} cells - Array of {streamId, x, y, width, height} from layout engine
      */
     function updateLayoutOrder(cells) {
@@ -2435,37 +2436,49 @@ const PlexdStream = (function() {
             return;
         }
 
-        // Sort cells by row (y) then column (x) to get row-major order
-        const sorted = [...cells].sort((a, b) => {
-            // Group into rows with tolerance (items within 50px Y are same row)
-            const rowA = Math.floor(a.y / 50);
-            const rowB = Math.floor(b.y / 50);
-            if (rowA !== rowB) return rowA - rowB;
-            return a.x - b.x;
-        });
+        // Calculate adaptive row tolerance based on median cell height
+        const heights = cells.map(c => c.height).filter(h => h > 0).sort((a, b) => a - b);
+        const medianHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 100;
+        const rowTolerance = Math.max(30, medianHeight * 0.4);
 
-        // Build row structure for up/down navigation
+        // Sort cells by Y position first to find row boundaries
+        const byY = [...cells].sort((a, b) => a.y - b.y);
+
+        // Cluster into rows using adaptive tolerance
         const rows = [];
         let currentRow = [];
-        let lastRowIndex = -1;
+        let rowCenterY = -Infinity;
 
-        for (const cell of sorted) {
-            const rowIndex = Math.floor(cell.y / 50);
-            if (lastRowIndex !== -1 && rowIndex !== lastRowIndex) {
-                if (currentRow.length > 0) {
-                    rows.push([...currentRow]);
-                }
-                currentRow = [];
+        for (const cell of byY) {
+            const cellCenterY = cell.y + cell.height / 2;
+
+            if (currentRow.length === 0) {
+                // First cell starts a new row
+                currentRow.push(cell);
+                rowCenterY = cellCenterY;
+            } else if (Math.abs(cellCenterY - rowCenterY) <= rowTolerance) {
+                // Cell is in the same row
+                currentRow.push(cell);
+                // Update row center as running average
+                rowCenterY = (rowCenterY * (currentRow.length - 1) + cellCenterY) / currentRow.length;
+            } else {
+                // Cell starts a new row - sort current row by X and save
+                currentRow.sort((a, b) => a.x - b.x);
+                rows.push(currentRow);
+                currentRow = [cell];
+                rowCenterY = cellCenterY;
             }
-            currentRow.push(cell.streamId);
-            lastRowIndex = rowIndex;
         }
+
+        // Don't forget the last row
         if (currentRow.length > 0) {
+            currentRow.sort((a, b) => a.x - b.x);
             rows.push(currentRow);
         }
 
-        cachedLayoutOrder = sorted.map(c => c.streamId);
-        cachedLayoutRows = rows;
+        // Build flat order (row-major) and row structure
+        cachedLayoutOrder = rows.flatMap(row => row.map(c => c.streamId));
+        cachedLayoutRows = rows.map(row => row.map(c => c.streamId));
     }
 
     /**

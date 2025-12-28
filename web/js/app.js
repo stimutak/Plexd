@@ -1658,10 +1658,6 @@ const PlexdApp = (function() {
         }
     }
 
-    // Track K key state for seek modifier
-    let kKeyHeld = false;
-    document.addEventListener('keydown', (e) => { if (e.key === 'k' || e.key === 'K') kKeyHeld = true; });
-    document.addEventListener('keyup', (e) => { if (e.key === 'k' || e.key === 'K') kKeyHeld = false; });
 
     /**
      * Handle keyboard shortcuts
@@ -1702,8 +1698,9 @@ const PlexdApp = (function() {
                     showMessage(muted ? 'All streams muted' : 'All streams unmuted', 'info');
                 }
                 break;
-            case 'a':
-            case 'A':
+            case 'n':
+            case 'N':
+                // N for audio focus (next to M for mute - audio controls cluster)
                 {
                     const audioFocus = PlexdStream.toggleAudioFocus();
                     updateAudioFocusButton(audioFocus);
@@ -1745,10 +1742,7 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                if (fullscreenStream && kKeyHeld) {
-                    // K+Arrow: seek forward 10 seconds
-                    PlexdStream.seekRelative(fullscreenStream.id, 10);
-                } else if (fullscreenStream) {
+                if (fullscreenStream) {
                     // In focused fullscreen: switch to next stream (stay in focused mode)
                     switchFullscreenStream('right');
                 } else if (coverflowMode) {
@@ -1765,10 +1759,7 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
-                if (fullscreenStream && kKeyHeld) {
-                    // K+Arrow: seek backward 10 seconds
-                    PlexdStream.seekRelative(fullscreenStream.id, -10);
-                } else if (fullscreenStream) {
+                if (fullscreenStream) {
                     // In focused fullscreen: switch to prev stream (stay in focused mode)
                     switchFullscreenStream('left');
                 } else if (coverflowMode) {
@@ -1785,10 +1776,7 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                if (fullscreenStream && kKeyHeld) {
-                    // K+Arrow: seek forward 60 seconds
-                    PlexdStream.seekRelative(fullscreenStream.id, 60);
-                } else if (fullscreenStream) {
+                if (fullscreenStream) {
                     // In focused fullscreen: switch to stream above (stay in focused mode)
                     switchFullscreenStream('up');
                 } else if (coverflowMode) {
@@ -1805,10 +1793,7 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                if (fullscreenStream && kKeyHeld) {
-                    // K+Arrow: seek backward 60 seconds
-                    PlexdStream.seekRelative(fullscreenStream.id, -60);
-                } else if (fullscreenStream) {
+                if (fullscreenStream) {
                     // In focused fullscreen: switch to stream below (stay in focused mode)
                     switchFullscreenStream('down');
                 } else if (coverflowMode) {
@@ -1821,6 +1806,48 @@ const PlexdApp = (function() {
                     }
                 } else {
                     PlexdStream.selectNextStream('down');
+                }
+                break;
+            // Seeking controls - grouped near arrow keys for easy access
+            // , . for 10s seek, < > (Shift+,/.) for 60s seek
+            case ',':
+                // Seek backward 10 seconds
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        PlexdStream.seekRelative(targetStream.id, -10);
+                    }
+                }
+                break;
+            case '.':
+                // Seek forward 10 seconds
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        PlexdStream.seekRelative(targetStream.id, 10);
+                    }
+                }
+                break;
+            case '<':
+                // Seek backward 60 seconds (Shift+,)
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        PlexdStream.seekRelative(targetStream.id, -60);
+                    }
+                }
+                break;
+            case '>':
+                // Seek forward 60 seconds (Shift+.)
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        PlexdStream.seekRelative(targetStream.id, 60);
+                    }
                 }
                 break;
             case 'Enter':
@@ -1908,10 +1935,6 @@ const PlexdApp = (function() {
                     }
                     if (inputEl) inputEl.blur();
                 }
-                break;
-            case '?':
-                // Toggle keyboard shortcuts visibility
-                toggleShortcutsOverlay();
                 break;
             case 't':
             case 'T':
@@ -2048,14 +2071,23 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
-            case 'q':
-            case 'Q':
-                // Q: Random seek selected stream, Shift+Q: Random seek ALL streams
+            case '/':
+                // / : Random seek selected stream (near arrow keys for easy access)
                 e.preventDefault();
-                if (e.shiftKey) {
-                    randomSeekAll();
-                } else {
-                    randomSeekSelected();
+                randomSeekSelected();
+                break;
+            case '?':
+                // Shift+/ (?) : Random seek ALL streams OR toggle shortcuts hint
+                // Only toggle shortcuts if no stream is selected/focused
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        e.preventDefault();
+                        randomSeekAll();
+                    } else {
+                        // No stream targeted - toggle shortcuts visibility
+                        toggleShortcutsOverlay();
+                    }
                 }
                 break;
         }

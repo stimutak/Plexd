@@ -1408,6 +1408,8 @@ const PlexdStream = (function() {
             setAppFocusedMode(false);
             // Resource saving: resume streams that were auto-paused for focus
             clearFocusResourcePolicy();
+            // Audio focus: mute all streams when exiting to grid view
+            syncAudioToVisualFocus(null);
             // Also exit true fullscreen if active
             if (document.fullscreenElement) {
                 document.exitFullscreen();
@@ -1428,6 +1430,8 @@ const PlexdStream = (function() {
             setAppFocusedMode(true);
             // Resource saving: pause other streams while focused
             applyFocusResourcePolicy(streamId);
+            // Audio focus: sync audio to this focused stream
+            syncAudioToVisualFocus(streamId);
         }
         triggerLayoutUpdate();
     }
@@ -1475,6 +1479,9 @@ const PlexdStream = (function() {
         // Resource saving: pause other streams while zoomed in (will resume on exit)
         applyFocusResourcePolicy(streamId);
 
+        // Audio focus: sync audio to this focused stream
+        syncAudioToVisualFocus(streamId);
+
         triggerLayoutUpdate();
     }
 
@@ -1497,6 +1504,9 @@ const PlexdStream = (function() {
 
         // Resource saving: resume streams that were auto-paused for focus
         clearFocusResourcePolicy();
+
+        // Audio focus: mute all streams when returning to grid view
+        syncAudioToVisualFocus(null);
 
         // If we were in true-focused mode, return to true-grid mode
         if (fullscreenMode === 'true-focused' && document.fullscreenElement) {
@@ -1739,6 +1749,9 @@ const PlexdStream = (function() {
 
         // Keep resource saving policy consistent while browsing focused streams
         applyFocusResourcePolicy(newStream.id);
+
+        // Audio focus: sync audio to the new focused stream
+        syncAudioToVisualFocus(newStream.id);
     }
 
     /**
@@ -2363,6 +2376,34 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Sync audio to the visually focused stream (when audio focus mode is ON)
+     * If streamId is provided: unmute that stream, mute all others
+     * If streamId is null (grid view): mute ALL streams
+     */
+    function syncAudioToVisualFocus(streamId) {
+        if (!audioFocusMode) return;
+
+        if (streamId) {
+            // Focused on a specific stream: unmute it, mute others
+            streams.forEach((s, id) => {
+                const shouldBeMuted = (id !== streamId);
+                if (s.video.muted !== shouldBeMuted) {
+                    s.video.muted = shouldBeMuted;
+                    updateMuteButton(s);
+                }
+            });
+        } else {
+            // Grid view (no focus): mute all streams
+            streams.forEach((s) => {
+                if (!s.video.muted) {
+                    s.video.muted = true;
+                    updateMuteButton(s);
+                }
+            });
+        }
+    }
+
+    /**
      * Toggle audio focus mode
      */
     function toggleAudioFocus() {
@@ -2370,6 +2411,10 @@ const PlexdStream = (function() {
         localStorage.setItem('plexd_audio_focus', audioFocusMode);
         // Update all mute button tooltips to reflect new mode
         updateAllMuteButtonTooltips();
+        // Immediately apply audio sync based on current visual focus state
+        if (audioFocusMode) {
+            syncAudioToVisualFocus(fullscreenStreamId);
+        }
         return audioFocusMode;
     }
 
@@ -2378,7 +2423,7 @@ const PlexdStream = (function() {
      */
     function updateAllMuteButtonTooltips() {
         const tooltip = audioFocusMode
-            ? 'Toggle audio (focus ON: unmute one mutes others)'
+            ? 'Toggle audio (focus ON: audio follows zoom/fullscreen)'
             : 'Toggle audio (focus OFF: independent)';
         streams.forEach(stream => {
             const muteBtn = stream.controls.querySelector('.plexd-mute-btn');

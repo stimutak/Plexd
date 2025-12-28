@@ -1147,7 +1147,8 @@ const PlexdApp = (function() {
 
     /**
      * Update audio focus button to reflect actual state.
-     * Audio focus ON = unmuting one stream mutes the others.
+     * Audio focus ON = audio follows zoomed/fullscreen stream.
+     * Grid view = all muted. Focused view = focused stream plays audio.
      */
     function updateAudioFocusButton(enabled) {
         const btn = document.getElementById('audio-focus-btn');
@@ -1156,7 +1157,7 @@ const PlexdApp = (function() {
         // Keep icon compact, but make state obvious.
         btn.textContent = enabled ? '🎧' : '🔈';
         btn.title = enabled
-            ? 'Audio focus: ON (unmuting one mutes others)'
+            ? 'Audio focus: ON (audio follows zoom/fullscreen)'
             : 'Audio focus: OFF (streams can be unmuted independently)';
     }
 

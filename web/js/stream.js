@@ -1821,8 +1821,20 @@ const PlexdStream = (function() {
         // Note: Arrow keys and most keys are handled by app.js
         // This handler catches keys when the wrapper has focus (in true-focused mode)
         wrapper.addEventListener('keydown', (e) => {
-            // Only handle when this element is the fullscreen element or has focus
-            if (document.fullscreenElement !== wrapper && document.activeElement !== wrapper) {
+            // Priority: focused wrapper handles events. If this wrapper is the fullscreenElement
+            // but another stream wrapper has focus, let the focused one handle it to avoid double-processing.
+            const activeEl = document.activeElement;
+            const isThisFocused = activeEl === wrapper;
+            const isThisFullscreen = document.fullscreenElement === wrapper;
+
+            // If we're not focused and not fullscreen element, skip
+            if (!isThisFocused && !isThisFullscreen) {
+                return;
+            }
+
+            // If we're the fullscreen element but ANOTHER stream wrapper has focus, skip
+            // (let the focused wrapper handle it to avoid double-dispatch)
+            if (isThisFullscreen && !isThisFocused && activeEl && activeEl.classList.contains('plexd-stream')) {
                 return;
             }
 
@@ -1833,10 +1845,11 @@ const PlexdStream = (function() {
                 return;
             }
 
-            // Number keys (0-9) and arrow keys should propagate to document handler
-            // for rating filter/assignment and stream navigation
+            // Number keys (0-9), arrow keys, and seeking/random keys should propagate to document handler
+            // for rating filter/assignment, stream navigation, seeking, and random seek
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            if (/^[0-9]$/.test(e.key) || e.key.startsWith('Arrow')) {
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?]$/.test(e.key);
+            if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
                 // in fullscreen/focused contexts. We MUST stop propagation of the original event

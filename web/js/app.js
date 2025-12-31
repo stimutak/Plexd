@@ -198,12 +198,12 @@ const PlexdApp = (function() {
     const streamQueue = [];
     const streamHistory = [];
 
-    // View mode: 'all', or 1-9 for rating slots
+    // View mode: 'all', 'favorites', or 1-9 for rating slots
     let viewMode = 'all';
     window._plexdViewMode = viewMode;
 
-    // View mode cycle order: all -> 1 -> 2 -> ... -> 9 -> all
-    const viewModes = ['all', 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    // View mode cycle order: favorites -> all -> 1 -> 2 -> ... -> 9 -> favorites
+    const viewModes = ['favorites', 'all', 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
@@ -274,13 +274,18 @@ const PlexdApp = (function() {
         PlexdStream.setRatingsUpdateCallback(updateRatingsUI);
         updateRatingsUI();
 
+        // Set up favorites callback
+        PlexdStream.setFavoritesUpdateCallback(updateFavoritesUI);
+        updateFavoritesUI();
+
         // Load streams from URL parameters (from extension)
         loadStreamsFromUrl();
 
-        // Sync rating status for loaded streams and auto-assign ratings to unrated videos
+        // Sync rating and favorite status for loaded streams and auto-assign ratings to unrated videos
         // Only assign ratings if streams don't already have saved ratings
         setTimeout(() => {
             PlexdStream.syncRatingStatus();
+            PlexdStream.syncFavoriteStatus();
             // distributeRatingsEvenly() now only assigns to streams without saved ratings
             const assigned = PlexdStream.distributeRatingsEvenly();
             if (assigned > 0) {
@@ -497,16 +502,18 @@ const PlexdApp = (function() {
         // Store the filename for display and rating persistence
         stream.fileName = fileName;
 
-        // Apply any persisted rating for this fileName immediately (blob URLs are ephemeral).
+        // Apply any persisted rating/favorite for this fileName immediately (blob URLs are ephemeral).
         PlexdStream.syncRatingStatus();
+        PlexdStream.syncFavoriteStatus();
 
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         updateLayout();
 
-        // Sync rating status first (restores saved ratings for this fileName)
+        // Sync rating/favorite status first (restores saved state for this fileName)
         PlexdStream.syncRatingStatus();
-        
+        PlexdStream.syncFavoriteStatus();
+
         // Auto-assign rating only if no saved rating exists
         // distributeRatingsEvenly() now only assigns to streams without saved ratings
         PlexdStream.distributeRatingsEvenly();
@@ -563,6 +570,31 @@ const PlexdApp = (function() {
 
         // Update filter indicator count (in case rating changed affects count)
         updateFilterIndicator();
+    }
+
+    /**
+     * Update favorites UI elements
+     */
+    function updateFavoritesUI() {
+        const count = PlexdStream.getFavoriteCount();
+
+        // Update favorites button badge
+        const badge = document.getElementById('favorites-count');
+        if (badge) {
+            badge.textContent = count ? count : '';
+            badge.dataset.count = String(count);
+        }
+
+        // Update current view button active state
+        updateViewButtons();
+
+        // Update filter indicator count (in case favorites changed affects count)
+        updateFilterIndicator();
+
+        // If in favorites view mode, update layout to reflect changes
+        if (viewMode === 'favorites') {
+            updateLayout();
+        }
     }
 
     /**
@@ -849,14 +881,16 @@ const PlexdApp = (function() {
 
         const allStreams = PlexdStream.getAllStreams();
 
-        // Filter based on view mode (all or specific star rating)
+        // Filter based on view mode (all, favorites, or specific star rating)
         let streamsToShow = allStreams;
-        if (viewMode !== 'all') {
+        if (viewMode === 'favorites') {
+            streamsToShow = PlexdStream.getFavoriteStreams();
+        } else if (viewMode !== 'all') {
             streamsToShow = PlexdStream.getStreamsByRating(viewMode);
         }
 
         // Handle visibility and playback of streams based on view mode
-        // When filtering by rating, pause hidden streams to save bandwidth
+        // When filtering by rating/favorites, pause hidden streams to save bandwidth
         // Use position-preserving pause/resume to avoid streams restarting
         const isGloballyPaused = PlexdStream.isGloballyPaused();
         allStreams.forEach(stream => {
@@ -869,8 +903,14 @@ const PlexdApp = (function() {
                     stream._plexdAutoPausedForFilter = false;
                 }
             } else {
-                const rating = PlexdStream.getRating(stream.url);
-                const isVisible = (rating === viewMode);
+                // Determine visibility based on view mode (favorites or rating)
+                let isVisible;
+                if (viewMode === 'favorites') {
+                    isVisible = PlexdStream.getFavorite(stream.url, stream.fileName);
+                } else {
+                    const rating = PlexdStream.getRating(stream.url);
+                    isVisible = (rating === viewMode);
+                }
                 stream.wrapper.style.display = isVisible ? '' : 'none';
                 // Pause hidden streams to save bandwidth, play visible ones (if not globally paused)
                 if (isVisible && !isGloballyPaused && stream._plexdAutoPausedForFilter) {
@@ -904,7 +944,9 @@ const PlexdApp = (function() {
         });
 
         if (streamsToShow.length === 0) {
-            if (viewMode !== 'all' && allStreams.length > 0) {
+            if (viewMode === 'favorites' && allStreams.length > 0) {
+                showEmptyState('No Favorites', 'Press * on a selected stream to add it to favorites');
+            } else if (viewMode !== 'all' && allStreams.length > 0) {
                 showEmptyState(`No ★${viewMode} Streams`, `Assign streams to slot ${viewMode} to see them here`);
             } else {
                 showEmptyState();
@@ -956,7 +998,7 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Set view mode (all or 1-5 for star ratings)
+     * Set view mode (all, favorites, or 1-9 for star ratings)
      */
     function setViewMode(mode) {
         viewMode = mode;
@@ -967,6 +1009,9 @@ const PlexdApp = (function() {
 
         if (mode === 'all') {
             showMessage('View: All Streams', 'info');
+        } else if (mode === 'favorites') {
+            const count = PlexdStream.getFavoriteCount();
+            showMessage(`View: Favorites ★ (${count} streams)`, 'info');
         } else {
             const count = PlexdStream.getStreamsByRating(mode).length;
             showMessage(`View: ★${mode} (${count} streams)`, 'info');
@@ -985,6 +1030,11 @@ const PlexdApp = (function() {
 
         if (viewMode === 'all') {
             indicator.style.display = 'none';
+        } else if (viewMode === 'favorites') {
+            const count = PlexdStream.getFavoriteCount();
+            starsEl.textContent = '★ Favorites';
+            countEl.textContent = `(${count})`;
+            indicator.style.display = 'flex';
         } else {
             const count = PlexdStream.getStreamsByRating(viewMode).length;
             starsEl.textContent = `★${viewMode}`;
@@ -1006,6 +1056,9 @@ const PlexdApp = (function() {
      * Update view button active states
      */
     function updateViewButtons() {
+        const favBtn = document.getElementById('view-favorites-btn');
+        if (favBtn) favBtn.classList.toggle('active', viewMode === 'favorites');
+
         const allBtn = document.getElementById('view-all-btn');
         if (allBtn) allBtn.classList.toggle('active', viewMode === 'all');
 
@@ -2071,6 +2124,19 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case '*':
+                // * (asterisk/Shift+8) : Toggle favorite on selected/fullscreen stream
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        e.preventDefault();
+                        const isFav = PlexdStream.toggleFavorite(targetStream.id);
+                        showMessage(isFav ? 'Added to favorites ★' : 'Removed from favorites', isFav ? 'success' : 'info');
+                    } else {
+                        showMessage('Select a stream first', 'warning');
+                    }
+                }
+                break;
             case '/':
                 // / : Random seek selected stream (near arrow keys for easy access)
                 e.preventDefault();
@@ -2496,6 +2562,105 @@ const PlexdApp = (function() {
         }
         if (loginDomains.length > 0) {
             msg += ` | Login: ${loginDomains.join(', ')}`;
+        }
+        showMessage(msg, 'success');
+        updateCombinationsList();
+    }
+
+    /**
+     * Save favorite streams as a combination/set
+     */
+    async function saveFavoritesAsCombination() {
+        const streams = PlexdStream.getFavoriteStreams();
+        if (streams.length === 0) {
+            showMessage('No favorites to save. Press * on selected streams to add them to favorites.', 'warning');
+            return;
+        }
+
+        // Separate local files from URL streams
+        const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName);
+        const urlStreams = streams.filter(s => !isBlobUrl(s.url));
+        const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
+        const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
+
+        // Check if we have anything to save
+        if (validUrlStreams.length === 0 && localFileStreams.length === 0) {
+            const reasons = [];
+            if (shortVideos > 0) reasons.push('videos too short');
+            showMessage(`No valid favorites to save${reasons.length > 0 ? ` (${reasons.join(', ')})` : ''}`, 'error');
+            return;
+        }
+
+        const name = prompt(`Enter a name for this favorites set (${streams.length} favorites):`);
+        if (!name) return;
+
+        // Dedupe URLs by normalized equality key
+        const urls = [];
+        const seen = new Set();
+        validUrlStreams.forEach(s => {
+            const key = urlEqualityKey(s.url);
+            if (seen.has(key)) return;
+            seen.add(key);
+            urls.push(s.url);
+        });
+
+        // Save local files with their ratings
+        const localFilesData = localFileStreams.map(s => ({
+            fileName: s.fileName,
+            rating: PlexdStream.getRating(s.url) || 0
+        }));
+        const localFiles = localFilesData.map(f => f.fileName);
+        const localFileRatings = {};
+        localFilesData.forEach(f => {
+            if (f.rating > 0) {
+                localFileRatings[f.fileName] = f.rating;
+            }
+        });
+        const loginDomains = extractLoginDomains(urls);
+
+        // Check if user wants to save local files to disc
+        let savedToDisc = false;
+        if (localFileStreams.length > 0) {
+            const saveToDisc = confirm(
+                `Save ${localFileStreams.length} local file(s) to browser storage?\n\n` +
+                'This allows loading the set without re-providing files.\n' +
+                'Note: Large files may use significant storage space.'
+            );
+
+            if (saveToDisc) {
+                showMessage('Saving local files to disc...', 'info');
+                let savedCount = 0;
+                for (const stream of localFileStreams) {
+                    try {
+                        const response = await fetch(stream.url);
+                        const blob = await response.blob();
+                        const success = await saveLocalFileToDisc(name, stream.fileName, blob);
+                        if (success) savedCount++;
+                    } catch (err) {
+                        console.error(`[Plexd] Failed to save ${stream.fileName}:`, err);
+                    }
+                }
+                savedToDisc = savedCount > 0;
+            }
+        }
+
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        combinations[name] = {
+            urls: urls,
+            localFiles: localFiles,
+            localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
+            localFilesSavedToDisc: savedToDisc,
+            loginDomains: loginDomains,
+            savedAt: Date.now(),
+            isFavoritesSet: true // Mark as a favorites set
+        };
+        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+
+        const totalCount = urls.length + localFiles.length;
+        let msg = `Saved favorites: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
+        if (localFiles.length > 0) {
+            msg += ` | ${localFiles.length} local`;
+            if (savedToDisc) msg += ' (stored)';
         }
         showMessage(msg, 'success');
         updateCombinationsList();
@@ -3581,6 +3746,7 @@ const PlexdApp = (function() {
         showMessage,
         saveCurrentStreams,
         saveCombination: saveStreamCombination,
+        saveFavorites: saveFavoritesAsCombination,
         loadCombination: loadStreamCombination,
         deleteCombination: deleteStreamCombination,
         getSavedCombinations,

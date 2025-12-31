@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=19">
+    <link rel="stylesheet" href="css/plexd.css?v=20">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -46,8 +46,9 @@
                     <span id="filter-count" class="plexd-filter-count"></span>
                 </div>
 
-                <!-- View Toggle (All / Star Ratings) -->
+                <!-- View Toggle (Favorites / All / Star Ratings) -->
                 <div class="plexd-view-toggle">
+                    <button id="view-favorites-btn" class="plexd-view-btn view-favorites" onclick="PlexdApp.setViewMode('favorites')" title="Show favorites only (★)">★ <span id="favorites-count" class="badge"></span></button>
                     <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams (V to cycle)">All</button>
                     <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="Slot 1">1 <span id="rating-1-count" class="badge"></span></button>
                     <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="Slot 2">2 <span id="rating-2-count" class="badge"></span></button>
@@ -113,6 +114,7 @@
                 <h3>Saved Sets</h3>
                 <div class="plexd-panel-actions">
                     <button id="save-combo-btn" class="plexd-button-small" title="Save current streams (Ctrl+S)">+ Save</button>
+                    <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★ Save</button>
                     <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file (for AirDrop)">Export</button>
                     <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Import</button>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
@@ -155,6 +157,7 @@
             <kbd>,</kbd><kbd>.</kbd> Seek 10s &nbsp;
             <kbd>&lt;</kbd><kbd>&gt;</kbd> Seek 60s &nbsp;
             <kbd>/</kbd> Random &nbsp;
+            <kbd>*</kbd> Favorite &nbsp;
             <kbd>1-9</kbd> Filter/Rate &nbsp;
             <kbd>?</kbd> Hide
         </div>
@@ -164,8 +167,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=20"></script>
-    <script src="js/stream.js?v=20"></script>
-    <script src="js/app.js?v=20"></script>
+    <script src="js/grid.js?v=21"></script>
+    <script src="js/stream.js?v=21"></script>
+    <script src="js/app.js?v=21"></script>
 </body>
 </html>

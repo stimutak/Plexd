@@ -891,6 +891,15 @@ body {
     background: #666;
 }
 
+.plexd-save-favorites-btn {
+    color: #fbbf24;
+}
+
+.plexd-save-favorites-btn:hover {
+    background: #78350f;
+    color: #fcd34d;
+}
+
 .plexd-panel-content {
     flex: 1;
     overflow-y: auto;
@@ -1465,6 +1474,86 @@ body {
 .plexd-rating-indicator.rated-8 { color: #8b5cf6; }
 .plexd-rating-indicator.rated-9 { color: #ec4899; }
 
+/* ========================================
+   Favorites System
+   ======================================== */
+
+/* Favorite indicator on stream - positioned on left side */
+.plexd-favorite-indicator {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    min-width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    font-size: 16px;
+    font-weight: 600;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    opacity: 0.3;
+    z-index: 20;
+    pointer-events: auto;
+    transition: opacity 0.2s, transform 0.1s, color 0.2s;
+    color: #888;
+    cursor: pointer;
+}
+
+.plexd-favorite-indicator:active {
+    transform: scale(0.95);
+}
+
+.plexd-favorite-indicator.active {
+    opacity: 1;
+    color: #fbbf24;
+}
+
+.plexd-stream:hover .plexd-favorite-indicator {
+    opacity: 1;
+}
+
+/* In focused/fullscreen view we always show favorite indicator */
+.plexd-stream.plexd-fullscreen .plexd-favorite-indicator {
+    opacity: 1;
+    z-index: 40;
+    min-width: 44px;
+    height: 44px;
+    font-size: 22px;
+    padding: 0 14px;
+}
+
+/* Touch devices - always show favorite indicator (tappable) */
+@media (pointer: coarse) {
+    .plexd-favorite-indicator {
+        opacity: 0.5;
+        min-width: 36px;
+        height: 36px;
+        font-size: 18px;
+    }
+
+    .plexd-favorite-indicator.active {
+        opacity: 1;
+    }
+}
+
+/* Clean mode - hide favorite indicator too */
+.plexd-app.clean-mode .plexd-favorite-indicator {
+    display: none !important;
+}
+
+/* Focused mode - hide favorite indicator on non-fullscreen streams */
+.plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-favorite-indicator {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* Favorite stream visual indicator - subtle golden border */
+.plexd-stream.plexd-favorite {
+    box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.5);
+}
+
 /* Rating button in controls */
 .plexd-btn.plexd-rating-btn {
     color: #888;
@@ -1513,6 +1602,14 @@ body {
     background: #444;
     border-color: #555;
     color: #fff;
+}
+
+/* Favorites view button */
+.plexd-view-btn.view-favorites { color: #fbbf24; }
+.plexd-view-btn.view-favorites.active {
+    background: #78350f;
+    border-color: #92400e;
+    color: #fcd34d;
 }
 
 /* Rating-specific view button colors when active */

@@ -1765,9 +1765,8 @@ const PlexdApp = (function() {
                 const showInfo = PlexdStream.toggleAllStreamInfo();
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
-            case 'f':
-            case 'F':
-                // F: Toggle favorites modal overlay
+            case '`':
+                // ` (backtick): Toggle favorites modal overlay
                 e.preventDefault();
                 toggleFavoritesModal();
                 break;
@@ -2543,6 +2542,19 @@ const PlexdApp = (function() {
             }
         }
 
+        // Collect favorites data (which streams are favorited)
+        const favoriteUrls = [];
+        const favoriteFileNames = [];
+        streams.forEach(s => {
+            if (PlexdStream.getFavorite(s.url, s.fileName)) {
+                if (isBlobUrl(s.url) && s.fileName) {
+                    favoriteFileNames.push(s.fileName);
+                } else {
+                    favoriteUrls.push(s.url);
+                }
+            }
+        });
+
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         combinations[name] = {
             urls: urls,
@@ -2550,18 +2562,31 @@ const PlexdApp = (function() {
             localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
             localFilesSavedToDisc: savedToDisc,
             loginDomains: loginDomains,
+            favoriteUrls: favoriteUrls.length > 0 ? favoriteUrls : undefined,
+            favoriteFileNames: favoriteFileNames.length > 0 ? favoriteFileNames : undefined,
             savedAt: Date.now()
         };
-        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+
+        try {
+            localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+        } catch (err) {
+            console.error('[Plexd] Failed to save combination to localStorage:', err);
+            showMessage('Failed to save: storage quota exceeded', 'error');
+            return;
+        }
 
         // Build informative message
         const totalCount = urls.length + localFiles.length;
+        const favCount = favoriteUrls.length + favoriteFileNames.length;
         let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
         if (localFiles.length > 0) {
             msg += ` | ${localFiles.length} local`;
             if (savedToDisc) {
                 msg += ' (stored)';
             }
+        }
+        if (favCount > 0) {
+            msg += ` | ${favCount} fav`;
         }
         if (shortVideos > 0) {
             msg += ` | excluded: ${shortVideos} short`;
@@ -2957,15 +2982,42 @@ const PlexdApp = (function() {
             }
         });
 
+        // Restore favorites
+        let favoritesRestored = 0;
+        const favoriteUrls = combo.favoriteUrls || [];
+        const favoriteFileNames = combo.favoriteFileNames || [];
+
+        if (favoriteUrls.length > 0 || favoriteFileNames.length > 0) {
+            // Wait a moment for streams to be fully added
+            setTimeout(() => {
+                const streams = PlexdStream.getAllStreams();
+                streams.forEach(stream => {
+                    const isFavByUrl = favoriteUrls.includes(stream.url);
+                    const isFavByFileName = stream.fileName && favoriteFileNames.includes(stream.fileName);
+                    if (isFavByUrl || isFavByFileName) {
+                        PlexdStream.setFavorite(stream.id, true);
+                        favoritesRestored++;
+                    }
+                });
+                if (favoritesRestored > 0) {
+                    console.log(`[Plexd] Restored ${favoritesRestored} favorites`);
+                }
+            }, 100);
+        }
+
         // Save to current streams (only URL streams, not local files)
         const validUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
         localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
 
         // Build message
         const total = loadedCount + localLoaded;
+        const favCount = favoriteUrls.length + favoriteFileNames.length;
         let msg = `Loaded: ${name} (${total} stream${total !== 1 ? 's' : ''})`;
         if (localLoaded > 0) {
             msg += ` | ${localLoaded} local`;
+        }
+        if (favCount > 0) {
+            msg += ` | ${favCount} fav`;
         }
         if (skippedCount > 0) {
             msg += ` | ${skippedCount} skipped`;
@@ -3096,7 +3148,7 @@ const PlexdApp = (function() {
             <div class="plexd-favorites-modal">
                 <div class="plexd-favorites-modal-header">
                     <h3>★ Favorites (${favorites.length})</h3>
-                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or F to close</div>
+                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or \` to close</div>
                 </div>
                 <div class="plexd-favorites-modal-grid">
                     ${gridHtml}
@@ -3150,8 +3202,7 @@ const PlexdApp = (function() {
 
             switch (e.key) {
                 case 'Escape':
-                case 'f':
-                case 'F':
+                case '`':
                     e.preventDefault();
                     closeFavoritesModal();
                     break;

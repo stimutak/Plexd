@@ -1765,9 +1765,9 @@ const PlexdApp = (function() {
                 const showInfo = PlexdStream.toggleAllStreamInfo();
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
-            case 'f':
-            case 'F':
-                // F: Toggle favorites modal overlay
+            case 'v':
+            case 'V':
+                // V: View favorites modal overlay
                 e.preventDefault();
                 toggleFavoritesModal();
                 break;
@@ -3096,7 +3096,7 @@ const PlexdApp = (function() {
             <div class="plexd-favorites-modal">
                 <div class="plexd-favorites-modal-header">
                     <h3>★ Favorites (${favorites.length})</h3>
-                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or F to close</div>
+                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or V to close</div>
                 </div>
                 <div class="plexd-favorites-modal-grid">
                     ${gridHtml}
@@ -3150,8 +3150,8 @@ const PlexdApp = (function() {
 
             switch (e.key) {
                 case 'Escape':
-                case 'f':
-                case 'F':
+                case 'v':
+                case 'V':
                     e.preventDefault();
                     closeFavoritesModal();
                     break;

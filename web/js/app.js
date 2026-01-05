@@ -1765,6 +1765,12 @@ const PlexdApp = (function() {
                 const showInfo = PlexdStream.toggleAllStreamInfo();
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
+            case 'f':
+            case 'F':
+                // F: Toggle favorites modal overlay
+                e.preventDefault();
+                toggleFavoritesModal();
+                break;
             case 'c':
             case 'C':
                 // Copy stream URL(s) - Shift+C for all, C for selected/focused
@@ -3030,6 +3036,218 @@ const PlexdApp = (function() {
             }
         };
         document.addEventListener('keydown', handleEscape);
+    }
+
+    // ===== FAVORITES MODAL OVERLAY =====
+
+    let favoritesModalSelectedIndex = 0;
+
+    /**
+     * Toggle the favorites modal overlay
+     * Shows all favorite streams in a grid overlay with keyboard navigation
+     */
+    function toggleFavoritesModal() {
+        const existingModal = document.getElementById('favorites-modal');
+        if (existingModal) {
+            closeFavoritesModal();
+            return;
+        }
+        showFavoritesModal();
+    }
+
+    /**
+     * Show the favorites modal overlay
+     */
+    function showFavoritesModal() {
+        const favorites = PlexdStream.getFavoriteStreams();
+
+        if (favorites.length === 0) {
+            showMessage('No favorites yet. Press * to add streams to favorites.', 'info');
+            return;
+        }
+
+        favoritesModalSelectedIndex = 0;
+
+        const modal = document.createElement('div');
+        modal.id = 'favorites-modal';
+        modal.className = 'plexd-modal-overlay plexd-favorites-modal-overlay';
+
+        // Create video grid for favorites
+        const gridHtml = favorites.map((stream, idx) => {
+            const title = stream.fileName || stream.url.split('/').pop() || 'Stream';
+            return `
+                <div class="plexd-fav-modal-item${idx === 0 ? ' selected' : ''}" data-index="${idx}" data-stream-id="${stream.id}">
+                    <div class="plexd-fav-modal-video-wrapper">
+                        <video
+                            src="${escapeAttr(stream.url)}"
+                            muted
+                            loop
+                            playsinline
+                            preload="metadata"
+                        ></video>
+                        <div class="plexd-fav-modal-star">★</div>
+                    </div>
+                    <div class="plexd-fav-modal-title">${escapeHtml(title)}</div>
+                </div>
+            `;
+        }).join('');
+
+        modal.innerHTML = `
+            <div class="plexd-favorites-modal">
+                <div class="plexd-favorites-modal-header">
+                    <h3>★ Favorites (${favorites.length})</h3>
+                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or F to close</div>
+                </div>
+                <div class="plexd-favorites-modal-grid">
+                    ${gridHtml}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // Start playing preview videos on hover/selection
+        const items = modal.querySelectorAll('.plexd-fav-modal-item');
+        items.forEach((item, idx) => {
+            const video = item.querySelector('video');
+
+            // Play video when selected or hovered
+            item.addEventListener('mouseenter', () => {
+                video.currentTime = favorites[idx].video?.currentTime || 0;
+                video.play().catch(() => {});
+            });
+            item.addEventListener('mouseleave', () => {
+                if (!item.classList.contains('selected')) {
+                    video.pause();
+                }
+            });
+
+            // Click to view in fullscreen
+            item.addEventListener('click', () => {
+                closeFavoritesModal();
+                PlexdStream.selectStream(favorites[idx].id);
+                PlexdStream.enterFocusedMode(favorites[idx].id);
+            });
+        });
+
+        // Start playing the first selected item
+        const firstVideo = items[0]?.querySelector('video');
+        if (firstVideo && favorites[0]) {
+            firstVideo.currentTime = favorites[0].video?.currentTime || 0;
+            firstVideo.play().catch(() => {});
+        }
+
+        // Handle keyboard navigation within modal
+        const handleModalKeyboard = (e) => {
+            const currentItems = modal.querySelectorAll('.plexd-fav-modal-item');
+            const currentFavorites = PlexdStream.getFavoriteStreams();
+            const count = currentItems.length;
+
+            if (count === 0) {
+                closeFavoritesModal();
+                return;
+            }
+
+            switch (e.key) {
+                case 'Escape':
+                case 'f':
+                case 'F':
+                    e.preventDefault();
+                    closeFavoritesModal();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    updateFavoritesModalSelection((favoritesModalSelectedIndex + 1) % count, currentItems, currentFavorites);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    updateFavoritesModalSelection((favoritesModalSelectedIndex - 1 + count) % count, currentItems, currentFavorites);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    // Move down by row (estimate 4 items per row)
+                    {
+                        const cols = Math.max(1, Math.floor(modal.querySelector('.plexd-favorites-modal-grid').offsetWidth / 220));
+                        updateFavoritesModalSelection(Math.min(count - 1, favoritesModalSelectedIndex + cols), currentItems, currentFavorites);
+                    }
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    // Move up by row
+                    {
+                        const cols = Math.max(1, Math.floor(modal.querySelector('.plexd-favorites-modal-grid').offsetWidth / 220));
+                        updateFavoritesModalSelection(Math.max(0, favoritesModalSelectedIndex - cols), currentItems, currentFavorites);
+                    }
+                    break;
+                case 'Enter':
+                    e.preventDefault();
+                    if (currentFavorites[favoritesModalSelectedIndex]) {
+                        closeFavoritesModal();
+                        PlexdStream.selectStream(currentFavorites[favoritesModalSelectedIndex].id);
+                        PlexdStream.enterFocusedMode(currentFavorites[favoritesModalSelectedIndex].id);
+                    }
+                    break;
+                case '*':
+                    // Remove from favorites
+                    e.preventDefault();
+                    if (currentFavorites[favoritesModalSelectedIndex]) {
+                        PlexdStream.toggleFavorite(currentFavorites[favoritesModalSelectedIndex].id);
+                        showMessage('Removed from favorites', 'info');
+                        // Refresh the modal
+                        closeFavoritesModal();
+                        if (PlexdStream.getFavoriteCount() > 0) {
+                            setTimeout(showFavoritesModal, 100);
+                        }
+                    }
+                    break;
+            }
+        };
+
+        document.addEventListener('keydown', handleModalKeyboard);
+        modal._keyboardHandler = handleModalKeyboard;
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeFavoritesModal();
+            }
+        });
+    }
+
+    /**
+     * Update selection in favorites modal
+     */
+    function updateFavoritesModalSelection(newIndex, items, favorites) {
+        // Remove selection from current
+        items[favoritesModalSelectedIndex]?.classList.remove('selected');
+        items[favoritesModalSelectedIndex]?.querySelector('video')?.pause();
+
+        // Add selection to new
+        favoritesModalSelectedIndex = newIndex;
+        const newItem = items[favoritesModalSelectedIndex];
+        if (newItem) {
+            newItem.classList.add('selected');
+            newItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+            const video = newItem.querySelector('video');
+            if (video && favorites[favoritesModalSelectedIndex]) {
+                video.currentTime = favorites[favoritesModalSelectedIndex].video?.currentTime || 0;
+                video.play().catch(() => {});
+            }
+        }
+    }
+
+    /**
+     * Close the favorites modal
+     */
+    function closeFavoritesModal() {
+        const modal = document.getElementById('favorites-modal');
+        if (modal) {
+            if (modal._keyboardHandler) {
+                document.removeEventListener('keydown', modal._keyboardHandler);
+            }
+            modal.remove();
+        }
     }
 
     /**

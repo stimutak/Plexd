@@ -2575,6 +2575,8 @@ const PlexdStream = (function() {
         let list;
         if (viewMode === 'all') {
             list = Array.from(streams.values());
+        } else if (viewMode === 'favorites') {
+            list = getFavoriteStreams();
         } else {
             list = getStreamsByRating(viewMode);
         }

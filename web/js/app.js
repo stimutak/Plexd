@@ -3765,6 +3765,12 @@ const PlexdApp = (function() {
                         if (other) other.classList.remove('plexd-panel-open');
                     }
                 });
+                // Refresh panel content when opening
+                if (panelId === 'saved-panel') {
+                    updateCombinationsList();
+                } else if (panelId === 'streams-panel') {
+                    updateStreamsPanelUI();
+                }
             }
             panel.classList.toggle('plexd-panel-open');
         }
@@ -3782,6 +3788,12 @@ const PlexdApp = (function() {
                 if (other) other.classList.remove('plexd-panel-open');
             }
         });
+        // Refresh panel content when opening
+        if (panelId === 'saved-panel') {
+            updateCombinationsList();
+        } else if (panelId === 'streams-panel') {
+            updateStreamsPanelUI();
+        }
         panel.classList.add('plexd-panel-open');
     }
 

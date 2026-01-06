@@ -2166,3 +2166,51 @@ body {
     0%, 100% { box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4); }
     50% { box-shadow: 0 2px 16px rgba(239, 68, 68, 0.6); }
 }
+
+/* ========================================
+   Mosaic Mode - Clean Multi-Copy Effect
+   ======================================== */
+
+.plexd-mosaic-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 45;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.plexd-mosaic-overlay.active {
+    opacity: 1;
+}
+
+.plexd-mosaic-cell {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: transform 0.3s ease;
+}
+
+.plexd-mosaic-cell:hover {
+    transform: scale(1.02);
+}
+
+.plexd-mosaic-video {
+    background: #000;
+}
+
+/* Mosaic mode indicator */
+.plexd-app.mosaic-mode #plexd-container::before {
+    content: 'MOSAIC';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
+    color: #fff;
+    padding: 4px 14px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 700;
+    z-index: 200;
+    letter-spacing: 1px;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
+}

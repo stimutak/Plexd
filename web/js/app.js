@@ -1377,6 +1377,158 @@ const PlexdApp = (function() {
         bugEyeMode = false;
     }
 
+    // Mosaic mode state (simpler version with fewer, non-overlapping copies)
+    let mosaicMode = false;
+    let mosaicOverlay = null;
+    let mosaicAnimationFrame = null;
+
+    /**
+     * Toggle Mosaic mode - simpler effect with a few non-overlapping video copies
+     */
+    function toggleMosaicMode() {
+        const fullscreenStream = PlexdStream.getFullscreenStream();
+        const selected = PlexdStream.getSelectedStream();
+        const targetStream = fullscreenStream || selected;
+
+        if (!targetStream) {
+            showMessage('Select or focus a stream first (Z key)', 'warning');
+            return;
+        }
+
+        // If bug eye is on, turn it off first
+        if (bugEyeMode) {
+            destroyBugEyeOverlay();
+        }
+
+        mosaicMode = !mosaicMode;
+        const app = document.querySelector('.plexd-app');
+
+        if (mosaicMode) {
+            if (app) app.classList.add('mosaic-mode');
+            createMosaicOverlay(targetStream);
+            showMessage('Mosaic: ON (Shift+B to exit)', 'info');
+        } else {
+            if (app) app.classList.remove('mosaic-mode');
+            destroyMosaicOverlay();
+            showMessage('Mosaic: OFF', 'info');
+        }
+    }
+
+    /**
+     * Create the mosaic overlay with a few non-overlapping video copies
+     */
+    function createMosaicOverlay(stream) {
+        destroyMosaicOverlay(); // Clean up any existing
+
+        const container = document.getElementById('plexd-container');
+        if (!container) return;
+
+        // Create overlay container
+        mosaicOverlay = document.createElement('div');
+        mosaicOverlay.className = 'plexd-mosaic-overlay';
+        mosaicOverlay.id = 'plexd-mosaic-overlay';
+
+        const videoSource = stream.video;
+
+        // Define cells - non-overlapping layout
+        // Main video stays in center, these are arranged around it
+        const cells = [
+            // Large copy top-left
+            { x: 5, y: 5, w: 30, h: 35 },
+            // Medium copy top-right
+            { x: 65, y: 5, w: 30, h: 28 },
+            // Small copy bottom-left
+            { x: 5, y: 70, w: 22, h: 25 },
+            // Medium copy bottom-right
+            { x: 70, y: 65, w: 25, h: 30 },
+            // Tiny copy top-center
+            { x: 40, y: 3, w: 15, h: 18 },
+            // Small copy left-middle
+            { x: 3, y: 45, w: 18, h: 20 },
+        ];
+
+        // Create video clones for each cell
+        cells.forEach((cell, index) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'plexd-mosaic-cell';
+            wrapper.style.cssText = `
+                position: absolute;
+                left: ${cell.x}%;
+                top: ${cell.y}%;
+                width: ${cell.w}%;
+                height: ${cell.h}%;
+                border-radius: 6px;
+                overflow: hidden;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+                pointer-events: none;
+            `;
+
+            // Clone the video
+            const videoClone = document.createElement('video');
+            videoClone.className = 'plexd-mosaic-video';
+            videoClone.src = videoSource.src;
+            videoClone.currentTime = videoSource.currentTime;
+            videoClone.muted = true;
+            videoClone.loop = videoSource.loop;
+            videoClone.playsInline = true;
+            videoClone.autoplay = true;
+            videoClone.style.cssText = `
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            `;
+
+            videoClone.play().catch(() => {});
+
+            wrapper.appendChild(videoClone);
+            mosaicOverlay.appendChild(wrapper);
+        });
+
+        mosaicOverlay.classList.add('active');
+        container.appendChild(mosaicOverlay);
+
+        // Sync all clones with main video
+        function syncVideos() {
+            if (!mosaicMode || !mosaicOverlay) return;
+            const clones = mosaicOverlay.querySelectorAll('video');
+            const mainTime = videoSource.currentTime;
+            clones.forEach(clone => {
+                if (Math.abs(clone.currentTime - mainTime) > 0.5) {
+                    clone.currentTime = mainTime;
+                }
+                if (videoSource.paused && !clone.paused) {
+                    clone.pause();
+                } else if (!videoSource.paused && clone.paused) {
+                    clone.play().catch(() => {});
+                }
+            });
+            mosaicAnimationFrame = requestAnimationFrame(syncVideos);
+        }
+        mosaicAnimationFrame = requestAnimationFrame(syncVideos);
+    }
+
+    /**
+     * Destroy the mosaic overlay
+     */
+    function destroyMosaicOverlay() {
+        if (mosaicAnimationFrame) {
+            cancelAnimationFrame(mosaicAnimationFrame);
+            mosaicAnimationFrame = null;
+        }
+        if (mosaicOverlay) {
+            const clones = mosaicOverlay.querySelectorAll('video');
+            clones.forEach(clone => {
+                clone.pause();
+                clone.src = '';
+            });
+            mosaicOverlay.remove();
+            mosaicOverlay = null;
+        }
+        const app = document.querySelector('.plexd-app');
+        if (app) app.classList.remove('mosaic-mode');
+        mosaicMode = false;
+    }
+
     /**
      * Toggle pause/play all streams
      */
@@ -2214,8 +2366,12 @@ const PlexdApp = (function() {
                 break;
             case 'b':
             case 'B':
-                // Toggle Bug Eye mode - compound vision effect
-                toggleBugEyeMode();
+                // B = Bug Eye mode (compound vision), Shift+B = Mosaic mode (cleaner)
+                if (e.shiftKey) {
+                    toggleMosaicMode();
+                } else {
+                    toggleBugEyeMode();
+                }
                 break;
             case 'h':
             case 'H':
@@ -4270,6 +4426,7 @@ const PlexdApp = (function() {
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
         toggleBugEyeMode,
+        toggleMosaicMode,
         toggleHeader,
         // Global controls
         togglePauseAll,

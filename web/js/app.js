@@ -1171,6 +1171,212 @@ const PlexdApp = (function() {
         toggleCoverflowMode();
     }
 
+    // Bug Eye mode state
+    let bugEyeMode = false;
+    let bugEyeOverlay = null;
+    let bugEyeAnimationFrame = null;
+
+    /**
+     * Toggle Bug Eye mode - creates a compound eye / kaleidoscope effect
+     * with the focused stream replicated at different sizes around the edges
+     */
+    function toggleBugEyeMode() {
+        const fullscreenStream = PlexdStream.getFullscreenStream();
+        const selected = PlexdStream.getSelectedStream();
+        const targetStream = fullscreenStream || selected;
+
+        if (!targetStream) {
+            showMessage('Select or focus a stream first (Z key)', 'warning');
+            return;
+        }
+
+        bugEyeMode = !bugEyeMode;
+        const app = document.querySelector('.plexd-app');
+
+        if (bugEyeMode) {
+            if (app) app.classList.add('bugeye-mode');
+            createBugEyeOverlay(targetStream);
+            showMessage('Bug Eye: ON (B to exit)', 'info');
+        } else {
+            if (app) app.classList.remove('bugeye-mode');
+            destroyBugEyeOverlay();
+            showMessage('Bug Eye: OFF', 'info');
+        }
+    }
+
+    /**
+     * Create the bug eye overlay with multiple video copies
+     */
+    function createBugEyeOverlay(stream) {
+        destroyBugEyeOverlay(); // Clean up any existing
+
+        const container = document.getElementById('plexd-container');
+        if (!container) return;
+
+        // Create overlay container
+        bugEyeOverlay = document.createElement('div');
+        bugEyeOverlay.className = 'plexd-bugeye-overlay';
+        bugEyeOverlay.id = 'plexd-bugeye-overlay';
+
+        const videoSource = stream.video;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        // Define cells - arranged in rings around center
+        // Each cell: { x%, y%, size%, zIndex, opacity }
+        // Center is left clear for the main video
+        const cells = [];
+
+        // Ring 1 - Medium cells close to center (but not blocking it)
+        const ring1Angles = [0, 45, 90, 135, 180, 225, 270, 315];
+        ring1Angles.forEach((angle, i) => {
+            const rad = (angle * Math.PI) / 180;
+            const dist = 28; // % from center
+            cells.push({
+                x: 50 + Math.cos(rad) * dist,
+                y: 50 + Math.sin(rad) * dist,
+                size: 18 + (i % 3) * 4, // 18-26%
+                zIndex: 20 - (i % 5),
+                opacity: 0.85
+            });
+        });
+
+        // Ring 2 - Smaller cells further out
+        const ring2Angles = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5];
+        ring2Angles.forEach((angle, i) => {
+            const rad = (angle * Math.PI) / 180;
+            const dist = 42;
+            cells.push({
+                x: 50 + Math.cos(rad) * dist,
+                y: 50 + Math.sin(rad) * dist,
+                size: 14 + (i % 4) * 3, // 14-23%
+                zIndex: 15 - (i % 4),
+                opacity: 0.75
+            });
+        });
+
+        // Ring 3 - Even smaller cells at edges
+        for (let i = 0; i < 12; i++) {
+            const angle = i * 30;
+            const rad = (angle * Math.PI) / 180;
+            const dist = 55 + (i % 3) * 5;
+            cells.push({
+                x: 50 + Math.cos(rad) * dist,
+                y: 50 + Math.sin(rad) * dist,
+                size: 10 + (i % 5) * 2, // 10-18%
+                zIndex: 10 - (i % 6),
+                opacity: 0.6
+            });
+        }
+
+        // Ring 4 - Tiny cells at corners and edges
+        const corners = [
+            { x: 8, y: 8 }, { x: 92, y: 8 }, { x: 8, y: 92 }, { x: 92, y: 92 },
+            { x: 50, y: 5 }, { x: 50, y: 95 }, { x: 5, y: 50 }, { x: 95, y: 50 },
+            { x: 25, y: 5 }, { x: 75, y: 5 }, { x: 25, y: 95 }, { x: 75, y: 95 },
+            { x: 5, y: 25 }, { x: 5, y: 75 }, { x: 95, y: 25 }, { x: 95, y: 75 }
+        ];
+        corners.forEach((pos, i) => {
+            cells.push({
+                x: pos.x,
+                y: pos.y,
+                size: 8 + (i % 4) * 2, // 8-14%
+                zIndex: 5 - (i % 3),
+                opacity: 0.5
+            });
+        });
+
+        // Create video clones for each cell
+        cells.forEach((cell, index) => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'plexd-bugeye-cell';
+            wrapper.style.cssText = `
+                position: absolute;
+                left: ${cell.x}%;
+                top: ${cell.y}%;
+                width: ${cell.size}%;
+                height: ${cell.size * (vh / vw)}%;
+                transform: translate(-50%, -50%);
+                z-index: ${cell.zIndex};
+                opacity: ${cell.opacity};
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+                pointer-events: none;
+            `;
+
+            // Clone the video - will share the same MediaSource
+            const videoClone = document.createElement('video');
+            videoClone.className = 'plexd-bugeye-video';
+            videoClone.src = videoSource.src;
+            videoClone.currentTime = videoSource.currentTime;
+            videoClone.muted = true;
+            videoClone.loop = videoSource.loop;
+            videoClone.playsInline = true;
+            videoClone.autoplay = true;
+            videoClone.style.cssText = `
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            `;
+
+            // Sync playback
+            videoClone.play().catch(() => {});
+
+            wrapper.appendChild(videoClone);
+            bugEyeOverlay.appendChild(wrapper);
+        });
+
+        // Add subtle animation class
+        bugEyeOverlay.classList.add('active');
+
+        container.appendChild(bugEyeOverlay);
+
+        // Sync all clones with main video periodically
+        function syncVideos() {
+            if (!bugEyeMode || !bugEyeOverlay) return;
+            const clones = bugEyeOverlay.querySelectorAll('video');
+            const mainTime = videoSource.currentTime;
+            clones.forEach(clone => {
+                // Only sync if drifted more than 0.5s
+                if (Math.abs(clone.currentTime - mainTime) > 0.5) {
+                    clone.currentTime = mainTime;
+                }
+                // Match play state
+                if (videoSource.paused && !clone.paused) {
+                    clone.pause();
+                } else if (!videoSource.paused && clone.paused) {
+                    clone.play().catch(() => {});
+                }
+            });
+            bugEyeAnimationFrame = requestAnimationFrame(syncVideos);
+        }
+        bugEyeAnimationFrame = requestAnimationFrame(syncVideos);
+    }
+
+    /**
+     * Destroy the bug eye overlay
+     */
+    function destroyBugEyeOverlay() {
+        if (bugEyeAnimationFrame) {
+            cancelAnimationFrame(bugEyeAnimationFrame);
+            bugEyeAnimationFrame = null;
+        }
+        if (bugEyeOverlay) {
+            // Pause all clones before removing
+            const clones = bugEyeOverlay.querySelectorAll('video');
+            clones.forEach(clone => {
+                clone.pause();
+                clone.src = '';
+            });
+            bugEyeOverlay.remove();
+            bugEyeOverlay = null;
+        }
+        const app = document.querySelector('.plexd-app');
+        if (app) app.classList.remove('bugeye-mode');
+        bugEyeMode = false;
+    }
+
     /**
      * Toggle pause/play all streams
      */
@@ -2005,6 +2211,11 @@ const PlexdApp = (function() {
             case 'O':
                 // Toggle Coverflow mode (Z-depth overlapping with hover effects)
                 toggleCoverflowMode();
+                break;
+            case 'b':
+            case 'B':
+                // Toggle Bug Eye mode - compound vision effect
+                toggleBugEyeMode();
                 break;
             case 'h':
             case 'H':
@@ -4058,6 +4269,7 @@ const PlexdApp = (function() {
         cycleTetrisMode,
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
+        toggleBugEyeMode,
         toggleHeader,
         // Global controls
         togglePauseAll,

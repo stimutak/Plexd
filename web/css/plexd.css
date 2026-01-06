@@ -1306,11 +1306,13 @@ body {
 }
 
 .plexd-header-toggle.header-visible {
-    opacity: 0.6;
+    opacity: 1;
+    background: #555;
+    color: #fff;
 }
 
 .plexd-header-toggle.header-visible:hover {
-    opacity: 1;
+    background: #ef4444;
 }
 
 /* Header hidden state */
@@ -2095,4 +2097,120 @@ body {
 
 .plexd-stream:focus:not(:focus-visible) {
     outline: none;
+}
+
+/* ========================================
+   Bug Eye Mode - Compound Vision Effect
+   ======================================== */
+
+.plexd-bugeye-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+.plexd-bugeye-overlay.active {
+    opacity: 1;
+}
+
+.plexd-bugeye-cell {
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.plexd-bugeye-cell:nth-child(odd) {
+    animation: bugeyePulse1 4s ease-in-out infinite;
+}
+
+.plexd-bugeye-cell:nth-child(even) {
+    animation: bugeyePulse2 5s ease-in-out infinite;
+}
+
+@keyframes bugeyePulse1 {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.02); }
+}
+
+@keyframes bugeyePulse2 {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(0.98); }
+}
+
+.plexd-bugeye-video {
+    background: #000;
+}
+
+/* Bug Eye mode indicator */
+.plexd-app.bugeye-mode #plexd-container::before {
+    content: 'BUG EYE';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+    color: #fff;
+    padding: 4px 14px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 700;
+    z-index: 200;
+    letter-spacing: 1px;
+    box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
+    animation: bugeyeLabelPulse 2s ease-in-out infinite;
+}
+
+@keyframes bugeyeLabelPulse {
+    0%, 100% { box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4); }
+    50% { box-shadow: 0 2px 16px rgba(239, 68, 68, 0.6); }
+}
+
+/* ========================================
+   Mosaic Mode - Clean Multi-Copy Effect
+   ======================================== */
+
+.plexd-mosaic-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 45;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.plexd-mosaic-overlay.active {
+    opacity: 1;
+}
+
+.plexd-mosaic-cell {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    transition: transform 0.3s ease;
+}
+
+.plexd-mosaic-cell:hover {
+    transform: scale(1.02);
+}
+
+.plexd-mosaic-video {
+    background: #000;
+}
+
+/* Mosaic mode indicator */
+.plexd-app.mosaic-mode #plexd-container::before {
+    content: 'MOSAIC';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
+    color: #fff;
+    padding: 4px 14px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 700;
+    z-index: 200;
+    letter-spacing: 1px;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
 }

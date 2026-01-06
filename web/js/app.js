@@ -536,14 +536,14 @@ const PlexdApp = (function() {
         if (headerVisible) {
             header.classList.remove('plexd-header-hidden');
             toggleBtn.classList.add('header-visible');
-            toggleBtn.innerHTML = '✕';
-            toggleBtn.title = 'Hide toolbar (T)';
+            toggleBtn.innerHTML = '☰';
+            toggleBtn.title = 'Hide toolbar (H)';
             app.classList.remove('header-hidden');
         } else {
             header.classList.add('plexd-header-hidden');
             toggleBtn.classList.remove('header-visible');
             toggleBtn.innerHTML = '☰';
-            toggleBtn.title = 'Toggle toolbar (T)';
+            toggleBtn.title = 'Show toolbar (H)';
             app.classList.add('header-hidden');
         }
 
@@ -1190,6 +1190,11 @@ const PlexdApp = (function() {
             return;
         }
 
+        // If Mosaic mode is on, turn it off first (they share visual space)
+        if (mosaicMode) {
+            destroyMosaicOverlay();
+        }
+
         bugEyeMode = !bugEyeMode;
         const app = document.querySelector('.plexd-app');
 
@@ -1217,6 +1222,47 @@ const PlexdApp = (function() {
         bugEyeOverlay = document.createElement('div');
         bugEyeOverlay.className = 'plexd-bugeye-overlay';
         bugEyeOverlay.id = 'plexd-bugeye-overlay';
+
+        // Add close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'plexd-bugeye-close-btn';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = 'Close Bug Eye (B)';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            pointer-events: auto;
+        `;
+        closeBtn.addEventListener('mouseenter', () => {
+            closeBtn.style.background = 'rgba(245, 158, 11, 0.9)';
+            closeBtn.style.borderColor = 'rgba(245, 158, 11, 1)';
+            closeBtn.style.transform = 'scale(1.1)';
+        });
+        closeBtn.addEventListener('mouseleave', () => {
+            closeBtn.style.background = 'rgba(0, 0, 0, 0.8)';
+            closeBtn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+            closeBtn.style.transform = 'scale(1)';
+        });
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleBugEyeMode();
+        });
+        bugEyeOverlay.appendChild(closeBtn);
 
         const videoSource = stream.video;
         const vw = window.innerWidth;

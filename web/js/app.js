@@ -1213,7 +1213,11 @@ const PlexdApp = (function() {
      * Create the bug eye overlay with multiple video copies
      */
     function createBugEyeOverlay(stream) {
-        destroyBugEyeOverlay(); // Clean up any existing
+        destroyBugEyeOverlay(); // Clean up any existing bug eye
+        // Ensure mosaic is also destroyed (mutual exclusivity)
+        if (mosaicOverlay) {
+            destroyMosaicOverlay();
+        }
 
         const container = document.getElementById('plexd-container');
         if (!container) return;
@@ -1465,7 +1469,11 @@ const PlexdApp = (function() {
      * Create the mosaic overlay with a few non-overlapping video copies
      */
     function createMosaicOverlay(stream) {
-        destroyMosaicOverlay(); // Clean up any existing
+        destroyMosaicOverlay(); // Clean up any existing mosaic
+        // Ensure bug eye is also destroyed (mutual exclusivity)
+        if (bugEyeOverlay) {
+            destroyBugEyeOverlay();
+        }
 
         const container = document.getElementById('plexd-container');
         if (!container) return;
@@ -1660,6 +1668,46 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.remove('mosaic-mode');
         mosaicMode = false;
+    }
+
+    /**
+     * Force sync all overlay clones to the current video position
+     * Called after seeking to immediately update all clones
+     */
+    function syncOverlayClones() {
+        // Sync mosaic clones
+        if (mosaicMode && mosaicOverlay) {
+            const fullscreenStream = PlexdStream.getFullscreenStream();
+            const selected = PlexdStream.getSelectedStream();
+            const targetStream = fullscreenStream || selected;
+            if (targetStream && targetStream.video) {
+                const mainTime = targetStream.video.currentTime;
+                const clones = mosaicOverlay.querySelectorAll('video');
+                clones.forEach(clone => {
+                    clone.currentTime = mainTime;
+                    if (!targetStream.video.paused && clone.paused) {
+                        clone.play().catch(() => {});
+                    }
+                });
+            }
+        }
+
+        // Sync bug eye clones
+        if (bugEyeMode && bugEyeOverlay) {
+            const fullscreenStream = PlexdStream.getFullscreenStream();
+            const selected = PlexdStream.getSelectedStream();
+            const targetStream = fullscreenStream || selected;
+            if (targetStream && targetStream.video) {
+                const mainTime = targetStream.video.currentTime;
+                const clones = bugEyeOverlay.querySelectorAll('video');
+                clones.forEach(clone => {
+                    clone.currentTime = mainTime;
+                    if (!targetStream.video.paused && clone.paused) {
+                        clone.play().catch(() => {});
+                    }
+                });
+            }
+        }
     }
 
     /**
@@ -2368,6 +2416,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, -10);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2378,6 +2427,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, 10);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2388,6 +2438,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, -60);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2398,6 +2449,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, 60);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2413,6 +2465,17 @@ const PlexdApp = (function() {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
                         // In focused mode - exit back to grid
+                        // Also exit any overlay modes
+                        if (mosaicMode) {
+                            destroyMosaicOverlay();
+                            const app = document.querySelector('.plexd-app');
+                            if (app) app.classList.remove('mosaic-mode');
+                        }
+                        if (bugEyeMode) {
+                            destroyBugEyeOverlay();
+                            const app = document.querySelector('.plexd-app');
+                            if (app) app.classList.remove('bugeye-mode');
+                        }
                         PlexdStream.exitFocusedMode();
                     } else if (coverflowMode) {
                         // In coverflow mode - enter focused mode on the carousel-selected stream
@@ -2687,6 +2750,36 @@ const PlexdApp = (function() {
         if (mode === 'true-focused') {
             const nextStream = PlexdStream.getStream(nextId);
             if (nextStream && nextStream.wrapper) nextStream.wrapper.focus();
+        }
+
+        // Update mosaic/bug eye overlay to show the new stream
+        updateOverlayStream(nextId);
+    }
+
+    /**
+     * Update mosaic or bug eye overlay to show a different stream
+     * Called when switching streams while an overlay is active
+     */
+    function updateOverlayStream(streamId) {
+        const stream = PlexdStream.getStream(streamId);
+        if (!stream) return;
+
+        const app = document.querySelector('.plexd-app');
+
+        // If mosaic mode is active, recreate with new stream
+        if (mosaicMode && mosaicOverlay) {
+            destroyMosaicOverlay();
+            mosaicMode = true; // Keep the mode on
+            if (app) app.classList.add('mosaic-mode');
+            createMosaicOverlay(stream);
+        }
+
+        // If bug eye mode is active, recreate with new stream
+        if (bugEyeMode && bugEyeOverlay) {
+            destroyBugEyeOverlay();
+            bugEyeMode = true; // Keep the mode on
+            if (app) app.classList.add('bugeye-mode');
+            createBugEyeOverlay(stream);
         }
     }
 
@@ -4515,6 +4608,8 @@ const PlexdApp = (function() {
         const success = await PlexdStream.seekToRandomPosition(target.id);
 
         if (success) {
+            // Sync overlay clones to the new position
+            syncOverlayClones();
             showMessage('Playing from random position', 'success');
         } else {
             showMessage('Could not seek stream', 'warning');

@@ -111,3 +111,100 @@ Plexd/
 ### iOS Native (Future)
 - iPadOS 15+
 - iPhone support optional/secondary
+
+---
+
+## Multi-Agent Development Environment
+
+This project uses a Boris Cherny-inspired multi-agent workflow for efficient development.
+
+### Philosophy
+
+1. **Parallel beats Sequential** - Run multiple agents simultaneously
+2. **Specialization beats Generalization** - Each agent focuses on one concern
+3. **Verification is Critical** - Always give Claude a way to verify its work
+4. **Two-Phase Loop** - Initial review + challenger phase filters false positives
+5. **Shared Knowledge** - Update CLAUDE.md when mistakes are discovered
+
+### Available Subagents (`.claude/agents/`)
+
+| Agent | Purpose |
+|-------|---------|
+| `code-reviewer` | Quality, security, and maintainability reviews |
+| `bug-finder` | Finds bugs, edge cases, and failure modes |
+| `style-checker` | Style guide compliance checking |
+| `verifier` | End-to-end verification and testing |
+| `code-simplifier` | Removes unnecessary complexity post-implementation |
+| `verification-challenger` | Filters false positives from other agents |
+| `planner` | Creates detailed implementation plans |
+| `parallel-coordinator` | Orchestrates multi-agent workflows |
+
+### Slash Commands (`.claude/commands/`)
+
+| Command | Purpose |
+|---------|---------|
+| `/commit-push-pr` | Full workflow: commit, push, create PR |
+| `/review` | Multi-agent code review |
+| `/verify` | Run verification loop |
+| `/two-phase-review` | Initial review + challenge loop |
+| `/simplify` | Simplify code after implementation |
+| `/plan` | Enter planning mode for complex tasks |
+| `/parallel-review` | Real-time strategy mode parallel review |
+| `/shared-knowledge` | Update CLAUDE.md with learnings |
+
+### Two-Phase Review Loop
+
+The signature technique for high-quality code review:
+
+```
+Phase 1: Fan-Out (Parallel)
+├── code-reviewer    → Quality findings
+├── bug-finder       → Bug findings
+├── style-checker    → Style findings
+└── verifier         → Verification findings
+
+Phase 2: Challenge (Filter)
+└── verification-challenger → Confirms real issues, removes false positives
+```
+
+This typically filters 20-40% of findings as false positives.
+
+### Verification Loop Pattern
+
+The most important practice for quality results:
+
+```
+Write Code → Verify → Fix Issues → Re-verify → Done
+```
+
+Always provide Claude a way to verify its work (tests, build, lint, manual testing).
+
+### Shared Knowledge Pattern
+
+When Claude makes a mistake:
+1. Fix the immediate issue
+2. Update CLAUDE.md with a new rule
+3. Commit the rule so future sessions benefit
+
+Example: "Always search with Grep before creating utility functions"
+
+### Recommended Workflows
+
+**For New Features:**
+1. `/plan` - Create implementation plan
+2. Implement the feature
+3. `/verify` - Run verification loop
+4. `/simplify` - Remove unnecessary complexity
+5. `/two-phase-review` - Full review
+6. `/commit-push-pr` - Ship it
+
+**For Bug Fixes:**
+1. Investigate and fix
+2. `/verify` - Confirm fix works
+3. `/review` - Quick review
+4. `/commit-push-pr` - Ship it
+
+**For Code Quality:**
+1. `/parallel-review` - Comprehensive review
+2. Fix confirmed issues
+3. `/shared-knowledge` - Document learnings

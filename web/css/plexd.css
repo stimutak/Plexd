@@ -1306,11 +1306,13 @@ body {
 }
 
 .plexd-header-toggle.header-visible {
-    opacity: 0.6;
+    opacity: 1;
+    background: #555;
+    color: #fff;
 }
 
 .plexd-header-toggle.header-visible:hover {
-    opacity: 1;
+    background: #ef4444;
 }
 
 /* Header hidden state */

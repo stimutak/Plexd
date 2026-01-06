@@ -536,12 +536,14 @@ const PlexdApp = (function() {
         if (headerVisible) {
             header.classList.remove('plexd-header-hidden');
             toggleBtn.classList.add('header-visible');
-            toggleBtn.innerHTML = '☰';
+            toggleBtn.innerHTML = '✕';
+            toggleBtn.title = 'Hide toolbar (T)';
             app.classList.remove('header-hidden');
         } else {
             header.classList.add('plexd-header-hidden');
             toggleBtn.classList.remove('header-visible');
             toggleBtn.innerHTML = '☰';
+            toggleBtn.title = 'Toggle toolbar (T)';
             app.classList.add('header-hidden');
         }
 

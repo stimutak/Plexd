@@ -536,14 +536,14 @@ const PlexdApp = (function() {
         if (headerVisible) {
             header.classList.remove('plexd-header-hidden');
             toggleBtn.classList.add('header-visible');
-            toggleBtn.innerHTML = '✕';
-            toggleBtn.title = 'Hide toolbar (T)';
+            toggleBtn.innerHTML = '☰';
+            toggleBtn.title = 'Hide toolbar (H)';
             app.classList.remove('header-hidden');
         } else {
             header.classList.add('plexd-header-hidden');
             toggleBtn.classList.remove('header-visible');
             toggleBtn.innerHTML = '☰';
-            toggleBtn.title = 'Toggle toolbar (T)';
+            toggleBtn.title = 'Show toolbar (H)';
             app.classList.add('header-hidden');
         }
 
@@ -1190,6 +1190,11 @@ const PlexdApp = (function() {
             return;
         }
 
+        // If Mosaic mode is on, turn it off first (they share visual space)
+        if (mosaicMode) {
+            destroyMosaicOverlay();
+        }
+
         bugEyeMode = !bugEyeMode;
         const app = document.querySelector('.plexd-app');
 
@@ -1208,7 +1213,11 @@ const PlexdApp = (function() {
      * Create the bug eye overlay with multiple video copies
      */
     function createBugEyeOverlay(stream) {
-        destroyBugEyeOverlay(); // Clean up any existing
+        destroyBugEyeOverlay(); // Clean up any existing bug eye
+        // Ensure mosaic is also destroyed (mutual exclusivity)
+        if (mosaicOverlay) {
+            destroyMosaicOverlay();
+        }
 
         const container = document.getElementById('plexd-container');
         if (!container) return;
@@ -1217,6 +1226,47 @@ const PlexdApp = (function() {
         bugEyeOverlay = document.createElement('div');
         bugEyeOverlay.className = 'plexd-bugeye-overlay';
         bugEyeOverlay.id = 'plexd-bugeye-overlay';
+
+        // Add close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'plexd-bugeye-close-btn';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = 'Close Bug Eye (B)';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            pointer-events: auto;
+        `;
+        closeBtn.addEventListener('mouseenter', () => {
+            closeBtn.style.background = 'rgba(245, 158, 11, 0.9)';
+            closeBtn.style.borderColor = 'rgba(245, 158, 11, 1)';
+            closeBtn.style.transform = 'scale(1.1)';
+        });
+        closeBtn.addEventListener('mouseleave', () => {
+            closeBtn.style.background = 'rgba(0, 0, 0, 0.8)';
+            closeBtn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+            closeBtn.style.transform = 'scale(1)';
+        });
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleBugEyeMode();
+        });
+        bugEyeOverlay.appendChild(closeBtn);
 
         const videoSource = stream.video;
         const vw = window.innerWidth;
@@ -1381,6 +1431,7 @@ const PlexdApp = (function() {
     let mosaicMode = false;
     let mosaicOverlay = null;
     let mosaicAnimationFrame = null;
+    let mosaicPausedStreams = []; // Track streams we paused for power efficiency
 
     /**
      * Toggle Mosaic mode - simpler effect with a few non-overlapping video copies
@@ -1418,15 +1469,86 @@ const PlexdApp = (function() {
      * Create the mosaic overlay with a few non-overlapping video copies
      */
     function createMosaicOverlay(stream) {
-        destroyMosaicOverlay(); // Clean up any existing
+        destroyMosaicOverlay(); // Clean up any existing mosaic
+        // Ensure bug eye is also destroyed (mutual exclusivity)
+        if (bugEyeOverlay) {
+            destroyBugEyeOverlay();
+        }
 
         const container = document.getElementById('plexd-container');
         if (!container) return;
+
+        // Pause all background streams for power efficiency and add grey overlay
+        mosaicPausedStreams = [];
+        const allStreams = PlexdStream.getAllStreams();
+        allStreams.forEach(s => {
+            if (s.id !== stream.id) {
+                // Track if stream was playing so we can resume it later
+                if (s.video && !s.video.paused) {
+                    mosaicPausedStreams.push(s.id);
+                    s.video.pause();
+                }
+                // Add grey overlay to background stream
+                if (s.element) {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'plexd-mosaic-dimmer';
+                    overlay.style.cssText = `
+                        position: absolute;
+                        inset: 0;
+                        background: rgba(0, 0, 0, 0.7);
+                        z-index: 40;
+                        pointer-events: none;
+                    `;
+                    s.element.appendChild(overlay);
+                }
+            }
+        });
 
         // Create overlay container
         mosaicOverlay = document.createElement('div');
         mosaicOverlay.className = 'plexd-mosaic-overlay';
         mosaicOverlay.id = 'plexd-mosaic-overlay';
+
+        // Add close button
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'plexd-mosaic-close-btn';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.title = 'Close Mosaic (Shift+B)';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            pointer-events: auto;
+        `;
+        closeBtn.addEventListener('mouseenter', () => {
+            closeBtn.style.background = 'rgba(239, 68, 68, 0.9)';
+            closeBtn.style.borderColor = 'rgba(239, 68, 68, 1)';
+            closeBtn.style.transform = 'scale(1.1)';
+        });
+        closeBtn.addEventListener('mouseleave', () => {
+            closeBtn.style.background = 'rgba(0, 0, 0, 0.8)';
+            closeBtn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+            closeBtn.style.transform = 'scale(1)';
+        });
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleMosaicMode();
+        });
+        mosaicOverlay.appendChild(closeBtn);
 
         const videoSource = stream.video;
 
@@ -1524,9 +1646,68 @@ const PlexdApp = (function() {
             mosaicOverlay.remove();
             mosaicOverlay = null;
         }
+
+        // Remove grey overlays from all streams
+        const allStreams = PlexdStream.getAllStreams();
+        allStreams.forEach(s => {
+            if (s.element) {
+                const dimmer = s.element.querySelector('.plexd-mosaic-dimmer');
+                if (dimmer) dimmer.remove();
+            }
+        });
+
+        // Resume streams that were paused by mosaic mode
+        mosaicPausedStreams.forEach(streamId => {
+            const stream = PlexdStream.getStream(streamId);
+            if (stream && stream.video) {
+                stream.video.play().catch(() => {});
+            }
+        });
+        mosaicPausedStreams = [];
+
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.remove('mosaic-mode');
         mosaicMode = false;
+    }
+
+    /**
+     * Force sync all overlay clones to the current video position
+     * Called after seeking to immediately update all clones
+     */
+    function syncOverlayClones() {
+        // Sync mosaic clones
+        if (mosaicMode && mosaicOverlay) {
+            const fullscreenStream = PlexdStream.getFullscreenStream();
+            const selected = PlexdStream.getSelectedStream();
+            const targetStream = fullscreenStream || selected;
+            if (targetStream && targetStream.video) {
+                const mainTime = targetStream.video.currentTime;
+                const clones = mosaicOverlay.querySelectorAll('video');
+                clones.forEach(clone => {
+                    clone.currentTime = mainTime;
+                    if (!targetStream.video.paused && clone.paused) {
+                        clone.play().catch(() => {});
+                    }
+                });
+            }
+        }
+
+        // Sync bug eye clones
+        if (bugEyeMode && bugEyeOverlay) {
+            const fullscreenStream = PlexdStream.getFullscreenStream();
+            const selected = PlexdStream.getSelectedStream();
+            const targetStream = fullscreenStream || selected;
+            if (targetStream && targetStream.video) {
+                const mainTime = targetStream.video.currentTime;
+                const clones = bugEyeOverlay.querySelectorAll('video');
+                clones.forEach(clone => {
+                    clone.currentTime = mainTime;
+                    if (!targetStream.video.paused && clone.paused) {
+                        clone.play().catch(() => {});
+                    }
+                });
+            }
+        }
     }
 
     /**
@@ -2235,6 +2416,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, -10);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2245,6 +2427,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, 10);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2255,6 +2438,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, -60);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2265,6 +2449,7 @@ const PlexdApp = (function() {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         PlexdStream.seekRelative(targetStream.id, 60);
+                        syncOverlayClones();
                     }
                 }
                 break;
@@ -2280,6 +2465,17 @@ const PlexdApp = (function() {
                     const mode = PlexdStream.getFullscreenMode();
                     if (mode === 'true-focused' || mode === 'browser-fill') {
                         // In focused mode - exit back to grid
+                        // Also exit any overlay modes
+                        if (mosaicMode) {
+                            destroyMosaicOverlay();
+                            const app = document.querySelector('.plexd-app');
+                            if (app) app.classList.remove('mosaic-mode');
+                        }
+                        if (bugEyeMode) {
+                            destroyBugEyeOverlay();
+                            const app = document.querySelector('.plexd-app');
+                            if (app) app.classList.remove('bugeye-mode');
+                        }
                         PlexdStream.exitFocusedMode();
                     } else if (coverflowMode) {
                         // In coverflow mode - enter focused mode on the carousel-selected stream
@@ -2554,6 +2750,36 @@ const PlexdApp = (function() {
         if (mode === 'true-focused') {
             const nextStream = PlexdStream.getStream(nextId);
             if (nextStream && nextStream.wrapper) nextStream.wrapper.focus();
+        }
+
+        // Update mosaic/bug eye overlay to show the new stream
+        updateOverlayStream(nextId);
+    }
+
+    /**
+     * Update mosaic or bug eye overlay to show a different stream
+     * Called when switching streams while an overlay is active
+     */
+    function updateOverlayStream(streamId) {
+        const stream = PlexdStream.getStream(streamId);
+        if (!stream) return;
+
+        const app = document.querySelector('.plexd-app');
+
+        // If mosaic mode is active, recreate with new stream
+        if (mosaicMode && mosaicOverlay) {
+            destroyMosaicOverlay();
+            mosaicMode = true; // Keep the mode on
+            if (app) app.classList.add('mosaic-mode');
+            createMosaicOverlay(stream);
+        }
+
+        // If bug eye mode is active, recreate with new stream
+        if (bugEyeMode && bugEyeOverlay) {
+            destroyBugEyeOverlay();
+            bugEyeMode = true; // Keep the mode on
+            if (app) app.classList.add('bugeye-mode');
+            createBugEyeOverlay(stream);
         }
     }
 
@@ -4382,6 +4608,8 @@ const PlexdApp = (function() {
         const success = await PlexdStream.seekToRandomPosition(target.id);
 
         if (success) {
+            // Sync overlay clones to the new position
+            syncOverlayClones();
             showMessage('Playing from random position', 'success');
         } else {
             showMessage('Could not seek stream', 'warning');

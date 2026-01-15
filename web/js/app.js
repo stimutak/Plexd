@@ -2571,8 +2571,13 @@ const PlexdApp = (function() {
                 break;
             case 'h':
             case 'H':
-                // Toggle header toolbar
-                toggleHeader();
+                // H = toggle header toolbar, Shift+H = toggle per-stream controls (clean mode)
+                if (e.shiftKey) {
+                    toggleCleanMode();
+                    showMessage(`Per-stream controls: ${PlexdStream.isCleanMode() ? 'hidden' : 'visible'}`, 'info');
+                } else {
+                    toggleHeader();
+                }
                 break;
             case 'v':
             case 'V':

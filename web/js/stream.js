@@ -18,7 +18,8 @@ const PlexdStream = (function() {
     // Currently selected stream for keyboard navigation
     let selectedStreamId = null;
 
-    // Audio focus mode - when true, unmuting one mutes all others
+    // Audio focus mode - when true, audio follows stream selection
+    // Unmuting any stream mutes others, and selecting a stream transfers audio to it
     // Load from localStorage, default to true
     let audioFocusMode = localStorage.getItem('plexd_audio_focus') !== 'false';
 
@@ -650,7 +651,7 @@ const PlexdStream = (function() {
         muteBtn.className = 'plexd-btn plexd-mute-btn';
         muteBtn.innerHTML = '&#128263;'; // Speaker icon
         muteBtn.title = audioFocusMode
-            ? 'Toggle audio (focus ON: unmute one mutes others)'
+            ? 'Toggle audio (focus ON: audio follows selection)'
             : 'Toggle audio (focus OFF: independent)';
         muteBtn.onclick = (e) => {
             e.stopPropagation();
@@ -2397,7 +2398,7 @@ const PlexdStream = (function() {
      */
     function updateAllMuteButtonTooltips() {
         const tooltip = audioFocusMode
-            ? 'Toggle audio (focus ON: unmute one mutes others)'
+            ? 'Toggle audio (focus ON: audio follows selection)'
             : 'Toggle audio (focus OFF: independent)';
         streams.forEach(stream => {
             const muteBtn = stream.controls.querySelector('.plexd-mute-btn');
@@ -2414,8 +2415,11 @@ const PlexdStream = (function() {
 
     /**
      * Select a stream for keyboard navigation
+     * When audio focus mode is ON, audio automatically follows the selection
      */
     function selectStream(streamId) {
+        const previousStreamId = selectedStreamId;
+
         // Deselect previous
         if (selectedStreamId) {
             const prevStream = streams.get(selectedStreamId);
@@ -2430,6 +2434,29 @@ const PlexdStream = (function() {
             const stream = streams.get(streamId);
             if (stream) {
                 stream.wrapper.classList.add('plexd-selected');
+
+                // Audio follows focus: transfer audio to newly selected stream
+                if (audioFocusMode && streamId !== previousStreamId) {
+                    // Check if any stream currently has audio
+                    let hasActiveAudio = false;
+                    streams.forEach((s) => {
+                        if (!s.video.muted) {
+                            hasActiveAudio = true;
+                        }
+                    });
+
+                    // If audio is active somewhere, transfer it to the selected stream
+                    if (hasActiveAudio) {
+                        streams.forEach((s, id) => {
+                            if (id !== streamId && !s.video.muted) {
+                                s.video.muted = true;
+                                updateMuteButton(s);
+                            }
+                        });
+                        stream.video.muted = false;
+                        updateMuteButton(stream);
+                    }
+                }
             }
         }
     }

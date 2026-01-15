@@ -1750,8 +1750,8 @@ const PlexdApp = (function() {
         // Keep icon compact, but make state obvious.
         btn.textContent = enabled ? '🎧' : '🔈';
         btn.title = enabled
-            ? 'Audio focus: ON (unmuting one mutes others)'
-            : 'Audio focus: OFF (streams can be unmuted independently)';
+            ? 'Audio focus: ON (audio follows selection)'
+            : 'Audio focus: OFF (independent audio per stream)';
     }
 
     /**

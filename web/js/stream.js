@@ -1446,6 +1446,8 @@ const PlexdStream = (function() {
             fullscreenStreamId = streamId;
             fullscreenMode = 'browser-fill';
             setAppFocusedMode(true);
+            // Select this stream (triggers audio follow if audio focus is on)
+            selectStream(streamId);
             // Resource saving: pause other streams while focused
             applyFocusResourcePolicy(streamId);
         }
@@ -1753,6 +1755,9 @@ const PlexdStream = (function() {
         currentStream.wrapper.classList.remove('plexd-fullscreen');
         newStream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = newStream.id;
+
+        // Select the new stream (triggers audio follow if audio focus is on)
+        selectStream(newStream.id);
 
         // Focus the new stream for keyboard controls
         newStream.wrapper.focus();
@@ -2205,6 +2210,24 @@ const PlexdStream = (function() {
                 }, 50);
             }
         }
+    }
+
+    /**
+     * Get the next stream ID (for use when removing a stream)
+     * Returns the next stream, or previous if at end, or null if no other streams
+     */
+    function getNextStreamId(streamId) {
+        const streamList = Array.from(streams.keys());
+        const currentIndex = streamList.indexOf(streamId);
+
+        if (streamList.length <= 1) return null;
+
+        if (currentIndex < streamList.length - 1) {
+            return streamList[currentIndex + 1];
+        } else if (currentIndex > 0) {
+            return streamList[currentIndex - 1];
+        }
+        return null;
     }
 
     /**
@@ -3697,6 +3720,8 @@ const PlexdStream = (function() {
     return {
         createStream,
         removeStream,
+        removeStreamAndFocusNext,
+        getNextStreamId,
         reloadStream,
         copyStreamUrl,
         copyAllStreamUrls,

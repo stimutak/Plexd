@@ -2615,11 +2615,21 @@ const PlexdApp = (function() {
                 {
                     const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
                     if (targetStream) {
-                        // If in fullscreen, exit first
                         if (fullscreenStream) {
-                            PlexdStream.exitFocusedMode();
+                            // In fullscreen: find next stream, remove current, fullscreen next
+                            const nextStreamId = PlexdStream.getNextStreamId(targetStream.id);
+                            PlexdStream.removeStream(targetStream.id);
+                            if (nextStreamId) {
+                                // Stay in fullscreen on the next stream
+                                PlexdStream.enterFocusedMode(nextStreamId);
+                            } else {
+                                // No more streams, exit fullscreen
+                                PlexdStream.exitFocusedMode();
+                            }
+                        } else {
+                            // In grid: remove and select next for quick elimination
+                            PlexdStream.removeStreamAndFocusNext(targetStream.id);
                         }
-                        PlexdStream.removeStream(targetStream.id);
                         updateStreamCount();
                         saveCurrentStreams();
                         showMessage('Stream closed', 'info');
@@ -2713,18 +2723,9 @@ const PlexdApp = (function() {
                 randomSeekSelected();
                 break;
             case '?':
-                // Shift+/ (?) : Random seek ALL streams OR toggle shortcuts hint
-                // Only toggle shortcuts if no stream is selected/focused
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        e.preventDefault();
-                        randomSeekAll();
-                    } else {
-                        // No stream targeted - toggle shortcuts visibility
-                        toggleShortcutsOverlay();
-                    }
-                }
+                // ? : Toggle shortcuts overlay (standard help key)
+                e.preventDefault();
+                toggleShortcutsOverlay();
                 break;
         }
     }

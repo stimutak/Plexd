@@ -2213,6 +2213,24 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Get the next stream ID (for use when removing a stream)
+     * Returns the next stream, or previous if at end, or null if no other streams
+     */
+    function getNextStreamId(streamId) {
+        const streamList = Array.from(streams.keys());
+        const currentIndex = streamList.indexOf(streamId);
+
+        if (streamList.length <= 1) return null;
+
+        if (currentIndex < streamList.length - 1) {
+            return streamList[currentIndex + 1];
+        } else if (currentIndex > 0) {
+            return streamList[currentIndex - 1];
+        }
+        return null;
+    }
+
+    /**
      * Reload a stream (handles errors, stalled, paused - gets it playing again)
      * Preserves playback position where possible
      */
@@ -3702,6 +3720,8 @@ const PlexdStream = (function() {
     return {
         createStream,
         removeStream,
+        removeStreamAndFocusNext,
+        getNextStreamId,
         reloadStream,
         copyStreamUrl,
         copyAllStreamUrls,

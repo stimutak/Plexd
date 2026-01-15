@@ -1446,6 +1446,8 @@ const PlexdStream = (function() {
             fullscreenStreamId = streamId;
             fullscreenMode = 'browser-fill';
             setAppFocusedMode(true);
+            // Select this stream (triggers audio follow if audio focus is on)
+            selectStream(streamId);
             // Resource saving: pause other streams while focused
             applyFocusResourcePolicy(streamId);
         }
@@ -1753,6 +1755,9 @@ const PlexdStream = (function() {
         currentStream.wrapper.classList.remove('plexd-fullscreen');
         newStream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = newStream.id;
+
+        // Select the new stream (triggers audio follow if audio focus is on)
+        selectStream(newStream.id);
 
         // Focus the new stream for keyboard controls
         newStream.wrapper.focus();

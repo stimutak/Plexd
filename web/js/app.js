@@ -2713,18 +2713,9 @@ const PlexdApp = (function() {
                 randomSeekSelected();
                 break;
             case '?':
-                // Shift+/ (?) : Random seek ALL streams OR toggle shortcuts hint
-                // Only toggle shortcuts if no stream is selected/focused
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        e.preventDefault();
-                        randomSeekAll();
-                    } else {
-                        // No stream targeted - toggle shortcuts visibility
-                        toggleShortcutsOverlay();
-                    }
-                }
+                // ? : Toggle shortcuts overlay (standard help key)
+                e.preventDefault();
+                toggleShortcutsOverlay();
                 break;
         }
     }

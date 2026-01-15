@@ -784,6 +784,7 @@ body {
     color: #666;
 }
 
+.plexd-combo-update,
 .plexd-combo-load,
 .plexd-combo-delete {
     padding: 4px 8px;
@@ -791,6 +792,15 @@ body {
     border: none;
     border-radius: 3px;
     cursor: pointer;
+}
+
+.plexd-combo-update {
+    background: #3b82f6;
+    color: #fff;
+}
+
+.plexd-combo-update:hover {
+    background: #2563eb;
 }
 
 .plexd-combo-load {
@@ -818,6 +828,14 @@ body {
     color: #666;
     text-align: center;
     padding: 8px;
+}
+
+.plexd-panel-hint {
+    font-size: 11px;
+    color: #666;
+    padding: 6px 12px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
 }
 
 /* ========================================

@@ -3066,7 +3066,7 @@ const PlexdApp = (function() {
     /**
      * Save current stream combination with a name
      */
-    async function saveStreamCombination() {
+    async function saveStreamCombination(existingName = null) {
         const streams = PlexdStream.getAllStreams();
         if (streams.length === 0) {
             showMessage('No streams to save', 'error');
@@ -3087,8 +3087,27 @@ const PlexdApp = (function() {
             return;
         }
 
-        const name = prompt('Enter a name for this stream combination:');
-        if (!name) return;
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        let name = existingName;
+        let isUpdate = !!existingName;
+
+        if (!name) {
+            // Check for existing names and offer update option
+            const existingNames = Object.keys(combinations);
+            if (existingNames.length > 0) {
+                name = prompt(`Enter a name for this set:\n\nExisting sets (enter same name to update):\n• ${existingNames.join('\n• ')}`);
+            } else {
+                name = prompt('Enter a name for this set:');
+            }
+            if (!name) return;
+
+            // Check if updating existing set
+            if (combinations[name]) {
+                const confirmUpdate = confirm(`"${name}" already exists with ${combinations[name].urls.length} streams.\n\nReplace with current ${validStreams.length} streams?`);
+                if (!confirmUpdate) return;
+                isUpdate = true;
+            }
+        }
 
         // Dedupe URLs by normalized equality key to avoid saving the same stream twice
         const urls = [];
@@ -3157,6 +3176,13 @@ const PlexdApp = (function() {
         });
 
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+
+        // Check if updating existing set (when not using existingName parameter)
+        let isUpdate = !!existingName;
+        if (!existingName && combinations[name]) {
+            isUpdate = true;
+        }
+
         combinations[name] = {
             urls: urls,
             localFiles: localFiles,
@@ -3179,7 +3205,8 @@ const PlexdApp = (function() {
         // Build informative message
         const totalCount = urls.length + localFiles.length;
         const favCount = favoriteUrls.length + favoriteFileNames.length;
-        let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
+        let msg = isUpdate ? `Updated: ${name}` : `Saved: ${name}`;
+        msg += ` (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
         if (localFiles.length > 0) {
             msg += ` | ${localFiles.length} local`;
             if (savedToDisc) {
@@ -3197,6 +3224,19 @@ const PlexdApp = (function() {
         }
         showMessage(msg, 'success');
         updateCombinationsList();
+
+        // Auto-open the saved sets panel so user can see the saved set
+        const savedPanel = document.getElementById('saved-panel');
+        if (savedPanel && !savedPanel.classList.contains('plexd-panel-open')) {
+            savedPanel.classList.add('plexd-panel-open');
+        }
+    }
+
+    /**
+     * Update an existing set with current streams
+     */
+    function updateStreamCombination(name) {
+        saveStreamCombination(name);
     }
 
     /**
@@ -4123,6 +4163,7 @@ const PlexdApp = (function() {
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
                     <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
+                    <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Replace with current streams">Update</button>
                     <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
                     <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
                 </div>
@@ -4632,6 +4673,7 @@ const PlexdApp = (function() {
         saveCombination: saveStreamCombination,
         saveFavorites: saveFavoritesAsCombination,
         loadCombination: loadStreamCombination,
+        updateCombination: updateStreamCombination,
         deleteCombination: deleteStreamCombination,
         getSavedCombinations,
         exportCombinations,

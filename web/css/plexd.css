@@ -765,8 +765,9 @@ body {
 
 .plexd-combo-item {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 4px 6px;
     padding: 6px 8px;
     background: #252525;
     border-radius: 4px;
@@ -775,21 +776,30 @@ body {
 
 .plexd-combo-name {
     flex: 1;
-    font-size: 13px;
+    font-size: 12px;
     color: #fff;
+    min-width: 60px;
 }
 
 .plexd-combo-count {
-    font-size: 11px;
+    font-size: 10px;
     color: #666;
+    width: 100%;
+    margin-top: -2px;
+}
+
+.plexd-combo-buttons {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
 }
 
 .plexd-combo-update,
 .plexd-combo-add,
 .plexd-combo-load,
 .plexd-combo-delete {
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 3px 6px;
+    font-size: 10px;
     border: none;
     border-radius: 3px;
     cursor: pointer;

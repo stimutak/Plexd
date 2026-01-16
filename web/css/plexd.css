@@ -785,6 +785,7 @@ body {
 }
 
 .plexd-combo-update,
+.plexd-combo-add,
 .plexd-combo-load,
 .plexd-combo-delete {
     padding: 4px 8px;
@@ -801,6 +802,15 @@ body {
 
 .plexd-combo-update:hover {
     background: #2563eb;
+}
+
+.plexd-combo-add {
+    background: #10b981;
+    color: #fff;
+}
+
+.plexd-combo-add:hover {
+    background: #059669;
 }
 
 .plexd-combo-load {

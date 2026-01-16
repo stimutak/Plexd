@@ -3111,7 +3111,8 @@ const PlexdApp = (function() {
 
             // Check if updating existing set
             if (combinations[name]) {
-                const confirmUpdate = confirm(`"${name}" already exists with ${combinations[name].urls.length} streams.\n\nReplace with current ${validStreams.length} streams?`);
+                const totalToSave = validUrlStreams.length + localFileStreams.length;
+                const confirmUpdate = confirm(`"${name}" already exists with ${combinations[name].urls.length} streams.\n\nReplace with current ${totalToSave} streams?`);
                 if (!confirmUpdate) return;
                 isUpdate = true;
             }
@@ -3248,6 +3249,13 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Add a saved set to current streams (merge without clearing)
+     */
+    function addStreamCombination(name) {
+        loadStreamCombination(name, true);
+    }
+
+    /**
      * Save favorite streams as a combination/set
      */
     async function saveFavoritesAsCombination() {
@@ -3348,8 +3356,10 @@ const PlexdApp = (function() {
 
     /**
      * Load a saved stream combination
+     * @param {string} name - Name of the combination to load
+     * @param {boolean} merge - If true, add to existing streams instead of replacing
      */
-    async function loadStreamCombination(name) {
+    async function loadStreamCombination(name, merge = false) {
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         const combo = combinations[name];
 
@@ -3366,10 +3376,10 @@ const PlexdApp = (function() {
         const loadWithFiles = (providedFiles) => {
             if (loginDomains.length > 0) {
                 showLoginDomainsModal(name, loginDomains, () => {
-                    loadCombinationStreams(name, combo, providedFiles);
+                    loadCombinationStreams(name, combo, providedFiles, merge);
                 });
             } else {
-                loadCombinationStreams(name, combo, providedFiles);
+                loadCombinationStreams(name, combo, providedFiles, merge);
             }
         };
 
@@ -3575,11 +3585,17 @@ const PlexdApp = (function() {
      * @param {string} name - Combination name
      * @param {Object} combo - Combination data
      * @param {Array} providedFiles - Array of {url, fileName} for local files
+     * @param {boolean} merge - If true, add to existing streams instead of replacing
      */
-    function loadCombinationStreams(name, combo, providedFiles = []) {
-        // Clear current streams
-        const currentStreams = PlexdStream.getAllStreams();
-        currentStreams.forEach(s => PlexdStream.removeStream(s.id));
+    function loadCombinationStreams(name, combo, providedFiles = [], merge = false) {
+        // Clear current streams (unless merging)
+        if (!merge) {
+            const currentStreams = PlexdStream.getAllStreams();
+            currentStreams.forEach(s => PlexdStream.removeStream(s.id));
+        }
+
+        // Get existing URLs to avoid duplicates when merging
+        const existingUrls = merge ? new Set(PlexdStream.getAllStreams().map(s => s.url)) : new Set();
 
         // Log HLS.js availability for debugging
         const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
@@ -3590,10 +3606,16 @@ const PlexdApp = (function() {
         // Load URL streams with validation
         let loadedCount = 0;
         let skippedCount = 0;
+        let duplicateCount = 0;
 
         if (combo.urls) {
             combo.urls.forEach((url, index) => {
                 if (url && isValidUrl(url)) {
+                    // Skip duplicates when merging
+                    if (merge && existingUrls.has(url)) {
+                        duplicateCount++;
+                        return;
+                    }
                     console.log(`[Plexd] Loading stream ${index + 1}/${urlCount}: ${truncateUrl(url, 80)}`);
                     addStreamSilent(url);
                     loadedCount++;
@@ -3661,15 +3683,19 @@ const PlexdApp = (function() {
         // Build message
         const total = loadedCount + localLoaded;
         const favCount = favoriteUrls.length + favoriteFileNames.length;
-        let msg = `Loaded: ${name} (${total} stream${total !== 1 ? 's' : ''})`;
+        let msg = merge ? `Added: ${name}` : `Loaded: ${name}`;
+        msg += ` (${total} stream${total !== 1 ? 's' : ''})`;
         if (localLoaded > 0) {
             msg += ` | ${localLoaded} local`;
         }
         if (favCount > 0) {
             msg += ` | ${favCount} fav`;
         }
+        if (duplicateCount > 0) {
+            msg += ` | ${duplicateCount} duplicate${duplicateCount !== 1 ? 's' : ''} skipped`;
+        }
         if (skippedCount > 0) {
-            msg += ` | ${skippedCount} skipped`;
+            msg += ` | ${skippedCount} invalid`;
         }
         showMessage(msg, 'success');
         updateStreamCount();
@@ -4172,7 +4198,8 @@ const PlexdApp = (function() {
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
                     <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
                     <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Replace with current streams">Update</button>
-                    <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
+                    <button class="plexd-combo-add" onclick="PlexdApp.addCombination('${escapeAttr(name)}')" title="Add to current streams">+ Add</button>
+                    <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')" title="Replace current streams">Load</button>
                     <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
                 </div>
             `;
@@ -4709,6 +4736,7 @@ const PlexdApp = (function() {
         saveFavorites: saveFavoritesAsCombination,
         loadCombination: loadStreamCombination,
         updateCombination: updateStreamCombination,
+        addCombination: addStreamCombination,
         deleteCombination: deleteStreamCombination,
         getSavedCombinations,
         exportCombinations,

@@ -884,18 +884,26 @@ const PlexdApp = (function() {
         const allStreams = PlexdStream.getAllStreams();
 
         // Filter based on view mode (all, favorites, or specific star rating)
-        let streamsToShow = allStreams;
+        // Also exclude individually hidden streams
+        let streamsToShow = allStreams.filter(s => !s.hidden);
         if (viewMode === 'favorites') {
-            streamsToShow = PlexdStream.getFavoriteStreams();
+            streamsToShow = streamsToShow.filter(s => PlexdStream.getFavorite(s.url, s.fileName));
         } else if (viewMode !== 'all') {
-            streamsToShow = PlexdStream.getStreamsByRating(viewMode);
+            streamsToShow = streamsToShow.filter(s => PlexdStream.getRating(s.url) === viewMode);
         }
 
-        // Handle visibility and playback of streams based on view mode
+        // Handle visibility and playback of streams based on view mode AND individual hidden state
         // When filtering by rating/favorites, pause hidden streams to save bandwidth
         // Use position-preserving pause/resume to avoid streams restarting
         const isGloballyPaused = PlexdStream.isGloballyPaused();
         allStreams.forEach(stream => {
+            // Individually hidden streams are always hidden regardless of view mode
+            if (stream.hidden) {
+                stream.wrapper.style.display = 'none';
+                stream.video.pause();
+                return;
+            }
+
             if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
                 // Resume playback for all streams when viewing all (if not globally paused)
@@ -3066,7 +3074,7 @@ const PlexdApp = (function() {
     /**
      * Save current stream combination with a name
      */
-    async function saveStreamCombination() {
+    async function saveStreamCombination(existingName = null) {
         const streams = PlexdStream.getAllStreams();
         if (streams.length === 0) {
             showMessage('No streams to save', 'error');
@@ -3087,8 +3095,27 @@ const PlexdApp = (function() {
             return;
         }
 
-        const name = prompt('Enter a name for this stream combination:');
-        if (!name) return;
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        let name = existingName;
+        let isUpdate = !!existingName;
+
+        if (!name) {
+            // Check for existing names and offer update option
+            const existingNames = Object.keys(combinations);
+            if (existingNames.length > 0) {
+                name = prompt(`Enter a name for this set:\n\nExisting sets (enter same name to update):\n• ${existingNames.join('\n• ')}`);
+            } else {
+                name = prompt('Enter a name for this set:');
+            }
+            if (!name) return;
+
+            // Check if updating existing set
+            if (combinations[name]) {
+                const confirmUpdate = confirm(`"${name}" already exists with ${combinations[name].urls.length} streams.\n\nReplace with current ${validStreams.length} streams?`);
+                if (!confirmUpdate) return;
+                isUpdate = true;
+            }
+        }
 
         // Dedupe URLs by normalized equality key to avoid saving the same stream twice
         const urls = [];
@@ -3157,6 +3184,13 @@ const PlexdApp = (function() {
         });
 
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+
+        // Check if updating existing set (when not using existingName parameter)
+        let isUpdate = !!existingName;
+        if (!existingName && combinations[name]) {
+            isUpdate = true;
+        }
+
         combinations[name] = {
             urls: urls,
             localFiles: localFiles,
@@ -3179,7 +3213,8 @@ const PlexdApp = (function() {
         // Build informative message
         const totalCount = urls.length + localFiles.length;
         const favCount = favoriteUrls.length + favoriteFileNames.length;
-        let msg = `Saved: ${name} (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
+        let msg = isUpdate ? `Updated: ${name}` : `Saved: ${name}`;
+        msg += ` (${totalCount} stream${totalCount !== 1 ? 's' : ''})`;
         if (localFiles.length > 0) {
             msg += ` | ${localFiles.length} local`;
             if (savedToDisc) {
@@ -3197,6 +3232,19 @@ const PlexdApp = (function() {
         }
         showMessage(msg, 'success');
         updateCombinationsList();
+
+        // Auto-open the saved sets panel so user can see the saved set
+        const savedPanel = document.getElementById('saved-panel');
+        if (savedPanel && !savedPanel.classList.contains('plexd-panel-open')) {
+            savedPanel.classList.add('plexd-panel-open');
+        }
+    }
+
+    /**
+     * Update an existing set with current streams
+     */
+    function updateStreamCombination(name) {
+        saveStreamCombination(name);
     }
 
     /**
@@ -4123,6 +4171,7 @@ const PlexdApp = (function() {
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
                     <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
+                    <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Replace with current streams">Update</button>
                     <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')">Load</button>
                     <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
                 </div>
@@ -4420,6 +4469,7 @@ const PlexdApp = (function() {
         streamsList.innerHTML = allStreams.map((stream, index) => {
             const isLocal = stream.url.startsWith('blob:');
             const isSelected = selectedStream && selectedStream.id === stream.id;
+            const isVisible = !stream.hidden;
             const rating = PlexdStream.getRating(stream.url);
             const displayName = stream.fileName || getStreamDisplayName(stream.url);
             const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
@@ -4431,16 +4481,22 @@ const PlexdApp = (function() {
                              stream.state === 'error' ? '⚠' :
                              stream.state === 'buffering' || stream.state === 'loading' ? '⏳' : '●';
             const ratingDisplay = rating > 0 ? `<span class="plexd-stream-rating rated-${rating}">★${rating}</span>` : '';
+            const visibilityIcon = isVisible ? '👁' : '👁‍🗨';
+            const visibilityTitle = isVisible ? 'Hide from grid' : 'Show in grid';
+            const hiddenClass = stream.hidden ? 'hidden-stream' : '';
 
             return `
-                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''}"
+                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''} ${hiddenClass}"
                      data-stream-id="${stream.id}"
                      onclick="PlexdApp.selectAndFocusStream('${stream.id}')">
+                    <span class="plexd-stream-visibility ${isVisible ? 'visible' : 'hidden'}"
+                          onclick="event.stopPropagation(); PlexdApp.toggleStreamVisibility('${stream.id}')"
+                          title="${visibilityTitle}">${visibilityIcon}</span>
                     <span class="plexd-stream-type ${isLocal ? 'local' : 'stream'}">${isLocal ? 'FILE' : 'URL'}</span>
                     <div class="plexd-stream-info">
                         <div class="plexd-stream-name">${escapeHtml(displayName)}${ratingDisplay}</div>
                         <div class="plexd-stream-url">${escapeHtml(displayUrl)}</div>
-                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}</div>
+                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}${stream.hidden ? ' (hidden)' : ''}</div>
                     </div>
                     <div class="plexd-stream-actions">
                         <button class="plexd-stream-btn reload"
@@ -4538,6 +4594,26 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Toggle stream visibility in grid from the streams panel
+     */
+    function toggleStreamVisibility(streamId) {
+        const isNowHidden = PlexdStream.toggleStreamVisibility(streamId);
+        const stream = PlexdStream.getStream(streamId);
+        const name = stream ? (stream.fileName || getStreamDisplayName(stream.url)) : 'Stream';
+        showMessage(isNowHidden ? `Hidden: ${name}` : `Showing: ${name}`, 'info');
+        updateStreamsPanelUI();
+    }
+
+    /**
+     * Show all hidden streams
+     */
+    function showAllStreams() {
+        PlexdStream.showAllStreams();
+        showMessage('All streams visible', 'info');
+        updateStreamsPanelUI();
+    }
+
+    /**
      * Reload all streams
      */
     function reloadAllStreams() {
@@ -4632,6 +4708,7 @@ const PlexdApp = (function() {
         saveCombination: saveStreamCombination,
         saveFavorites: saveFavoritesAsCombination,
         loadCombination: loadStreamCombination,
+        updateCombination: updateStreamCombination,
         deleteCombination: deleteStreamCombination,
         getSavedCombinations,
         exportCombinations,
@@ -4651,6 +4728,9 @@ const PlexdApp = (function() {
         reloadStreamFromPanel,
         reloadAllStreams,
         closeAllStreams,
+        // Visibility control
+        toggleStreamVisibility,
+        showAllStreams,
         // View modes
         setViewMode,
         cycleViewMode,

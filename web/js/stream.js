@@ -208,6 +208,7 @@ const PlexdStream = (function() {
             aspectRatio: DEFAULT_ASPECT_RATIO,
             state: 'loading', // loading, playing, paused, buffering, error, recovering
             error: null,
+            hidden: false, // Whether stream is hidden from grid view
             // Recovery state
             recovery: {
                 retryCount: 0,
@@ -2175,6 +2176,75 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Toggle stream visibility in grid (hide/show)
+     * Hidden streams remain active but are not displayed
+     */
+    function toggleStreamVisibility(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        stream.hidden = !stream.hidden;
+
+        // Pause hidden streams to save resources, play visible ones
+        if (stream.hidden) {
+            stream.video.pause();
+        } else {
+            stream.video.play().catch(() => {});
+        }
+
+        triggerLayoutUpdate();
+        return stream.hidden;
+    }
+
+    /**
+     * Set stream visibility explicitly
+     */
+    function setStreamVisibility(streamId, visible) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+
+        stream.hidden = !visible;
+
+        if (stream.hidden) {
+            stream.video.pause();
+        } else {
+            stream.video.play().catch(() => {});
+        }
+
+        triggerLayoutUpdate();
+        return true;
+    }
+
+    /**
+     * Check if stream is visible (not hidden)
+     */
+    function isStreamVisible(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+        return !stream.hidden;
+    }
+
+    /**
+     * Get all visible streams (not hidden)
+     */
+    function getVisibleStreams() {
+        return Array.from(streams.values()).filter(s => !s.hidden);
+    }
+
+    /**
+     * Show all hidden streams
+     */
+    function showAllStreams() {
+        streams.forEach(stream => {
+            if (stream.hidden) {
+                stream.hidden = false;
+                stream.video.play().catch(() => {});
+            }
+        });
+        triggerLayoutUpdate();
+    }
+
+    /**
      * Remove a stream and focus the next stream's remove button for quick sequential closing
      */
     function removeStreamAndFocusNext(streamId) {
@@ -3723,6 +3793,13 @@ const PlexdStream = (function() {
         removeStreamAndFocusNext,
         getNextStreamId,
         reloadStream,
+        // Visibility control
+        toggleStreamVisibility,
+        setStreamVisibility,
+        isStreamVisible,
+        getVisibleStreams,
+        showAllStreams,
+        // Utilities
         copyStreamUrl,
         copyAllStreamUrls,
         getStream,

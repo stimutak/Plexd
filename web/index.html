@@ -113,13 +113,14 @@
             <div class="plexd-panel-header">
                 <h3>Saved Sets</h3>
                 <div class="plexd-panel-actions">
-                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams (Ctrl+S)">+ Save</button>
+                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams to browser (persists across sessions)">+ Save</button>
                     <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★ Save</button>
-                    <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file (for AirDrop)">Export</button>
+                    <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file (for AirDrop or backup)">Export</button>
                     <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Import</button>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
+            <div class="plexd-panel-hint">Sets are saved in your browser. Use Export to backup or share via AirDrop.</div>
             <div id="combinations-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No saved combinations</div>
             </div>
@@ -130,11 +131,13 @@
             <div class="plexd-panel-header">
                 <h3>Streams</h3>
                 <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.showAllStreams()" class="plexd-button-small" title="Show all hidden streams">👁 All</button>
                     <button onclick="PlexdApp.reloadAllStreams()" class="plexd-button-small" title="Reload all streams">↻ All</button>
                     <button onclick="PlexdApp.closeAllStreams()" class="plexd-button-small plexd-btn-danger" title="Close all streams">✕ All</button>
                     <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
+            <div class="plexd-panel-hint">Click 👁 to show/hide streams in the grid</div>
             <div id="streams-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No active streams</div>
             </div>

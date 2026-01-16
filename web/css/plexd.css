@@ -784,6 +784,7 @@ body {
     color: #666;
 }
 
+.plexd-combo-update,
 .plexd-combo-load,
 .plexd-combo-delete {
     padding: 4px 8px;
@@ -791,6 +792,15 @@ body {
     border: none;
     border-radius: 3px;
     cursor: pointer;
+}
+
+.plexd-combo-update {
+    background: #3b82f6;
+    color: #fff;
+}
+
+.plexd-combo-update:hover {
+    background: #2563eb;
 }
 
 .plexd-combo-load {
@@ -818,6 +828,14 @@ body {
     color: #666;
     text-align: center;
     padding: 8px;
+}
+
+.plexd-panel-hint {
+    font-size: 11px;
+    color: #666;
+    padding: 6px 12px;
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
 }
 
 /* ========================================
@@ -1121,6 +1139,43 @@ body {
 .plexd-stream-type.stream {
     background: #1e3a5f;
     color: #60a5fa;
+}
+
+/* Stream visibility toggle */
+.plexd-stream-visibility {
+    font-size: 14px;
+    cursor: pointer;
+    margin-right: 6px;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+    flex-shrink: 0;
+}
+
+.plexd-stream-visibility:hover {
+    opacity: 1;
+}
+
+.plexd-stream-visibility.visible {
+    opacity: 1;
+}
+
+.plexd-stream-visibility.hidden {
+    opacity: 0.4;
+}
+
+/* Hidden stream item styling */
+.plexd-stream-item.hidden-stream {
+    opacity: 0.5;
+    background: #1a1a1a;
+}
+
+.plexd-stream-item.hidden-stream:hover {
+    opacity: 0.7;
+    background: #222;
+}
+
+.plexd-stream-item.hidden-stream .plexd-stream-name {
+    color: #888;
 }
 
 /* ========================================

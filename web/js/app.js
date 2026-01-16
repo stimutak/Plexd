@@ -2537,6 +2537,11 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 togglePanel('saved-panel');
                 break;
+            case '=':
+                // = removes duplicate streams (make them equal/unique)
+                e.preventDefault();
+                removeDuplicateStreams();
+                break;
             case 'Escape':
                 // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
@@ -4668,6 +4673,40 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Remove duplicate streams, keeping only the first instance of each URL
+     */
+    function removeDuplicateStreams() {
+        const allStreams = PlexdStream.getAllStreams();
+        const seen = new Set();
+        const duplicates = [];
+
+        allStreams.forEach(stream => {
+            // Normalize URL for comparison (handle minor variations)
+            const key = urlEqualityKey(stream.url);
+            if (seen.has(key)) {
+                duplicates.push(stream.id);
+            } else {
+                seen.add(key);
+            }
+        });
+
+        if (duplicates.length === 0) {
+            showMessage('No duplicates found', 'info');
+            return;
+        }
+
+        // Remove duplicates
+        duplicates.forEach(id => {
+            PlexdStream.removeStream(id);
+        });
+
+        updateStreamCount();
+        updateStreamsPanelUI();
+        saveCurrentStreams();
+        showMessage(`Removed ${duplicates.length} duplicate stream${duplicates.length !== 1 ? 's' : ''}`, 'success');
+    }
+
+    /**
      * Seek all streams to random positions with retry logic
      * Updates the button with feedback
      */
@@ -4756,6 +4795,7 @@ const PlexdApp = (function() {
         reloadStreamFromPanel,
         reloadAllStreams,
         closeAllStreams,
+        removeDuplicateStreams,
         // Visibility control
         toggleStreamVisibility,
         showAllStreams,

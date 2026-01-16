@@ -2531,6 +2531,12 @@ const PlexdApp = (function() {
                     togglePanel('streams-panel');
                 }
                 break;
+            case 'd':
+            case 'D':
+                // D toggles saved sets panel
+                e.preventDefault();
+                togglePanel('saved-panel');
+                break;
             case 'Escape':
                 // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)

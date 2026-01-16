@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=20">
+    <link rel="stylesheet" href="css/plexd.css?v=21">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -85,7 +85,7 @@
             <div class="plexd-panel-header">
                 <h3>Queue</h3>
                 <div class="plexd-panel-actions">
-                    <button onclick="PlexdApp.playAllFromQueue()" class="plexd-button-small" title="Play all">Play All</button>
+                    <button onclick="PlexdApp.playAllFromQueue()" class="plexd-button-small" title="Play all">Play</button>
                     <button onclick="PlexdApp.togglePanel('queue-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
@@ -111,12 +111,12 @@
         <!-- Saved Combinations Panel -->
         <aside id="saved-panel" class="plexd-panel">
             <div class="plexd-panel-header">
-                <h3>Saved Sets</h3>
+                <h3>Sets</h3>
                 <div class="plexd-panel-actions">
-                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams to browser (persists across sessions)">+ Save</button>
-                    <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★ Save</button>
-                    <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file (for AirDrop or backup)">Export</button>
-                    <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Import</button>
+                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams to browser">Save</button>
+                    <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★Fav</button>
+                    <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file">Exp</button>
+                    <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Imp</button>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
@@ -131,10 +131,10 @@
             <div class="plexd-panel-header">
                 <h3>Streams</h3>
                 <div class="plexd-panel-actions">
-                    <button onclick="PlexdApp.showAllStreams()" class="plexd-button-small" title="Show all hidden streams">👁 All</button>
-                    <button onclick="PlexdApp.removeDuplicateStreams()" class="plexd-button-small" title="Remove duplicate streams (=)">Dedup</button>
-                    <button onclick="PlexdApp.reloadAllStreams()" class="plexd-button-small" title="Reload all streams">↻ All</button>
-                    <button onclick="PlexdApp.closeAllStreams()" class="plexd-button-small plexd-btn-danger" title="Close all streams">✕ All</button>
+                    <button onclick="PlexdApp.showAllStreams()" class="plexd-button-small" title="Show all hidden streams">👁All</button>
+                    <button onclick="PlexdApp.removeDuplicateStreams()" class="plexd-button-small" title="Remove duplicate streams (=)">Dup</button>
+                    <button onclick="PlexdApp.reloadAllStreams()" class="plexd-button-small" title="Reload all streams">↻All</button>
+                    <button onclick="PlexdApp.closeAllStreams()" class="plexd-button-small plexd-btn-danger" title="Close all streams">✕All</button>
                     <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>

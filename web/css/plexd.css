@@ -882,9 +882,11 @@ body {
 
 .plexd-panel-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    gap: 6px;
+    padding: 8px 10px;
     background: #1a1a1a;
     border-bottom: 1px solid #2a2a2a;
 }
@@ -894,11 +896,13 @@ body {
     font-size: 12px;
     font-weight: 600;
     color: #ccc;
+    flex-shrink: 0;
 }
 
 .plexd-panel-actions {
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 4px;
     align-items: center;
 }
 
@@ -906,9 +910,11 @@ body {
     background: none;
     border: none;
     color: #888;
-    font-size: 20px;
+    font-size: 16px;
     cursor: pointer;
-    padding: 0 4px;
+    padding: 0 1px;
+    flex-shrink: 0;
+    line-height: 1;
 }
 
 .plexd-panel-close:hover {
@@ -916,13 +922,14 @@ body {
 }
 
 .plexd-button-small {
-    padding: 4px 10px;
-    font-size: 11px;
+    padding: 3px 6px;
+    font-size: 10px;
     background: #555;
     color: #fff;
     border: none;
-    border-radius: 4px;
+    border-radius: 3px;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .plexd-button-small:hover {

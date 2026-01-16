@@ -3190,14 +3190,6 @@ const PlexdApp = (function() {
             }
         });
 
-        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
-
-        // Check if updating existing set (when not using existingName parameter)
-        let isUpdate = !!existingName;
-        if (!existingName && combinations[name]) {
-            isUpdate = true;
-        }
-
         combinations[name] = {
             urls: urls,
             localFiles: localFiles,

@@ -2531,6 +2531,12 @@ const PlexdApp = (function() {
                     togglePanel('streams-panel');
                 }
                 break;
+            case 'd':
+            case 'D':
+                // D toggles saved sets panel
+                e.preventDefault();
+                togglePanel('saved-panel');
+                break;
             case 'Escape':
                 // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
@@ -4197,10 +4203,12 @@ const PlexdApp = (function() {
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
                     <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
-                    <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Replace with current streams">Update</button>
-                    <button class="plexd-combo-add" onclick="PlexdApp.addCombination('${escapeAttr(name)}')" title="Add to current streams">+ Add</button>
-                    <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')" title="Replace current streams">Load</button>
-                    <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')">×</button>
+                    <div class="plexd-combo-buttons">
+                        <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')" title="Load (replace current)">Load</button>
+                        <button class="plexd-combo-add" onclick="PlexdApp.addCombination('${escapeAttr(name)}')" title="Add to current streams">+Add</button>
+                        <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Update with current streams">Upd</button>
+                        <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')" title="Delete this set">×</button>
+                    </div>
                 </div>
             `;
         }).join('');

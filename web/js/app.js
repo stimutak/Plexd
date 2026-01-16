@@ -4673,7 +4673,7 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Remove duplicate streams, keeping only the first instance of each URL
+     * Remove duplicate streams, keeping only the first instance of each URL/file
      */
     function removeDuplicateStreams() {
         const allStreams = PlexdStream.getAllStreams();
@@ -4681,8 +4681,15 @@ const PlexdApp = (function() {
         const duplicates = [];
 
         allStreams.forEach(stream => {
-            // Normalize URL for comparison (handle minor variations)
-            const key = urlEqualityKey(stream.url);
+            let key;
+            // For local files (blob URLs), use filename as the key since blob URLs are always unique
+            if (isBlobUrl(stream.url) && stream.fileName) {
+                key = 'file:' + stream.fileName.toLowerCase();
+            } else {
+                // For regular URLs, normalize for comparison
+                key = urlEqualityKey(stream.url);
+            }
+
             if (seen.has(key)) {
                 duplicates.push(stream.id);
             } else {

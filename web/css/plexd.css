@@ -1126,6 +1126,10 @@ body {
     outline-offset: 1px;
 }
 
+.plexd-stream-btn.download:hover {
+    color: #10b981;
+}
+
 .plexd-stream-btn.reload:hover {
     color: #3b82f6;
 }

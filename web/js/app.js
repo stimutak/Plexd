@@ -4531,6 +4531,9 @@ const PlexdApp = (function() {
                         <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}${stream.hidden ? ' (hidden)' : ''}</div>
                     </div>
                     <div class="plexd-stream-actions">
+                        <button class="plexd-stream-btn download"
+                                onclick="event.stopPropagation(); PlexdApp.downloadStream('${stream.id}')"
+                                title="Download stream">⬇</button>
                         <button class="plexd-stream-btn reload"
                                 onclick="event.stopPropagation(); PlexdApp.reloadStreamFromPanel('${stream.id}')"
                                 title="Reload stream">↻</button>
@@ -4643,6 +4646,77 @@ const PlexdApp = (function() {
         PlexdStream.showAllStreams();
         showMessage('All streams visible', 'info');
         updateStreamsPanelUI();
+    }
+
+    /**
+     * Download a stream to disc
+     */
+    async function downloadStream(streamId) {
+        const stream = PlexdStream.getStream(streamId);
+        if (!stream) {
+            showMessage('Stream not found', 'error');
+            return;
+        }
+
+        const url = stream.url;
+        const fileName = stream.fileName || getStreamDisplayName(url);
+
+        // Check if it's an HLS stream
+        if (url.toLowerCase().includes('.m3u8')) {
+            showMessage('HLS streams cannot be downloaded directly', 'error');
+            return;
+        }
+
+        try {
+            showMessage(`Downloading: ${fileName}...`, 'info');
+
+            // For blob URLs (dropped files), we can download directly
+            if (isBlobUrl(url)) {
+                const response = await fetch(url);
+                const blob = await response.blob();
+                triggerDownload(blob, fileName);
+                showMessage(`Downloaded: ${fileName}`, 'success');
+                return;
+            }
+
+            // For regular URLs, try to fetch (may fail due to CORS)
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('Fetch failed');
+                const blob = await response.blob();
+                triggerDownload(blob, fileName);
+                showMessage(`Downloaded: ${fileName}`, 'success');
+            } catch (fetchError) {
+                // CORS blocked - try opening in new tab as fallback
+                console.log('[Plexd] Direct download blocked, opening in new tab:', fetchError);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                showMessage(`Opening download in new tab: ${fileName}`, 'info');
+            }
+        } catch (err) {
+            console.error('[Plexd] Download failed:', err);
+            showMessage(`Download failed: ${err.message}`, 'error');
+        }
+    }
+
+    /**
+     * Trigger browser download of a blob
+     */
+    function triggerDownload(blob, fileName) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     /**
@@ -4800,6 +4874,7 @@ const PlexdApp = (function() {
         selectAndFocusStream,
         closeStreamFromPanel,
         reloadStreamFromPanel,
+        downloadStream,
         reloadAllStreams,
         closeAllStreams,
         removeDuplicateStreams,

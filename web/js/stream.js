@@ -2146,6 +2146,24 @@ const PlexdStream = (function() {
         const stream = streams.get(streamId);
         if (!stream) return false;
 
+        // If this stream is currently in fullscreen, switch to next stream before removing
+        const wasFullscreen = fullscreenStreamId === streamId;
+        const prevFullscreenMode = fullscreenMode;
+        let nextStreamForFullscreen = null;
+
+        if (wasFullscreen && streams.size > 1) {
+            // Find next stream to show in fullscreen
+            const streamList = Array.from(streams.values()).filter(s => !s.hidden);
+            const currentIndex = streamList.findIndex(s => s.id === streamId);
+
+            // Try next stream, or previous if at end
+            if (currentIndex < streamList.length - 1) {
+                nextStreamForFullscreen = streamList[currentIndex + 1];
+            } else if (currentIndex > 0) {
+                nextStreamForFullscreen = streamList[currentIndex - 1];
+            }
+        }
+
         // Clean up recovery timer if pending
         if (stream.recovery.retryTimer) {
             clearTimeout(stream.recovery.retryTimer);
@@ -2156,6 +2174,16 @@ const PlexdStream = (function() {
         if (stream.hls) {
             stream.hls.destroy();
             stream.hls = null;
+        }
+
+        // Clean up fullscreen state for this stream
+        if (wasFullscreen) {
+            stream.wrapper.classList.remove('plexd-fullscreen');
+            fullscreenStreamId = null;
+            // Don't reset fullscreenMode yet if we're switching to another stream
+            if (!nextStreamForFullscreen) {
+                fullscreenMode = 'none';
+            }
         }
 
         // Clean up video
@@ -2170,6 +2198,16 @@ const PlexdStream = (function() {
 
         // Unregister
         streams.delete(streamId);
+
+        // If we were in fullscreen and have another stream, enter fullscreen on it
+        if (wasFullscreen && nextStreamForFullscreen) {
+            // Use the same fullscreen mode we had before
+            if (prevFullscreenMode === 'true-focused' || prevFullscreenMode === 'true-grid') {
+                enterFocusedMode(nextStreamForFullscreen.id);
+            } else if (prevFullscreenMode === 'browser-fill') {
+                toggleFullscreen(nextStreamForFullscreen.id);
+            }
+        }
 
         triggerLayoutUpdate();
         return true;

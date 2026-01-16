@@ -1141,6 +1141,43 @@ body {
     color: #60a5fa;
 }
 
+/* Stream visibility toggle */
+.plexd-stream-visibility {
+    font-size: 14px;
+    cursor: pointer;
+    margin-right: 6px;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+    flex-shrink: 0;
+}
+
+.plexd-stream-visibility:hover {
+    opacity: 1;
+}
+
+.plexd-stream-visibility.visible {
+    opacity: 1;
+}
+
+.plexd-stream-visibility.hidden {
+    opacity: 0.4;
+}
+
+/* Hidden stream item styling */
+.plexd-stream-item.hidden-stream {
+    opacity: 0.5;
+    background: #1a1a1a;
+}
+
+.plexd-stream-item.hidden-stream:hover {
+    opacity: 0.7;
+    background: #222;
+}
+
+.plexd-stream-item.hidden-stream .plexd-stream-name {
+    color: #888;
+}
+
 /* ========================================
    Modal for Login Domains
    ======================================== */

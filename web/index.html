@@ -131,11 +131,13 @@
             <div class="plexd-panel-header">
                 <h3>Streams</h3>
                 <div class="plexd-panel-actions">
+                    <button onclick="PlexdApp.showAllStreams()" class="plexd-button-small" title="Show all hidden streams">👁 All</button>
                     <button onclick="PlexdApp.reloadAllStreams()" class="plexd-button-small" title="Reload all streams">↻ All</button>
                     <button onclick="PlexdApp.closeAllStreams()" class="plexd-button-small plexd-btn-danger" title="Close all streams">✕ All</button>
                     <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
+            <div class="plexd-panel-hint">Click 👁 to show/hide streams in the grid</div>
             <div id="streams-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No active streams</div>
             </div>

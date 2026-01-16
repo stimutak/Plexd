@@ -884,18 +884,26 @@ const PlexdApp = (function() {
         const allStreams = PlexdStream.getAllStreams();
 
         // Filter based on view mode (all, favorites, or specific star rating)
-        let streamsToShow = allStreams;
+        // Also exclude individually hidden streams
+        let streamsToShow = allStreams.filter(s => !s.hidden);
         if (viewMode === 'favorites') {
-            streamsToShow = PlexdStream.getFavoriteStreams();
+            streamsToShow = streamsToShow.filter(s => PlexdStream.getFavorite(s.url, s.fileName));
         } else if (viewMode !== 'all') {
-            streamsToShow = PlexdStream.getStreamsByRating(viewMode);
+            streamsToShow = streamsToShow.filter(s => PlexdStream.getRating(s.url) === viewMode);
         }
 
-        // Handle visibility and playback of streams based on view mode
+        // Handle visibility and playback of streams based on view mode AND individual hidden state
         // When filtering by rating/favorites, pause hidden streams to save bandwidth
         // Use position-preserving pause/resume to avoid streams restarting
         const isGloballyPaused = PlexdStream.isGloballyPaused();
         allStreams.forEach(stream => {
+            // Individually hidden streams are always hidden regardless of view mode
+            if (stream.hidden) {
+                stream.wrapper.style.display = 'none';
+                stream.video.pause();
+                return;
+            }
+
             if (viewMode === 'all') {
                 stream.wrapper.style.display = '';
                 // Resume playback for all streams when viewing all (if not globally paused)
@@ -4461,6 +4469,7 @@ const PlexdApp = (function() {
         streamsList.innerHTML = allStreams.map((stream, index) => {
             const isLocal = stream.url.startsWith('blob:');
             const isSelected = selectedStream && selectedStream.id === stream.id;
+            const isVisible = !stream.hidden;
             const rating = PlexdStream.getRating(stream.url);
             const displayName = stream.fileName || getStreamDisplayName(stream.url);
             const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
@@ -4472,16 +4481,22 @@ const PlexdApp = (function() {
                              stream.state === 'error' ? '⚠' :
                              stream.state === 'buffering' || stream.state === 'loading' ? '⏳' : '●';
             const ratingDisplay = rating > 0 ? `<span class="plexd-stream-rating rated-${rating}">★${rating}</span>` : '';
+            const visibilityIcon = isVisible ? '👁' : '👁‍🗨';
+            const visibilityTitle = isVisible ? 'Hide from grid' : 'Show in grid';
+            const hiddenClass = stream.hidden ? 'hidden-stream' : '';
 
             return `
-                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''}"
+                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''} ${hiddenClass}"
                      data-stream-id="${stream.id}"
                      onclick="PlexdApp.selectAndFocusStream('${stream.id}')">
+                    <span class="plexd-stream-visibility ${isVisible ? 'visible' : 'hidden'}"
+                          onclick="event.stopPropagation(); PlexdApp.toggleStreamVisibility('${stream.id}')"
+                          title="${visibilityTitle}">${visibilityIcon}</span>
                     <span class="plexd-stream-type ${isLocal ? 'local' : 'stream'}">${isLocal ? 'FILE' : 'URL'}</span>
                     <div class="plexd-stream-info">
                         <div class="plexd-stream-name">${escapeHtml(displayName)}${ratingDisplay}</div>
                         <div class="plexd-stream-url">${escapeHtml(displayUrl)}</div>
-                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}</div>
+                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}${stream.hidden ? ' (hidden)' : ''}</div>
                     </div>
                     <div class="plexd-stream-actions">
                         <button class="plexd-stream-btn reload"
@@ -4576,6 +4591,26 @@ const PlexdApp = (function() {
         showMessage('Reloading stream...', 'info');
         // Update UI after a short delay to show new state
         setTimeout(updateStreamsPanelUI, 500);
+    }
+
+    /**
+     * Toggle stream visibility in grid from the streams panel
+     */
+    function toggleStreamVisibility(streamId) {
+        const isNowHidden = PlexdStream.toggleStreamVisibility(streamId);
+        const stream = PlexdStream.getStream(streamId);
+        const name = stream ? (stream.fileName || getStreamDisplayName(stream.url)) : 'Stream';
+        showMessage(isNowHidden ? `Hidden: ${name}` : `Showing: ${name}`, 'info');
+        updateStreamsPanelUI();
+    }
+
+    /**
+     * Show all hidden streams
+     */
+    function showAllStreams() {
+        PlexdStream.showAllStreams();
+        showMessage('All streams visible', 'info');
+        updateStreamsPanelUI();
     }
 
     /**
@@ -4693,6 +4728,9 @@ const PlexdApp = (function() {
         reloadStreamFromPanel,
         reloadAllStreams,
         closeAllStreams,
+        // Visibility control
+        toggleStreamVisibility,
+        showAllStreams,
         // View modes
         setViewMode,
         cycleViewMode,

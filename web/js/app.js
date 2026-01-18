@@ -2330,66 +2330,22 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    switchFullscreenStream('right');
-                } else if (coverflowMode) {
-                    const streams = getFilteredStreams();
-                    if (streams.length > 0) {
-                        PlexdGrid.coverflowNavigate('next', streams.length);
-                        updateLayout();
-                        showCoverflowPosition();
-                    }
-                } else {
-                    PlexdStream.selectNextStream('right');
-                }
+                handleArrowNav('right', fullscreenStream, selected);
                 updateBugEyeIfNeeded();
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    switchFullscreenStream('left');
-                } else if (coverflowMode) {
-                    const streams = getFilteredStreams();
-                    if (streams.length > 0) {
-                        PlexdGrid.coverflowNavigate('prev', streams.length);
-                        updateLayout();
-                        showCoverflowPosition();
-                    }
-                } else {
-                    PlexdStream.selectNextStream('left');
-                }
+                handleArrowNav('left', fullscreenStream, selected);
                 updateBugEyeIfNeeded();
                 break;
             case 'ArrowUp':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    switchFullscreenStream('up');
-                } else if (coverflowMode) {
-                    const streams = getFilteredStreams();
-                    if (streams.length > 0) {
-                        PlexdGrid.coverflowNavigate('prev', streams.length);
-                        updateLayout();
-                        showCoverflowPosition();
-                    }
-                } else {
-                    PlexdStream.selectNextStream('up');
-                }
+                handleArrowNav('up', fullscreenStream, selected);
                 updateBugEyeIfNeeded();
                 break;
             case 'ArrowDown':
                 e.preventDefault();
-                if (fullscreenStream) {
-                    switchFullscreenStream('down');
-                } else if (coverflowMode) {
-                    const streams = getFilteredStreams();
-                    if (streams.length > 0) {
-                        PlexdGrid.coverflowNavigate('next', streams.length);
-                        updateLayout();
-                        showCoverflowPosition();
-                    }
-                } else {
-                    PlexdStream.selectNextStream('down');
-                }
+                handleArrowNav('down', fullscreenStream, selected);
                 updateBugEyeIfNeeded();
                 break;
             // Seeking controls - grouped near arrow keys for easy access
@@ -2755,6 +2711,55 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 toggleShortcutsOverlay();
                 break;
+        }
+    }
+
+    /**
+     * Handle arrow key navigation for all modes
+     * In true-grid mode, select AND focus the next stream
+     * In focused mode, switch to next focused stream
+     * In coverflow mode, navigate carousel
+     * In normal mode, just select next stream
+     */
+    function handleArrowNav(direction, fullscreenStream, selected) {
+        const mode = PlexdStream.getFullscreenMode();
+
+        if (fullscreenStream) {
+            // In focused mode - switch to next focused stream
+            switchFullscreenStream(direction);
+        } else if (mode === 'true-grid') {
+            // In true-grid mode - select and immediately focus the next stream
+            const nextDir = (direction === 'up' || direction === 'left') ? 'prev' : 'next';
+            const filteredStreams = getFilteredStreams();
+            if (filteredStreams.length === 0) return;
+
+            // Find current index and next stream
+            const currentId = selected ? selected.id : filteredStreams[0].id;
+            const currentIdx = filteredStreams.findIndex(s => s.id === currentId);
+            let nextIdx;
+
+            if (direction === 'left' || direction === 'up') {
+                nextIdx = currentIdx > 0 ? currentIdx - 1 : filteredStreams.length - 1;
+            } else {
+                nextIdx = currentIdx < filteredStreams.length - 1 ? currentIdx + 1 : 0;
+            }
+
+            const nextStream = filteredStreams[nextIdx];
+            if (nextStream) {
+                PlexdStream.enterFocusedMode(nextStream.id);
+            }
+        } else if (coverflowMode) {
+            // In coverflow mode - navigate carousel
+            const streams = getFilteredStreams();
+            if (streams.length > 0) {
+                const navDir = (direction === 'up' || direction === 'left') ? 'prev' : 'next';
+                PlexdGrid.coverflowNavigate(navDir, streams.length);
+                updateLayout();
+                showCoverflowPosition();
+            }
+        } else {
+            // Normal grid mode - just select next stream
+            PlexdStream.selectNextStream(direction);
         }
     }
 

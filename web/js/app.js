@@ -812,6 +812,14 @@ const PlexdApp = (function() {
                 if (mode === 'true-grid' || mode === 'true-focused') {
                     // Exit true fullscreen completely
                     PlexdStream.exitTrueFullscreen();
+                } else if (mode === 'browser-fill') {
+                    // Already focused on a stream - upgrade to true fullscreen while keeping focus
+                    const focusedStream = PlexdStream.getFullscreenStream();
+                    if (focusedStream) {
+                        PlexdStream.enterTrueFocusedFullscreen(focusedStream.id);
+                    } else {
+                        PlexdStream.enterGridFullscreen();
+                    }
                 } else {
                     // Enter true fullscreen (grid mode)
                     PlexdStream.enterGridFullscreen();

@@ -1642,6 +1642,31 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Enter true fullscreen while staying focused on a specific stream
+     * Used when upgrading from browser-fill to true-focused
+     */
+    function enterTrueFocusedFullscreen(streamId) {
+        const container = document.querySelector('.plexd-app');
+        const stream = streams.get(streamId);
+        if (!container || !stream) return;
+
+        // Keep the focused stream state
+        stream.wrapper.classList.add('plexd-fullscreen');
+        fullscreenStreamId = streamId;
+        setAppFocusedMode(true);
+
+        container.tabIndex = 0;
+
+        container.requestFullscreen().then(() => {
+            fullscreenMode = 'true-focused';
+            stream.wrapper.focus();
+            triggerLayoutUpdate();
+        }).catch(err => {
+            console.log('True focused fullscreen request failed:', err);
+        });
+    }
+
+    /**
      * Exit true fullscreen completely
      */
     function exitTrueFullscreen() {
@@ -3854,6 +3879,7 @@ const PlexdStream = (function() {
         enterFocusedMode,
         exitFocusedMode,
         enterGridFullscreen,
+        enterTrueFocusedFullscreen,
         exitTrueFullscreen,
         resetFullscreenState,
         pauseAll,

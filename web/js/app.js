@@ -3588,30 +3588,56 @@ const PlexdApp = (function() {
                     const dirHandle = await window.showDirectoryPicker();
                     folderBtn.textContent = 'Searching...';
 
-                    // Recursively search for video files
+                    // Recursively search for video files, skipping inaccessible files
                     const foundFiles = [];
+                    let scannedCount = 0;
+                    let errorCount = 0;
+
                     async function searchDir(handle, depth = 0) {
                         if (depth > 5) return; // Limit recursion depth
-                        for await (const entry of handle.values()) {
-                            if (entry.kind === 'file') {
-                                const file = await entry.getFile();
-                                if (isVideoFile(file)) {
-                                    foundFiles.push(file);
+                        try {
+                            for await (const entry of handle.values()) {
+                                try {
+                                    if (entry.kind === 'file') {
+                                        scannedCount++;
+                                        // Update UI periodically
+                                        if (scannedCount % 50 === 0) {
+                                            folderBtn.textContent = `Scanning... (${scannedCount} files)`;
+                                        }
+                                        const file = await entry.getFile();
+                                        if (isVideoFile(file)) {
+                                            foundFiles.push(file);
+                                            console.log(`[Plexd] Found video: ${file.name}`);
+                                        }
+                                    } else if (entry.kind === 'directory') {
+                                        // Skip hidden directories (start with .)
+                                        if (!entry.name.startsWith('.')) {
+                                            await searchDir(entry, depth + 1);
+                                        }
+                                    }
+                                } catch (fileErr) {
+                                    // Skip files we can't access (permissions, system files, etc.)
+                                    errorCount++;
+                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name}`);
                                 }
-                            } else if (entry.kind === 'directory') {
-                                await searchDir(entry, depth + 1);
                             }
+                        } catch (dirErr) {
+                            // Skip directories we can't access
+                            errorCount++;
+                            console.log(`[Plexd] Skipping inaccessible directory`);
                         }
                     }
 
                     await searchDir(dirHandle);
+
+                    console.log(`[Plexd] Folder scan complete: ${scannedCount} files scanned, ${foundFiles.length} videos found, ${errorCount} skipped`);
 
                     if (foundFiles.length > 0) {
                         handleFiles(foundFiles);
                         const matchedCount = providedFiles.filter(Boolean).length;
                         folderBtn.textContent = `Found ${foundFiles.length} videos, matched ${matchedCount}`;
                     } else {
-                        folderBtn.textContent = 'No videos found in folder';
+                        folderBtn.textContent = `No videos found (scanned ${scannedCount} files)`;
                     }
 
                     setTimeout(() => {
@@ -3620,10 +3646,10 @@ const PlexdApp = (function() {
                 } catch (err) {
                     if (err.name !== 'AbortError') {
                         console.error('[Plexd] Folder selection error:', err);
-                        folderBtn.textContent = 'Folder access failed';
+                        folderBtn.textContent = `Error: ${err.message || 'Folder access failed'}`;
                         setTimeout(() => {
                             folderBtn.textContent = 'Select Folder to Search...';
-                        }, 2000);
+                        }, 3000);
                     } else {
                         folderBtn.textContent = 'Select Folder to Search...';
                     }

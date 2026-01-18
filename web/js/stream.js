@@ -1460,8 +1460,12 @@ const PlexdStream = (function() {
      * Enter focused mode on a stream (used from grid mode in true fullscreen)
      */
     function enterFocusedMode(streamId) {
+        console.log(`[Plexd] enterFocusedMode: entering with streamId=${streamId}, current fullscreenStreamId=${fullscreenStreamId}`);
         const stream = streams.get(streamId);
-        if (!stream) return;
+        if (!stream) {
+            console.log('[Plexd] enterFocusedMode: stream not found, aborting');
+            return;
+        }
 
         // Blur any focused input to enable keyboard shortcuts
         if (document.activeElement && document.activeElement.tagName === 'INPUT') {
@@ -1471,13 +1475,17 @@ const PlexdStream = (function() {
         // Exit any existing browser-fill fullscreen
         if (fullscreenStreamId && fullscreenStreamId !== streamId) {
             const prevStream = streams.get(fullscreenStreamId);
+            console.log(`[Plexd] enterFocusedMode: removing plexd-fullscreen from ${fullscreenStreamId}, prevStream exists: ${!!prevStream}`);
             if (prevStream) {
                 prevStream.wrapper.classList.remove('plexd-fullscreen');
+                console.log(`[Plexd] enterFocusedMode: ${fullscreenStreamId} now has plexd-fullscreen: ${prevStream.wrapper.classList.contains('plexd-fullscreen')}`);
             }
         }
 
         // Apply CSS fullscreen to this stream
+        console.log(`[Plexd] enterFocusedMode: adding plexd-fullscreen to ${streamId}`);
         stream.wrapper.classList.add('plexd-fullscreen');
+        console.log(`[Plexd] enterFocusedMode: ${streamId} now has plexd-fullscreen: ${stream.wrapper.classList.contains('plexd-fullscreen')}`);
         fullscreenStreamId = streamId;
         setAppFocusedMode(true);
 

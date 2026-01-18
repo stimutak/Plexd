@@ -596,6 +596,13 @@ body {
     opacity: 1 !important;
 }
 
+/* In true fullscreen, position:fixed doesn't work correctly - use absolute positioning */
+.plexd-app:fullscreen .plexd-stream.plexd-fullscreen {
+    position: absolute !important;
+    width: 100% !important;
+    height: 100% !important;
+}
+
 .plexd-stream.plexd-fullscreen .plexd-controls {
     opacity: 1;
     padding: 16px;

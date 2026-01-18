@@ -205,6 +205,13 @@ const PlexdApp = (function() {
     // View mode cycle order: favorites -> all -> 1 -> 2 -> ... -> 9 -> favorites
     const viewModes = ['favorites', 'all', 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
+    // Double-tap detection for slot keys (1-9)
+    // Single tap = assign to slot, double tap = view slot
+    let lastSlotKey = null;
+    let lastSlotKeyTime = 0;
+    let slotAssignTimeout = null;
+    const DOUBLE_TAP_THRESHOLD = 300; // ms
+
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
     // 0 = off, 1 = row-pack (rows with varying heights), 2 = column-pack (columns with varying widths),
@@ -553,17 +560,26 @@ const PlexdApp = (function() {
 
     /**
      * Update ratings UI elements
+     * Hides slot buttons that have no streams assigned
      */
     function updateRatingsUI() {
         const counts = PlexdStream.getAllRatingCounts();
 
-        // Update view button badges
+        // Update view button badges and visibility
         for (let i = 1; i <= 9; i++) {
+            const btn = document.getElementById(`view-${i}-btn`);
             const badge = document.getElementById(`rating-${i}-count`);
+            const count = counts[i] || 0;
+
             if (badge) {
-                const count = counts[i] || 0;
                 badge.textContent = count ? count : '';
                 badge.dataset.count = String(count);
+            }
+
+            // Hide button if empty and not currently active view
+            if (btn) {
+                const isActive = viewMode === i;
+                btn.style.display = (count > 0 || isActive) ? '' : 'none';
             }
         }
 
@@ -576,15 +592,24 @@ const PlexdApp = (function() {
 
     /**
      * Update favorites UI elements
+     * Hides favorites button when no favorites exist
      */
     function updateFavoritesUI() {
         const count = PlexdStream.getFavoriteCount();
 
-        // Update favorites button badge
+        // Update favorites button badge and visibility
+        const btn = document.getElementById('view-favorites-btn');
         const badge = document.getElementById('favorites-count');
+
         if (badge) {
             badge.textContent = count ? count : '';
             badge.dataset.count = String(count);
+        }
+
+        // Hide button if empty and not currently active view
+        if (btn) {
+            const isActive = viewMode === 'favorites';
+            btn.style.display = (count > 0 || isActive) ? '' : 'none';
         }
 
         // Update current view button active state
@@ -955,7 +980,7 @@ const PlexdApp = (function() {
 
         if (streamsToShow.length === 0) {
             if (viewMode === 'favorites' && allStreams.length > 0) {
-                showEmptyState('No Favorites', 'Press * on a selected stream to add it to favorites');
+                showEmptyState('No Likes', 'Press L on a selected stream to like it');
             } else if (viewMode !== 'all' && allStreams.length > 0) {
                 showEmptyState(`No ★${viewMode} Streams`, `Assign streams to slot ${viewMode} to see them here`);
             } else {
@@ -1183,12 +1208,19 @@ const PlexdApp = (function() {
     let bugEyeMode = false;
     let bugEyeOverlay = null;
     let bugEyeAnimationFrame = null;
+    let bugEyeStreamId = null; // Track which stream we're showing
 
     /**
-     * Toggle Bug Eye mode - creates a compound eye / kaleidoscope effect
-     * with the focused stream replicated at different sizes around the edges
+     * Toggle Bug Eye mode - creates a compound eye effect
+     * B key behavior: first press enables, second press exits (true toggle)
      */
-    function toggleBugEyeMode() {
+    function toggleBugEyeMode(forceOff = false) {
+        if (forceOff || bugEyeMode) {
+            destroyBugEyeOverlay();
+            showMessage('Bug Eye: OFF', 'info');
+            return;
+        }
+
         const fullscreenStream = PlexdStream.getFullscreenStream();
         const selected = PlexdStream.getSelectedStream();
         const targetStream = fullscreenStream || selected;
@@ -1198,31 +1230,36 @@ const PlexdApp = (function() {
             return;
         }
 
-        // If Mosaic mode is on, turn it off first (they share visual space)
+        // If Mosaic mode is on, turn it off first
         if (mosaicMode) {
             destroyMosaicOverlay();
         }
 
-        bugEyeMode = !bugEyeMode;
+        bugEyeMode = true;
         const app = document.querySelector('.plexd-app');
-
-        if (bugEyeMode) {
-            if (app) app.classList.add('bugeye-mode');
-            createBugEyeOverlay(targetStream);
-            showMessage('Bug Eye: ON (B to exit)', 'info');
-        } else {
-            if (app) app.classList.remove('bugeye-mode');
-            destroyBugEyeOverlay();
-            showMessage('Bug Eye: OFF', 'info');
-        }
+        if (app) app.classList.add('bugeye-mode');
+        createBugEyeOverlay(targetStream);
+        showMessage('Bug Eye: ON (B=off)', 'info');
     }
 
     /**
-     * Create the bug eye overlay with multiple video copies
+     * Create the bug eye overlay - efficient version with 8 random cells
      */
     function createBugEyeOverlay(stream) {
-        destroyBugEyeOverlay(); // Clean up any existing bug eye
-        // Ensure mosaic is also destroyed (mutual exclusivity)
+        // Clean up existing without resetting mode
+        if (bugEyeAnimationFrame) {
+            cancelAnimationFrame(bugEyeAnimationFrame);
+            bugEyeAnimationFrame = null;
+        }
+        if (bugEyeOverlay) {
+            bugEyeOverlay.querySelectorAll('video').forEach(v => {
+                v.pause();
+                v.src = '';
+            });
+            bugEyeOverlay.remove();
+        }
+
+        // Ensure mosaic is destroyed
         if (mosaicOverlay) {
             destroyMosaicOverlay();
         }
@@ -1230,186 +1267,100 @@ const PlexdApp = (function() {
         const container = document.getElementById('plexd-container');
         if (!container) return;
 
-        // Create overlay container
+        bugEyeStreamId = stream.id;
+        const videoSource = stream.video;
+
+        // Create overlay
         bugEyeOverlay = document.createElement('div');
-        bugEyeOverlay.className = 'plexd-bugeye-overlay';
+        bugEyeOverlay.className = 'plexd-bugeye-overlay active';
         bugEyeOverlay.id = 'plexd-bugeye-overlay';
 
-        // Add close button
+        // Close button
         const closeBtn = document.createElement('button');
-        closeBtn.className = 'plexd-bugeye-close-btn';
+        closeBtn.className = 'plexd-bugeye-close';
         closeBtn.innerHTML = '&times;';
-        closeBtn.title = 'Close Bug Eye (B)';
-        closeBtn.style.cssText = `
-            position: absolute;
-            top: 12px;
-            right: 12px;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: rgba(0, 0, 0, 0.8);
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            color: #fff;
-            font-size: 24px;
-            font-weight: bold;
-            cursor: pointer;
-            z-index: 100;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.2s ease;
-            pointer-events: auto;
-        `;
-        closeBtn.addEventListener('mouseenter', () => {
-            closeBtn.style.background = 'rgba(245, 158, 11, 0.9)';
-            closeBtn.style.borderColor = 'rgba(245, 158, 11, 1)';
-            closeBtn.style.transform = 'scale(1.1)';
-        });
-        closeBtn.addEventListener('mouseleave', () => {
-            closeBtn.style.background = 'rgba(0, 0, 0, 0.8)';
-            closeBtn.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-            closeBtn.style.transform = 'scale(1)';
-        });
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            toggleBugEyeMode();
-        });
+        closeBtn.title = 'Close (Esc)';
+        closeBtn.onclick = (e) => { e.stopPropagation(); toggleBugEyeMode(true); };
         bugEyeOverlay.appendChild(closeBtn);
 
-        const videoSource = stream.video;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
+        // Generate 8 random cells - efficient, visually interesting
+        const cells = generateRandomCells(8);
 
-        // Define cells - arranged in rings around center
-        // Each cell: { x%, y%, size%, zIndex, opacity }
-        // Center is left clear for the main video
-        const cells = [];
-
-        // Ring 1 - Medium cells close to center (but not blocking it)
-        const ring1Angles = [0, 45, 90, 135, 180, 225, 270, 315];
-        ring1Angles.forEach((angle, i) => {
-            const rad = (angle * Math.PI) / 180;
-            const dist = 28; // % from center
-            cells.push({
-                x: 50 + Math.cos(rad) * dist,
-                y: 50 + Math.sin(rad) * dist,
-                size: 18 + (i % 3) * 4, // 18-26%
-                zIndex: 20 - (i % 5),
-                opacity: 0.85
-            });
-        });
-
-        // Ring 2 - Smaller cells further out
-        const ring2Angles = [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5];
-        ring2Angles.forEach((angle, i) => {
-            const rad = (angle * Math.PI) / 180;
-            const dist = 42;
-            cells.push({
-                x: 50 + Math.cos(rad) * dist,
-                y: 50 + Math.sin(rad) * dist,
-                size: 14 + (i % 4) * 3, // 14-23%
-                zIndex: 15 - (i % 4),
-                opacity: 0.75
-            });
-        });
-
-        // Ring 3 - Even smaller cells at edges
-        for (let i = 0; i < 12; i++) {
-            const angle = i * 30;
-            const rad = (angle * Math.PI) / 180;
-            const dist = 55 + (i % 3) * 5;
-            cells.push({
-                x: 50 + Math.cos(rad) * dist,
-                y: 50 + Math.sin(rad) * dist,
-                size: 10 + (i % 5) * 2, // 10-18%
-                zIndex: 10 - (i % 6),
-                opacity: 0.6
-            });
-        }
-
-        // Ring 4 - Tiny cells at corners and edges
-        const corners = [
-            { x: 8, y: 8 }, { x: 92, y: 8 }, { x: 8, y: 92 }, { x: 92, y: 92 },
-            { x: 50, y: 5 }, { x: 50, y: 95 }, { x: 5, y: 50 }, { x: 95, y: 50 },
-            { x: 25, y: 5 }, { x: 75, y: 5 }, { x: 25, y: 95 }, { x: 75, y: 95 },
-            { x: 5, y: 25 }, { x: 5, y: 75 }, { x: 95, y: 25 }, { x: 95, y: 75 }
-        ];
-        corners.forEach((pos, i) => {
-            cells.push({
-                x: pos.x,
-                y: pos.y,
-                size: 8 + (i % 4) * 2, // 8-14%
-                zIndex: 5 - (i % 3),
-                opacity: 0.5
-            });
-        });
-
-        // Create video clones for each cell
-        cells.forEach((cell, index) => {
+        cells.forEach((cell, i) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'plexd-bugeye-cell';
             wrapper.style.cssText = `
-                position: absolute;
                 left: ${cell.x}%;
                 top: ${cell.y}%;
                 width: ${cell.size}%;
-                height: ${cell.size * (vh / vw)}%;
-                transform: translate(-50%, -50%);
-                z-index: ${cell.zIndex};
+                transform: translate(-50%, -50%) rotate(${cell.rotate}deg);
                 opacity: ${cell.opacity};
-                border-radius: 8px;
-                overflow: hidden;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-                pointer-events: none;
+                z-index: ${10 - i};
+                animation-delay: ${i * 0.05}s;
             `;
 
-            // Clone the video - will share the same MediaSource
-            const videoClone = document.createElement('video');
-            videoClone.className = 'plexd-bugeye-video';
-            videoClone.src = videoSource.src;
-            videoClone.currentTime = videoSource.currentTime;
-            videoClone.muted = true;
-            videoClone.loop = videoSource.loop;
-            videoClone.playsInline = true;
-            videoClone.autoplay = true;
-            videoClone.style.cssText = `
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            `;
+            const video = document.createElement('video');
+            video.src = videoSource.src;
+            video.currentTime = videoSource.currentTime;
+            video.muted = true;
+            video.loop = true;
+            video.playsInline = true;
+            video.play().catch(() => {});
 
-            // Sync playback
-            videoClone.play().catch(() => {});
-
-            wrapper.appendChild(videoClone);
+            wrapper.appendChild(video);
             bugEyeOverlay.appendChild(wrapper);
         });
 
-        // Add subtle animation class
-        bugEyeOverlay.classList.add('active');
-
         container.appendChild(bugEyeOverlay);
 
-        // Sync all clones with main video periodically
-        function syncVideos() {
+        // Efficient sync - only runs every 500ms, not every frame
+        let lastSync = 0;
+        function syncVideos(timestamp) {
             if (!bugEyeMode || !bugEyeOverlay) return;
-            const clones = bugEyeOverlay.querySelectorAll('video');
-            const mainTime = videoSource.currentTime;
-            clones.forEach(clone => {
-                // Only sync if drifted more than 0.5s
-                if (Math.abs(clone.currentTime - mainTime) > 0.5) {
-                    clone.currentTime = mainTime;
-                }
-                // Match play state
-                if (videoSource.paused && !clone.paused) {
-                    clone.pause();
-                } else if (!videoSource.paused && clone.paused) {
-                    clone.play().catch(() => {});
-                }
-            });
+
+            // Sync every 500ms instead of every frame
+            if (timestamp - lastSync > 500) {
+                lastSync = timestamp;
+                const clones = bugEyeOverlay.querySelectorAll('video');
+                const mainTime = videoSource.currentTime;
+                const isPaused = videoSource.paused;
+
+                clones.forEach(clone => {
+                    if (Math.abs(clone.currentTime - mainTime) > 1) {
+                        clone.currentTime = mainTime;
+                    }
+                    if (isPaused && !clone.paused) clone.pause();
+                    else if (!isPaused && clone.paused) clone.play().catch(() => {});
+                });
+            }
             bugEyeAnimationFrame = requestAnimationFrame(syncVideos);
         }
         bugEyeAnimationFrame = requestAnimationFrame(syncVideos);
+    }
+
+    /**
+     * Generate random cell positions for bug eye effect
+     */
+    function generateRandomCells(count) {
+        const cells = [];
+        const centerX = 50;
+        const centerY = 50;
+
+        // Place copies in a ring around center, with some randomness
+        for (let i = 0; i < count; i++) {
+            // Distribute around center in a ring pattern
+            const angle = (i / count) * 2 * Math.PI + (Math.random() - 0.5) * 0.5;
+            const radius = 25 + Math.random() * 20; // 25-45% from center
+
+            cells.push({
+                x: centerX + Math.cos(angle) * radius,
+                y: centerY + Math.sin(angle) * radius,
+                size: 18 + Math.random() * 15, // 18-33%
+                rotate: -10 + Math.random() * 20, // -10 to +10 degrees
+                opacity: 0.65 + Math.random() * 0.3 // 0.65-0.95
+            });
+        }
+        return cells;
     }
 
     /**
@@ -1421,11 +1372,9 @@ const PlexdApp = (function() {
             bugEyeAnimationFrame = null;
         }
         if (bugEyeOverlay) {
-            // Pause all clones before removing
-            const clones = bugEyeOverlay.querySelectorAll('video');
-            clones.forEach(clone => {
-                clone.pause();
-                clone.src = '';
+            bugEyeOverlay.querySelectorAll('video').forEach(v => {
+                v.pause();
+                v.src = '';
             });
             bugEyeOverlay.remove();
             bugEyeOverlay = null;
@@ -1433,6 +1382,21 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.remove('bugeye-mode');
         bugEyeMode = false;
+        bugEyeStreamId = null;
+    }
+
+    /**
+     * Update bug eye if stream changes
+     */
+    function updateBugEyeIfNeeded() {
+        if (!bugEyeMode) return;
+        const fullscreenStream = PlexdStream.getFullscreenStream();
+        const selected = PlexdStream.getSelectedStream();
+        const targetStream = fullscreenStream || selected;
+
+        if (targetStream && targetStream.id !== bugEyeStreamId) {
+            createBugEyeOverlay(targetStream);
+        }
     }
 
     // Mosaic mode state (simpler version with fewer, non-overlapping copies)
@@ -2315,9 +2279,19 @@ const PlexdApp = (function() {
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
             case '`':
-                // ` (backtick): Toggle favorites modal overlay
+                // ` (backtick): View favorites (filter to favorites)
                 e.preventDefault();
-                toggleFavoritesModal();
+                {
+                    const fullscreenMode = PlexdStream.getFullscreenMode();
+                    if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
+                        PlexdStream.exitFocusedMode();
+                    }
+                    const count = PlexdStream.getFavoriteCount();
+                    setViewMode('favorites');
+                    if (count === 0) {
+                        showMessage('No favorites yet. Press L to like streams.', 'info');
+                    }
+                }
                 break;
             case 'c':
             case 'C':
@@ -2350,10 +2324,8 @@ const PlexdApp = (function() {
             case 'ArrowRight':
                 e.preventDefault();
                 if (fullscreenStream) {
-                    // In focused fullscreen: switch to next stream (stay in focused mode)
                     switchFullscreenStream('right');
                 } else if (coverflowMode) {
-                    // Coverflow mode: navigate carousel to next stream
                     const streams = getFilteredStreams();
                     if (streams.length > 0) {
                         PlexdGrid.coverflowNavigate('next', streams.length);
@@ -2363,14 +2335,13 @@ const PlexdApp = (function() {
                 } else {
                     PlexdStream.selectNextStream('right');
                 }
+                updateBugEyeIfNeeded();
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
                 if (fullscreenStream) {
-                    // In focused fullscreen: switch to prev stream (stay in focused mode)
                     switchFullscreenStream('left');
                 } else if (coverflowMode) {
-                    // Coverflow mode: navigate carousel to previous stream
                     const streams = getFilteredStreams();
                     if (streams.length > 0) {
                         PlexdGrid.coverflowNavigate('prev', streams.length);
@@ -2380,14 +2351,13 @@ const PlexdApp = (function() {
                 } else {
                     PlexdStream.selectNextStream('left');
                 }
+                updateBugEyeIfNeeded();
                 break;
             case 'ArrowUp':
                 e.preventDefault();
                 if (fullscreenStream) {
-                    // In focused fullscreen: switch to stream above (stay in focused mode)
                     switchFullscreenStream('up');
                 } else if (coverflowMode) {
-                    // Coverflow mode: navigate carousel to previous stream (same as left)
                     const streams = getFilteredStreams();
                     if (streams.length > 0) {
                         PlexdGrid.coverflowNavigate('prev', streams.length);
@@ -2397,14 +2367,13 @@ const PlexdApp = (function() {
                 } else {
                     PlexdStream.selectNextStream('up');
                 }
+                updateBugEyeIfNeeded();
                 break;
             case 'ArrowDown':
                 e.preventDefault();
                 if (fullscreenStream) {
-                    // In focused fullscreen: switch to stream below (stay in focused mode)
                     switchFullscreenStream('down');
                 } else if (coverflowMode) {
-                    // Coverflow mode: navigate carousel to next stream (same as right)
                     const streams = getFilteredStreams();
                     if (streams.length > 0) {
                         PlexdGrid.coverflowNavigate('next', streams.length);
@@ -2414,6 +2383,7 @@ const PlexdApp = (function() {
                 } else {
                     PlexdStream.selectNextStream('down');
                 }
+                updateBugEyeIfNeeded();
                 break;
             // Seeking controls - grouped near arrow keys for easy access
             // , . for 10s seek, < > (Shift+,/.) for 60s seek
@@ -2543,6 +2513,15 @@ const PlexdApp = (function() {
                 removeDuplicateStreams();
                 break;
             case 'Escape':
+                // Escape priority: Bug Eye > Mosaic > Fullscreen modes
+                if (bugEyeMode) {
+                    toggleBugEyeMode(true);
+                    break;
+                }
+                if (mosaicMode) {
+                    toggleMosaicMode();
+                    break;
+                }
                 // Escape handles all fullscreen modes:
                 // - true-focused: return to true-grid (stay in true fullscreen)
                 // - true-grid: exit true fullscreen completely
@@ -2690,34 +2669,24 @@ const PlexdApp = (function() {
             case '7':
             case '8':
             case '9':
-                // Context-aware: focused fullscreen = assign slot number, grid = filter by slot
-                // Shift+N: opposite action (grid = assign, focused = filter)
-                // Note: true-grid mode (F key) has no focused stream, so treat as grid mode for filtering
-                if (!e.ctrlKey && !e.metaKey) {
+                // Double-tap detection: single tap = assign, double tap = view slot
+                // Uses timeout to delay single-tap action until we know it's not a double-tap
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
                     const slotNum = parseInt(e.key);
-                    const fullscreenMode = PlexdStream.getFullscreenMode();
-                    // Only consider "focused" fullscreen modes where there's an actual stream to assign to
-                    const isFocusedFullscreen = fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill';
-                    const doAssign = e.shiftKey ? !isFocusedFullscreen : isFocusedFullscreen;
-                    const doFilter = !doAssign;
+                    const now = Date.now();
+                    const isDoubleTap = (lastSlotKey === e.key && (now - lastSlotKeyTime) < DOUBLE_TAP_THRESHOLD);
 
-                    if (doAssign) {
-                        // Assign slot number to stream
-                        const targetStream = isFocusedFullscreen
-                            ? PlexdStream.getFullscreenStream()
-                            : selected;
-                        if (targetStream) {
-                            PlexdStream.setRating(targetStream.id, slotNum);
-                            showMessage(`Assigned to slot ${slotNum}`, 'info');
-                            // If in focus mode with a filter active and new slot doesn't match,
-                            // exit focus mode to avoid being stuck viewing a hidden stream
-                            if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
-                                PlexdStream.exitFocusedMode();
-                            }
+                    if (isDoubleTap) {
+                        // Double tap: cancel pending assign and view/filter to this slot
+                        if (slotAssignTimeout) {
+                            clearTimeout(slotAssignTimeout);
+                            slotAssignTimeout = null;
                         }
-                    } else {
-                        // Filter action - if in focused fullscreen, exit first to show filtered grid
-                        if (isFocusedFullscreen) {
+                        lastSlotKey = null;
+                        lastSlotKeyTime = 0;
+
+                        const fullscreenMode = PlexdStream.getFullscreenMode();
+                        if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
                             PlexdStream.exitFocusedMode();
                         }
                         const count = PlexdStream.getStreamsByRating(slotNum).length;
@@ -2725,17 +2694,45 @@ const PlexdApp = (function() {
                         if (count === 0) {
                             showMessage(`No streams in slot ${slotNum}`, 'warning');
                         }
+                    } else {
+                        // First tap: schedule assign after threshold (will be cancelled if double-tap)
+                        lastSlotKey = e.key;
+                        lastSlotKeyTime = now;
+
+                        // Clear any previous pending assign
+                        if (slotAssignTimeout) {
+                            clearTimeout(slotAssignTimeout);
+                        }
+
+                        // Capture current state for the delayed action
+                        const fullscreenMode = PlexdStream.getFullscreenMode();
+                        const isFocusedFullscreen = fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill';
+                        const targetStream = isFocusedFullscreen
+                            ? PlexdStream.getFullscreenStream()
+                            : selected;
+
+                        slotAssignTimeout = setTimeout(() => {
+                            slotAssignTimeout = null;
+                            if (targetStream) {
+                                PlexdStream.setRating(targetStream.id, slotNum);
+                                showMessage(`Slot ${slotNum}`, 'info');
+                                if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
+                                    PlexdStream.exitFocusedMode();
+                                }
+                            }
+                        }, DOUBLE_TAP_THRESHOLD);
                     }
                 }
                 break;
-            case '*':
-                // * (asterisk/Shift+8) : Toggle favorite on selected/fullscreen stream
+            case 'l':
+            case 'L':
+                // L = Love/Like: Toggle favorite on selected/fullscreen stream
                 {
                     const targetStream = fullscreenStream || selected;
                     if (targetStream) {
                         e.preventDefault();
                         const isFav = PlexdStream.toggleFavorite(targetStream.id);
-                        showMessage(isFav ? 'Added to favorites ★' : 'Removed from favorites', isFav ? 'success' : 'info');
+                        showMessage(isFav ? 'Liked ★' : 'Unliked', isFav ? 'success' : 'info');
                     } else {
                         showMessage('Select a stream first', 'warning');
                     }
@@ -3086,6 +3083,11 @@ const PlexdApp = (function() {
      * Save current stream combination with a name
      */
     async function saveStreamCombination(existingName = null) {
+        // Handle being called from click event (existingName would be Event object)
+        if (existingName && typeof existingName !== 'string') {
+            existingName = null;
+        }
+
         const streams = PlexdStream.getAllStreams();
         if (streams.length === 0) {
             showMessage('No streams to save', 'error');
@@ -3264,7 +3266,7 @@ const PlexdApp = (function() {
     async function saveFavoritesAsCombination() {
         const streams = PlexdStream.getFavoriteStreams();
         if (streams.length === 0) {
-            showMessage('No favorites to save. Press * on selected streams to add them to favorites.', 'warning');
+            showMessage('No likes to save. Press L on selected streams to like them.', 'warning');
             return;
         }
 
@@ -3768,217 +3770,6 @@ const PlexdApp = (function() {
         document.addEventListener('keydown', handleEscape);
     }
 
-    // ===== FAVORITES MODAL OVERLAY =====
-
-    let favoritesModalSelectedIndex = 0;
-
-    /**
-     * Toggle the favorites modal overlay
-     * Shows all favorite streams in a grid overlay with keyboard navigation
-     */
-    function toggleFavoritesModal() {
-        const existingModal = document.getElementById('favorites-modal');
-        if (existingModal) {
-            closeFavoritesModal();
-            return;
-        }
-        showFavoritesModal();
-    }
-
-    /**
-     * Show the favorites modal overlay
-     */
-    function showFavoritesModal() {
-        const favorites = PlexdStream.getFavoriteStreams();
-
-        if (favorites.length === 0) {
-            showMessage('No favorites yet. Press * to add streams to favorites.', 'info');
-            return;
-        }
-
-        favoritesModalSelectedIndex = 0;
-
-        const modal = document.createElement('div');
-        modal.id = 'favorites-modal';
-        modal.className = 'plexd-modal-overlay plexd-favorites-modal-overlay';
-
-        // Create video grid for favorites
-        const gridHtml = favorites.map((stream, idx) => {
-            const title = stream.fileName || stream.url.split('/').pop() || 'Stream';
-            return `
-                <div class="plexd-fav-modal-item${idx === 0 ? ' selected' : ''}" data-index="${idx}" data-stream-id="${stream.id}">
-                    <div class="plexd-fav-modal-video-wrapper">
-                        <video
-                            src="${escapeAttr(stream.url)}"
-                            muted
-                            loop
-                            playsinline
-                            preload="metadata"
-                        ></video>
-                        <div class="plexd-fav-modal-star">★</div>
-                    </div>
-                    <div class="plexd-fav-modal-title">${escapeHtml(title)}</div>
-                </div>
-            `;
-        }).join('');
-
-        modal.innerHTML = `
-            <div class="plexd-favorites-modal">
-                <div class="plexd-favorites-modal-header">
-                    <h3>★ Favorites (${favorites.length})</h3>
-                    <div class="plexd-favorites-modal-hint">Arrow keys to navigate • Enter to view • Esc or \` to close</div>
-                </div>
-                <div class="plexd-favorites-modal-grid">
-                    ${gridHtml}
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // Start playing preview videos on hover/selection
-        const items = modal.querySelectorAll('.plexd-fav-modal-item');
-        items.forEach((item, idx) => {
-            const video = item.querySelector('video');
-
-            // Play video when selected or hovered
-            item.addEventListener('mouseenter', () => {
-                video.currentTime = favorites[idx].video?.currentTime || 0;
-                video.play().catch(() => {});
-            });
-            item.addEventListener('mouseleave', () => {
-                if (!item.classList.contains('selected')) {
-                    video.pause();
-                }
-            });
-
-            // Click to view in fullscreen
-            item.addEventListener('click', () => {
-                closeFavoritesModal();
-                PlexdStream.selectStream(favorites[idx].id);
-                PlexdStream.enterFocusedMode(favorites[idx].id);
-            });
-        });
-
-        // Start playing the first selected item
-        const firstVideo = items[0]?.querySelector('video');
-        if (firstVideo && favorites[0]) {
-            firstVideo.currentTime = favorites[0].video?.currentTime || 0;
-            firstVideo.play().catch(() => {});
-        }
-
-        // Handle keyboard navigation within modal
-        const handleModalKeyboard = (e) => {
-            const currentItems = modal.querySelectorAll('.plexd-fav-modal-item');
-            const currentFavorites = PlexdStream.getFavoriteStreams();
-            const count = currentItems.length;
-
-            if (count === 0) {
-                closeFavoritesModal();
-                return;
-            }
-
-            switch (e.key) {
-                case 'Escape':
-                case '`':
-                    e.preventDefault();
-                    closeFavoritesModal();
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    updateFavoritesModalSelection((favoritesModalSelectedIndex + 1) % count, currentItems, currentFavorites);
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    updateFavoritesModalSelection((favoritesModalSelectedIndex - 1 + count) % count, currentItems, currentFavorites);
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    // Move down by row (estimate 4 items per row)
-                    {
-                        const cols = Math.max(1, Math.floor(modal.querySelector('.plexd-favorites-modal-grid').offsetWidth / 220));
-                        updateFavoritesModalSelection(Math.min(count - 1, favoritesModalSelectedIndex + cols), currentItems, currentFavorites);
-                    }
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    // Move up by row
-                    {
-                        const cols = Math.max(1, Math.floor(modal.querySelector('.plexd-favorites-modal-grid').offsetWidth / 220));
-                        updateFavoritesModalSelection(Math.max(0, favoritesModalSelectedIndex - cols), currentItems, currentFavorites);
-                    }
-                    break;
-                case 'Enter':
-                    e.preventDefault();
-                    if (currentFavorites[favoritesModalSelectedIndex]) {
-                        closeFavoritesModal();
-                        PlexdStream.selectStream(currentFavorites[favoritesModalSelectedIndex].id);
-                        PlexdStream.enterFocusedMode(currentFavorites[favoritesModalSelectedIndex].id);
-                    }
-                    break;
-                case '*':
-                    // Remove from favorites
-                    e.preventDefault();
-                    if (currentFavorites[favoritesModalSelectedIndex]) {
-                        PlexdStream.toggleFavorite(currentFavorites[favoritesModalSelectedIndex].id);
-                        showMessage('Removed from favorites', 'info');
-                        // Refresh the modal
-                        closeFavoritesModal();
-                        if (PlexdStream.getFavoriteCount() > 0) {
-                            setTimeout(showFavoritesModal, 100);
-                        }
-                    }
-                    break;
-            }
-        };
-
-        document.addEventListener('keydown', handleModalKeyboard);
-        modal._keyboardHandler = handleModalKeyboard;
-
-        // Close on overlay click
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                closeFavoritesModal();
-            }
-        });
-    }
-
-    /**
-     * Update selection in favorites modal
-     */
-    function updateFavoritesModalSelection(newIndex, items, favorites) {
-        // Remove selection from current
-        items[favoritesModalSelectedIndex]?.classList.remove('selected');
-        items[favoritesModalSelectedIndex]?.querySelector('video')?.pause();
-
-        // Add selection to new
-        favoritesModalSelectedIndex = newIndex;
-        const newItem = items[favoritesModalSelectedIndex];
-        if (newItem) {
-            newItem.classList.add('selected');
-            newItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-            const video = newItem.querySelector('video');
-            if (video && favorites[favoritesModalSelectedIndex]) {
-                video.currentTime = favorites[favoritesModalSelectedIndex].video?.currentTime || 0;
-                video.play().catch(() => {});
-            }
-        }
-    }
-
-    /**
-     * Close the favorites modal
-     */
-    function closeFavoritesModal() {
-        const modal = document.getElementById('favorites-modal');
-        if (modal) {
-            if (modal._keyboardHandler) {
-                document.removeEventListener('keydown', modal._keyboardHandler);
-            }
-            modal.remove();
-        }
-    }
-
     /**
      * Delete a saved combination
      */
@@ -4174,7 +3965,7 @@ const PlexdApp = (function() {
     /**
      * Update combinations list in UI (if present)
      */
-    function updateCombinationsList() {
+    async function updateCombinationsList() {
         const listEl = document.getElementById('combinations-list');
         if (!listEl) return;
 
@@ -4186,29 +3977,71 @@ const PlexdApp = (function() {
             return;
         }
 
-        listEl.innerHTML = names.map(name => {
+        // Build HTML for each set, fetching file sizes for those with local storage
+        const items = await Promise.all(names.map(async name => {
             const combo = combinations[name];
-            // Skip invalid entries
             if (!combo) return '';
-            // Defensive: handle missing urls array (corrupted/old data)
+
             const urlCount = (combo.urls || []).length;
             const localCount = (combo.localFiles || []).length;
             const totalCount = urlCount + localCount;
             const loginCount = (combo.loginDomains || []).length;
-            const loginHint = loginCount > 0 ? ` · ${loginCount} login site${loginCount > 1 ? 's' : ''}` : '';
+            const loginHint = loginCount > 0 ? ` · ${loginCount} login` : '';
+
+            // Get saved file sizes if stored locally
+            let storageInfo = '';
+            let deleteLocalBtn = '';
+            if (combo.localFilesSavedToDisc) {
+                const files = await getSavedLocalFiles(name);
+                const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+                if (totalSize > 0) {
+                    storageInfo = ` · ${formatBytes(totalSize)}`;
+                    deleteLocalBtn = `<button class="plexd-combo-del-local" onclick="PlexdApp.deleteLocalFiles('${escapeAttr(name)}')" title="Delete stored files (${formatBytes(totalSize)})">🗑</button>`;
+                }
+            }
+
             return `
                 <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
                     <span class="plexd-combo-name">${escapeHtml(name)}</span>
-                    <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}</span>
+                    <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}${storageInfo}</span>
                     <div class="plexd-combo-buttons">
                         <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')" title="Load (replace current)">Load</button>
                         <button class="plexd-combo-add" onclick="PlexdApp.addCombination('${escapeAttr(name)}')" title="Add to current streams">+Add</button>
                         <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Update with current streams">Upd</button>
+                        ${deleteLocalBtn}
                         <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')" title="Delete this set">×</button>
                     </div>
                 </div>
             `;
-        }).join('');
+        }));
+
+        listEl.innerHTML = items.join('');
+    }
+
+    /**
+     * Delete only the local files for a set (keep the set metadata)
+     */
+    async function deleteLocalFilesOnly(name) {
+        const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
+        const combo = combinations[name];
+        if (!combo || !combo.localFilesSavedToDisc) {
+            showMessage('No local files to delete', 'info');
+            return;
+        }
+
+        const files = await getSavedLocalFiles(name);
+        const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
+
+        if (!confirm(`Delete ${files.length} stored file(s) (${formatBytes(totalSize)}) for "${name}"?\n\nThe set will remain but you'll need to provide files when loading.`)) {
+            return;
+        }
+
+        await deleteLocalFilesForSet(name);
+        combo.localFilesSavedToDisc = false;
+        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+
+        showMessage(`Deleted ${files.length} stored file(s)`, 'success');
+        updateCombinationsList();
     }
 
     /**
@@ -4858,6 +4691,7 @@ const PlexdApp = (function() {
         updateCombination: updateStreamCombination,
         addCombination: addStreamCombination,
         deleteCombination: deleteStreamCombination,
+        deleteLocalFiles: deleteLocalFilesOnly,
         getSavedCombinations,
         exportCombinations,
         importCombinations,

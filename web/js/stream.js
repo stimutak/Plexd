@@ -170,7 +170,7 @@ const PlexdStream = (function() {
         const favoriteIndicator = document.createElement('div');
         favoriteIndicator.className = 'plexd-favorite-indicator';
         favoriteIndicator.innerHTML = '☆'; // Show empty star initially
-        favoriteIndicator.title = 'Add to favorites (*)';
+        favoriteIndicator.title = 'Like (L)';
         favoriteIndicator.onclick = (e) => {
             e.stopPropagation();
             toggleFavorite(id);
@@ -857,16 +857,29 @@ const PlexdStream = (function() {
         const usedPositions = new Set();
         let attempts = 0;
 
-        // Get seekable range
+        // Get seekable range - prefer duration over seekable for full range
         const getSeekRange = () => {
-            if (video.duration && isFinite(video.duration)) {
+            // For HLS streams, try to get duration from hls.js first
+            if (stream.hls && stream.hls.media) {
+                const hlsDuration = stream.hls.media.duration;
+                if (hlsDuration && isFinite(hlsDuration) && hlsDuration > 0) {
+                    return { start: 0, end: hlsDuration };
+                }
+            }
+
+            // Check video.duration - must be finite and reasonable
+            if (video.duration && isFinite(video.duration) && video.duration > 1) {
                 return { start: 0, end: video.duration };
             }
+
+            // Fallback to seekable ranges (may be limited for live streams)
             if (video.seekable && video.seekable.length > 0) {
-                return {
-                    start: video.seekable.start(0),
-                    end: video.seekable.end(video.seekable.length - 1)
-                };
+                const start = video.seekable.start(0);
+                const end = video.seekable.end(video.seekable.length - 1);
+                // Only use if range is reasonable (more than 10 seconds)
+                if (end - start > 10) {
+                    return { start, end };
+                }
             }
             return null;
         };
@@ -884,27 +897,15 @@ const PlexdStream = (function() {
         }
 
         const getRandomPosition = () => {
-            // Generate random position, avoiding positions we've already tried
-            // Skip first 5% and last 5% to avoid edges
+            // Simple random position - skip first and last 5% to avoid edges
             const safeStart = range.start + (range.end - range.start) * 0.05;
             const safeEnd = range.end - (range.end - range.start) * 0.05;
             const safeRange = safeEnd - safeStart;
 
-            // Divide into segments and pick unused ones
-            const numSegments = Math.max(10, maxRetries * 2);
-            const segmentSize = safeRange / numSegments;
-
-            // Find unused segment
-            for (let i = 0; i < numSegments; i++) {
-                const segment = Math.floor(Math.random() * numSegments);
-                if (!usedPositions.has(segment)) {
-                    usedPositions.add(segment);
-                    // Random position within segment
-                    return safeStart + segment * segmentSize + Math.random() * segmentSize;
-                }
-            }
-            // All segments used, just pick random
-            return safeStart + Math.random() * safeRange;
+            // Pure random within safe range
+            const position = safeStart + Math.random() * safeRange;
+            console.log(`[Random Seek] Range: ${range.start.toFixed(1)}-${range.end.toFixed(1)}s, Position: ${position.toFixed(1)}s`);
+            return position;
         };
 
         const trySeekAndPlay = async (position) => {
@@ -2001,6 +2002,7 @@ const PlexdStream = (function() {
             wrapper.classList.remove('plexd-drag-over');
             const draggedId = e.dataTransfer.getData('text/plain');
             if (draggedId && draggedId !== stream.id) {
+                e.stopPropagation(); // Prevent app-level file drop handler from interfering
                 reorderStreams(draggedId, stream.id);
             }
         });
@@ -3510,7 +3512,7 @@ const PlexdStream = (function() {
         if (indicator) {
             indicator.classList.toggle('active', isFavorite);
             indicator.innerHTML = isFavorite ? '★' : '☆';
-            indicator.title = isFavorite ? 'Remove from favorites (*)' : 'Add to favorites (*)';
+            indicator.title = isFavorite ? 'Unlike (L)' : 'Like (L)';
         }
 
         // Update favorite button in controls if present

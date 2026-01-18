@@ -450,6 +450,7 @@ body {
     border-radius: 8px;
     font-size: 12px;
     color: #888;
+    z-index: 100;
 }
 
 .plexd-shortcuts kbd {
@@ -1644,110 +1645,6 @@ body {
     box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.5);
 }
 
-/* ========================================
-   Favorites Modal Overlay
-   ======================================== */
-
-.plexd-favorites-modal-overlay {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-}
-
-.plexd-favorites-modal {
-    background: rgba(10, 10, 10, 0.95);
-    border: 1px solid #333;
-    border-radius: 12px;
-    max-width: 90vw;
-    max-height: 90vh;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
-}
-
-.plexd-favorites-modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid #333;
-    flex-shrink: 0;
-}
-
-.plexd-favorites-modal-header h3 {
-    font-size: 18px;
-    font-weight: 600;
-    color: #fbbf24;
-    margin: 0;
-}
-
-.plexd-favorites-modal-hint {
-    font-size: 12px;
-    color: #666;
-}
-
-.plexd-favorites-modal-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 16px;
-    padding: 20px;
-    overflow-y: auto;
-    flex: 1;
-}
-
-.plexd-fav-modal-item {
-    cursor: pointer;
-    border-radius: 8px;
-    overflow: hidden;
-    background: #1a1a1a;
-    border: 2px solid transparent;
-    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
-}
-
-.plexd-fav-modal-item:hover {
-    border-color: #555;
-    transform: scale(1.02);
-}
-
-.plexd-fav-modal-item.selected {
-    border-color: #fbbf24;
-    box-shadow: 0 0 20px rgba(251, 191, 36, 0.3);
-}
-
-.plexd-fav-modal-video-wrapper {
-    position: relative;
-    aspect-ratio: 16 / 9;
-    background: #000;
-    overflow: hidden;
-}
-
-.plexd-fav-modal-video-wrapper video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-}
-
-.plexd-fav-modal-star {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    font-size: 16px;
-    color: #fbbf24;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-}
-
-.plexd-fav-modal-title {
-    padding: 10px 12px;
-    font-size: 12px;
-    color: #ccc;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 /* Rating button in controls */
 .plexd-btn.plexd-rating-btn {
     color: #888;
@@ -2196,38 +2093,65 @@ body {
     inset: 0;
     z-index: 50;
     pointer-events: none;
+    background: rgba(0, 0, 0, 0.3);
     opacity: 0;
-    transition: opacity 0.4s ease;
+    transition: opacity 0.3s ease;
 }
 
 .plexd-bugeye-overlay.active {
     opacity: 1;
 }
 
+.plexd-bugeye-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    transition: all 0.2s;
+}
+
+.plexd-bugeye-close:hover {
+    background: #f59e0b;
+    border-color: #f59e0b;
+    transform: scale(1.1);
+}
+
 .plexd-bugeye-cell {
-    transition: transform 0.3s ease, opacity 0.3s ease;
+    position: absolute;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.1);
+    animation: bugeyeFadeIn 0.4s ease-out forwards;
 }
 
-.plexd-bugeye-cell:nth-child(odd) {
-    animation: bugeyePulse1 4s ease-in-out infinite;
+@keyframes bugeyeFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.8);
+    }
+    to {
+        opacity: var(--cell-opacity, 0.8);
+        transform: translate(-50%, -50%) rotate(var(--cell-rotate, 0deg)) scale(1);
+    }
 }
 
-.plexd-bugeye-cell:nth-child(even) {
-    animation: bugeyePulse2 5s ease-in-out infinite;
-}
-
-@keyframes bugeyePulse1 {
-    0%, 100% { transform: translate(-50%, -50%) scale(1); }
-    50% { transform: translate(-50%, -50%) scale(1.02); }
-}
-
-@keyframes bugeyePulse2 {
-    0%, 100% { transform: translate(-50%, -50%) scale(1); }
-    50% { transform: translate(-50%, -50%) scale(0.98); }
-}
-
-.plexd-bugeye-video {
+.plexd-bugeye-cell video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
     background: #000;
 }
 

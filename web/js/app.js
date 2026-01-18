@@ -3209,7 +3209,9 @@ const PlexdApp = (function() {
         };
 
         try {
+            console.log('[Plexd] Saving combination:', name, combinations[name]);
             localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+            console.log('[Plexd] Saved to localStorage successfully');
         } catch (err) {
             console.error('[Plexd] Failed to save combination to localStorage:', err);
             showMessage('Failed to save: storage quota exceeded', 'error');
@@ -3237,7 +3239,7 @@ const PlexdApp = (function() {
             msg += ` | Login: ${loginDomains.join(', ')}`;
         }
         showMessage(msg, 'success');
-        updateCombinationsList();
+        await updateCombinationsList();
 
         // Auto-open the saved sets panel so user can see the saved set
         const savedPanel = document.getElementById('saved-panel');
@@ -3356,7 +3358,7 @@ const PlexdApp = (function() {
             if (savedToDisc) msg += ' (stored)';
         }
         showMessage(msg, 'success');
-        updateCombinationsList();
+        await updateCombinationsList();
     }
 
     /**
@@ -3783,7 +3785,7 @@ const PlexdApp = (function() {
             delete combinations[name];
             localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
             showMessage(`Deleted: ${name}`, 'info');
-            updateCombinationsList();
+            await updateCombinationsList();
         }
     }
 
@@ -4041,7 +4043,7 @@ const PlexdApp = (function() {
         localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
 
         showMessage(`Deleted ${files.length} stored file(s)`, 'success');
-        updateCombinationsList();
+        await updateCombinationsList();
     }
 
     /**

@@ -413,11 +413,15 @@ const PlexdApp = (function() {
         ];
 
         // Also check file extensions as fallback
-        const videoExtensions = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg'];
+        const videoExtensions = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg', '.ts', '.mts', '.m2ts', '.wmv', '.asf', '.rm', '.rmvb', '.vob', '.divx', '.f4v'];
 
         function isVideoFile(file) {
-            // Check MIME type
-            if (file.type && videoTypes.some(t => file.type.startsWith(t.split('/')[0] + '/'))) {
+            // Check MIME type - if it starts with 'video/', it's a video
+            if (file.type && file.type.startsWith('video/')) {
+                return true;
+            }
+            // Also accept application/x-mpegURL (HLS) and application/octet-stream for some video files
+            if (file.type === 'application/x-mpegURL' || file.type === 'application/vnd.apple.mpegurl') {
                 return true;
             }
             // Fallback to extension check
@@ -3652,7 +3656,8 @@ const PlexdApp = (function() {
                     let errorCount = 0;
 
                     async function searchDir(handle, depth = 0) {
-                        if (depth > 5) return; // Limit recursion depth
+                        if (depth > 10) return; // Limit recursion depth
+                        console.log(`[Plexd] Scanning directory at depth ${depth}: ${handle.name || 'root'}`);
                         try {
                             for await (const entry of handle.values()) {
                                 try {
@@ -3663,9 +3668,13 @@ const PlexdApp = (function() {
                                             setStatus(`Scanning... ${scannedCount} files checked`);
                                         }
                                         const file = await entry.getFile();
+                                        const ext = file.name.toLowerCase().split('.').pop();
                                         if (isVideoFile(file)) {
                                             foundFiles.push(file);
-                                            console.log(`[Plexd] Found video: ${file.name}`);
+                                            console.log(`[Plexd] Found video: ${file.name} (type: ${file.type || 'unknown'})`);
+                                        } else if (scannedCount <= 20) {
+                                            // Log first 20 non-video files for debugging
+                                            console.log(`[Plexd] Not a video: ${file.name} (type: ${file.type || 'unknown'}, ext: .${ext})`);
                                         }
                                     } else if (entry.kind === 'directory') {
                                         // Skip hidden directories (start with .)
@@ -3676,13 +3685,13 @@ const PlexdApp = (function() {
                                 } catch (fileErr) {
                                     // Skip files we can't access (permissions, system files, etc.)
                                     errorCount++;
-                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name}`);
+                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name} (${fileErr.message})`);
                                 }
                             }
                         } catch (dirErr) {
                             // Skip directories we can't access
                             errorCount++;
-                            console.log(`[Plexd] Skipping inaccessible directory`);
+                            console.log(`[Plexd] Skipping inaccessible directory: ${handle.name || 'unknown'} (${dirErr.message})`);
                         }
                     }
 

@@ -17,6 +17,26 @@ const PlexdApp = (function() {
     const STORE_NAME = 'files';
     let dbInstance = null;
 
+    // ========================================
+    // Video File Detection
+    // ========================================
+
+    const VIDEO_EXTENSIONS = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg', '.ts', '.mts', '.m2ts', '.wmv', '.asf', '.rm', '.rmvb', '.vob', '.divx', '.f4v'];
+
+    function isVideoFile(file) {
+        // Check MIME type - if it starts with 'video/', it's a video
+        if (file.type && file.type.startsWith('video/')) {
+            return true;
+        }
+        // Also accept application/x-mpegURL (HLS) and application/octet-stream for some video files
+        if (file.type === 'application/x-mpegURL' || file.type === 'application/vnd.apple.mpegurl') {
+            return true;
+        }
+        // Fallback to extension check
+        const name = file.name.toLowerCase();
+        return VIDEO_EXTENSIONS.some(ext => name.endsWith(ext));
+    }
+
     /**
      * Open or create the IndexedDB database
      */
@@ -397,37 +417,7 @@ const PlexdApp = (function() {
         `;
         app.appendChild(dropOverlay);
 
-        // Supported video MIME types
-        const videoTypes = [
-            'video/quicktime',      // .mov
-            'video/mp4',            // .mp4
-            'video/webm',           // .webm
-            'video/x-m4v',          // .m4v
-            'video/x-matroska',     // .mkv
-            'video/avi',            // .avi
-            'video/x-msvideo',      // .avi (alt)
-            'video/ogg',            // .ogv
-            'video/3gpp',           // .3gp
-            'video/x-flv',          // .flv
-            'video/mpeg'            // .mpeg
-        ];
-
-        // Also check file extensions as fallback
-        const videoExtensions = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg', '.ts', '.mts', '.m2ts', '.wmv', '.asf', '.rm', '.rmvb', '.vob', '.divx', '.f4v'];
-
-        function isVideoFile(file) {
-            // Check MIME type - if it starts with 'video/', it's a video
-            if (file.type && file.type.startsWith('video/')) {
-                return true;
-            }
-            // Also accept application/x-mpegURL (HLS) and application/octet-stream for some video files
-            if (file.type === 'application/x-mpegURL' || file.type === 'application/vnd.apple.mpegurl') {
-                return true;
-            }
-            // Fallback to extension check
-            const name = file.name.toLowerCase();
-            return videoExtensions.some(ext => name.endsWith(ext));
-        }
+        // isVideoFile is now defined at module level
 
         let dragCounter = 0;
 

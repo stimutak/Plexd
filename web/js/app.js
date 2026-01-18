@@ -754,15 +754,26 @@ const PlexdApp = (function() {
         const key = urlEqualityKey(url);
         const existing = PlexdStream.getAllStreams().find(s => urlEqualityKey(s.url) === key);
         if (existing) {
+            console.log(`[Plexd] addStreamSilent: duplicate, selecting existing stream`);
             PlexdStream.selectStream(existing.id);
             return;
         }
 
+        console.log(`[Plexd] addStreamSilent: creating stream for ${url.substring(0, 60)}...`);
         const stream = PlexdStream.createStream(url, {
             autoplay: true,
             muted: true
         });
+        if (!stream) {
+            console.error(`[Plexd] addStreamSilent: createStream returned null/undefined`);
+            return;
+        }
+        if (!containerEl) {
+            console.error(`[Plexd] addStreamSilent: containerEl is null!`);
+            return;
+        }
         containerEl.appendChild(stream.wrapper);
+        console.log(`[Plexd] addStreamSilent: stream appended, total now: ${PlexdStream.getAllStreams().length}`);
         updateStreamCount();
         updateLayout();
     }
@@ -3405,6 +3416,8 @@ const PlexdApp = (function() {
         const combinations = JSON.parse(localStorage.getItem('plexd_combinations') || '{}');
         const combo = combinations[name];
 
+        console.log(`[Plexd] loadStreamCombination("${name}") - combo:`, combo);
+
         if (!combo) {
             showMessage(`Combination "${name}" not found`, 'error');
             return;
@@ -3414,8 +3427,11 @@ const PlexdApp = (function() {
         const localFiles = combo.localFiles || [];
         const loginDomains = combo.loginDomains || [];
 
+        console.log(`[Plexd] Set "${name}" has ${(combo.urls || []).length} URLs, ${localFiles.length} local files`);
+
         // Chain of modals: login domains first, then local files
         const loadWithFiles = (providedFiles) => {
+            console.log(`[Plexd] loadWithFiles called with ${providedFiles.length} files, now loading streams...`);
             if (loginDomains.length > 0) {
                 showLoginDomainsModal(name, loginDomains, () => {
                     loadCombinationStreams(name, combo, providedFiles, merge);
@@ -3451,12 +3467,16 @@ const PlexdApp = (function() {
                     // Some files missing - show modal for remaining
                     showLocalFilesModal(name, missingFiles, (additionalFiles) => {
                         // Merge loaded and additional files
+                        // additionalFiles indices correspond to missingFiles order
                         let addIdx = 0;
                         for (let i = 0; i < localFiles.length; i++) {
-                            if (!loadedFiles[i] && additionalFiles[addIdx]) {
-                                loadedFiles[i] = additionalFiles[addIdx];
+                            if (!loadedFiles[i]) {
+                                // This slot was missing - check if user provided it
+                                if (additionalFiles[addIdx]) {
+                                    loadedFiles[i] = additionalFiles[addIdx];
+                                }
+                                addIdx++; // Always increment for missing slots
                             }
-                            if (!loadedFiles[i]) addIdx++;
                         }
                         loadWithFiles(loadedFiles);
                     }, loadedCount);
@@ -3499,9 +3519,10 @@ const PlexdApp = (function() {
                     <div class="plexd-drop-text">Drop video files here or click to browse</div>
                     <input type="file" id="local-files-input" multiple accept="video/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.ogv,.3gp,.flv,.mpeg,.mpg" style="display: none;">
                 </div>
-                <button id="local-modal-folder" class="plexd-button plexd-button-secondary plexd-folder-btn" style="margin-top: 10px; width: 100%;">
+                <button id="local-modal-folder" class="plexd-button plexd-button-secondary" style="margin-top: 10px; width: 100%; white-space: nowrap; overflow: visible;">
                     Select Folder to Search...
                 </button>
+                <div id="local-modal-status" class="plexd-modal-hint" style="color: #4ade80; min-height: 20px;"></div>
                 <div class="plexd-modal-hint">
                     Files will be matched by name. Use "Select Folder" to auto-find files in a directory.
                 </div>
@@ -3589,12 +3610,22 @@ const PlexdApp = (function() {
 
         // Folder selection (File System Access API)
         const folderBtn = document.getElementById('local-modal-folder');
+        const statusDiv = document.getElementById('local-modal-status');
+
+        function setStatus(msg, isError = false) {
+            if (statusDiv) {
+                statusDiv.textContent = msg;
+                statusDiv.style.color = isError ? '#f87171' : '#4ade80';
+            }
+        }
+
         if ('showDirectoryPicker' in window) {
             folderBtn.addEventListener('click', async () => {
                 try {
-                    folderBtn.textContent = 'Selecting folder...';
+                    folderBtn.disabled = true;
+                    setStatus('Selecting folder...');
                     const dirHandle = await window.showDirectoryPicker();
-                    folderBtn.textContent = 'Searching...';
+                    setStatus('Searching...');
 
                     // Recursively search for video files, skipping inaccessible files
                     const foundFiles = [];
@@ -3610,7 +3641,7 @@ const PlexdApp = (function() {
                                         scannedCount++;
                                         // Update UI periodically
                                         if (scannedCount % 50 === 0) {
-                                            folderBtn.textContent = `Scanning... (${scannedCount} files)`;
+                                            setStatus(`Scanning... ${scannedCount} files checked`);
                                         }
                                         const file = await entry.getFile();
                                         if (isVideoFile(file)) {
@@ -3643,39 +3674,38 @@ const PlexdApp = (function() {
                     if (foundFiles.length > 0) {
                         handleFiles(foundFiles);
                         const matchedCount = providedFiles.filter(Boolean).length;
-                        folderBtn.textContent = `Found ${foundFiles.length} videos, matched ${matchedCount}`;
+                        setStatus(`Found ${foundFiles.length} videos, matched ${matchedCount} of ${expectedFiles.length} needed`);
                     } else {
-                        folderBtn.textContent = `No videos found (scanned ${scannedCount} files)`;
+                        setStatus(`No videos found in folder (scanned ${scannedCount} files)`, true);
                     }
 
-                    setTimeout(() => {
-                        folderBtn.textContent = 'Select Folder to Search...';
-                    }, 3000);
+                    folderBtn.disabled = false;
                 } catch (err) {
+                    folderBtn.disabled = false;
                     if (err.name !== 'AbortError') {
                         console.error('[Plexd] Folder selection error:', err);
-                        folderBtn.textContent = `Error: ${err.message || 'Folder access failed'}`;
-                        setTimeout(() => {
-                            folderBtn.textContent = 'Select Folder to Search...';
-                        }, 3000);
+                        setStatus(`Error: ${err.message || 'Folder access failed'}`, true);
                     } else {
-                        folderBtn.textContent = 'Select Folder to Search...';
+                        setStatus('');
                     }
                 }
             });
         } else {
             // Hide button if not supported
             folderBtn.style.display = 'none';
+            setStatus('Folder search not supported in this browser', true);
         }
 
         // Button handlers
         document.getElementById('local-modal-cancel').addEventListener('click', () => {
+            console.log('[Plexd] Local files modal: Cancel clicked');
             // Revoke any created blob URLs
             providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
             modal.remove();
         });
 
         document.getElementById('local-modal-skip').addEventListener('click', () => {
+            console.log('[Plexd] Local files modal: Skip clicked, calling onContinue([])');
             // Revoke any created blob URLs
             providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
             modal.remove();
@@ -3683,6 +3713,7 @@ const PlexdApp = (function() {
         });
 
         document.getElementById('local-modal-continue').addEventListener('click', () => {
+            console.log(`[Plexd] Local files modal: Continue clicked with ${providedFiles.filter(Boolean).length} files`);
             modal.remove();
             onContinue(providedFiles);
         });

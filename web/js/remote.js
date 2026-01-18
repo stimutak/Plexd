@@ -1,181 +1,595 @@
 /**
- * Plexd Remote Control
- *
- * Mobile-optimized remote control for Plexd via BroadcastChannel + localStorage
- * Works both same-device (BroadcastChannel) and cross-device (localStorage)
+ * Plexd Remote Control - iOS Optimized
+ * Beautiful, minimal, intuitive remote interface
  */
 
-const PlexdRemoteClient = (function() {
+const PlexdRemote = (function() {
     'use strict';
 
+    // ============================================
+    // State
+    // ============================================
     let channel = null;
     let state = null;
     let connected = false;
     let lastStateTime = 0;
-    let connectionCheckInterval = null;
-    let statePollInterval = null;
     let selectedStreamId = null;
+    let playerExpanded = false;
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
+    const POLL_INTERVAL = 300;
+    const CONNECTION_TIMEOUT = 2000;
 
-    // DOM elements
-    const elements = {};
+    // ============================================
+    // DOM Elements
+    // ============================================
+    const $ = (id) => document.getElementById(id);
+    const el = {};
 
-    /**
-     * Initialize the remote control
-     */
-    function init() {
-        // Cache DOM elements
-        cacheElements();
+    function cacheElements() {
+        // Main sections
+        el.connection = $('connection');
+        el.emptyState = $('empty-state');
+        el.streams = $('streams');
 
-        // Set up BroadcastChannel for same-browser communication
+        // Now playing bar
+        el.nowPlaying = $('now-playing');
+        el.npProgressBar = el.nowPlaying?.querySelector('.now-playing-progress-bar');
+        el.npTitle = el.nowPlaying?.querySelector('.now-playing-title');
+        el.npTime = el.nowPlaying?.querySelector('.now-playing-time');
+        el.npPrev = $('np-prev');
+        el.npPlay = $('np-play');
+        el.npNext = $('np-next');
+
+        // Full player
+        el.player = $('player');
+        el.playerTitle = $('player-title');
+        el.playerMeta = $('player-meta');
+        el.playerProgress = $('player-progress');
+        el.playerCurrent = $('player-current');
+        el.playerDuration = $('player-duration');
+
+        // Player controls
+        el.ctrlBack = $('ctrl-back');
+        el.ctrlPrev = $('ctrl-prev');
+        el.ctrlPlay = $('ctrl-play');
+        el.ctrlNext = $('ctrl-next');
+        el.ctrlForward = $('ctrl-forward');
+
+        // Player actions
+        el.actionMute = $('action-mute');
+        el.actionRating = $('action-rating');
+        el.actionFullscreen = $('action-fullscreen');
+        el.actionMore = $('action-more');
+
+        // Bottom sheet
+        el.moreSheet = $('more-sheet');
+        el.sheetBackdrop = el.moreSheet?.querySelector('.sheet-backdrop');
+        el.sheetCancel = $('sheet-cancel');
+        el.optPauseAll = $('opt-pause-all');
+        el.optMuteAll = $('opt-mute-all');
+        el.optGlobalFullscreen = $('opt-global-fullscreen');
+        el.optViewAll = $('opt-view-all');
+        el.optViewFavorites = $('opt-view-favorites');
+        el.optTetris = $('opt-tetris');
+        el.optClean = $('opt-clean');
+    }
+
+    // ============================================
+    // Communication
+    // ============================================
+    function setupCommunication() {
+        // BroadcastChannel for same-browser tabs
         if (typeof BroadcastChannel !== 'undefined') {
             channel = new BroadcastChannel('plexd-remote');
-            channel.onmessage = (event) => {
-                const { action, payload } = event.data;
-                if (action === 'stateUpdate') {
-                    handleStateUpdate(payload);
+            channel.onmessage = (e) => {
+                if (e.data.action === 'stateUpdate') {
+                    handleStateUpdate(e.data.payload);
                 }
             };
         }
 
-        // Set up localStorage polling for cross-device
-        startStatePoll();
-
-        // Listen for storage events (cross-tab on same device)
+        // Listen for localStorage changes (same device, cross-tab)
         window.addEventListener('storage', (e) => {
             if (e.key === STATE_KEY && e.newValue) {
                 try {
-                    handleStateUpdate(JSON.parse(e.newValue));
-                } catch (err) {
-                    // ignore parse errors
-                }
-            }
-        });
-
-        // Set up event listeners
-        setupEventListeners();
-
-        // Request initial state
-        send('ping');
-
-        // Check connection status periodically
-        connectionCheckInterval = setInterval(checkConnection, 1000);
-
-        console.log('Plexd remote client initialized');
-    }
-
-    /**
-     * Poll for state updates (HTTP API + localStorage fallback)
-     */
-    function startStatePoll() {
-        statePollInterval = setInterval(async () => {
-            try {
-                // Try HTTP API first (for cross-device)
-                const res = await fetch('/api/remote/state');
-                if (res.ok) {
-                    const newState = await res.json();
+                    const newState = JSON.parse(e.newValue);
                     if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
                         handleStateUpdate(newState);
                     }
+                } catch (err) { /* ignore */ }
+            }
+        });
+
+        // Poll for state (HTTP API + localStorage fallback)
+        setInterval(pollState, POLL_INTERVAL);
+
+        // Check connection status
+        setInterval(checkConnection, 1000);
+
+        // Initial ping
+        send('ping');
+    }
+
+    async function pollState() {
+        try {
+            // Try HTTP API first
+            const res = await fetch('/api/remote/state');
+            if (res.ok) {
+                const newState = await res.json();
+                if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                    handleStateUpdate(newState);
                     return;
                 }
-            } catch (e) {
-                // API not available, fall back to localStorage
             }
+        } catch (e) { /* API not available */ }
 
-            // localStorage fallback (same device)
-            const stateData = localStorage.getItem(STATE_KEY);
-            if (stateData) {
-                try {
-                    const newState = JSON.parse(stateData);
-                    if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
-                        handleStateUpdate(newState);
-                    }
-                } catch (e) {
-                    // ignore
+        // Fallback to localStorage
+        const stored = localStorage.getItem(STATE_KEY);
+        if (stored) {
+            try {
+                const newState = JSON.parse(stored);
+                if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                    handleStateUpdate(newState);
+                }
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    function send(action, payload = {}) {
+        const command = { action, payload, timestamp: Date.now() };
+
+        // BroadcastChannel
+        if (channel) {
+            channel.postMessage(command);
+        }
+
+        // HTTP API
+        fetch('/api/remote/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(command)
+        }).catch(() => {
+            // Fallback to localStorage
+            try {
+                localStorage.setItem(COMMAND_KEY, JSON.stringify(command));
+            } catch (e) { /* ignore */ }
+        });
+    }
+
+    function handleStateUpdate(newState) {
+        state = newState;
+        lastStateTime = Date.now();
+        selectedStreamId = state.selectedStreamId;
+
+        if (!connected) {
+            connected = true;
+            updateConnectionUI(true);
+        }
+
+        render();
+    }
+
+    function checkConnection() {
+        if (connected && Date.now() - lastStateTime > CONNECTION_TIMEOUT) {
+            connected = false;
+            updateConnectionUI(false);
+            send('ping');
+        }
+    }
+
+    function updateConnectionUI(isConnected) {
+        if (!el.connection) return;
+        el.connection.classList.toggle('connected', isConnected);
+        el.connection.classList.toggle('disconnected', !isConnected);
+    }
+
+    // ============================================
+    // Rendering
+    // ============================================
+    function render() {
+        if (!state) return;
+
+        renderStreams();
+        renderNowPlaying();
+        renderPlayer();
+        renderSheet();
+    }
+
+    function renderStreams() {
+        if (!el.streams || !el.emptyState) return;
+
+        if (!state.streams || state.streams.length === 0) {
+            el.streams.innerHTML = '';
+            el.emptyState.classList.remove('hidden');
+            el.nowPlaying?.classList.add('hidden');
+            return;
+        }
+
+        el.emptyState.classList.add('hidden');
+
+        el.streams.innerHTML = state.streams.map(stream => {
+            const isSelected = stream.id === state.selectedStreamId;
+            const isFullscreen = stream.id === state.fullscreenStreamId;
+            const name = stream.fileName || getDisplayName(stream.url);
+            const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
+            const rating = stream.rating || 0;
+            const ratingClass = rating > 0 ? `rating-${rating}` : '';
+            const ratingStars = rating > 0 ? '\u2605'.repeat(rating) : '';
+
+            return `
+                <div class="stream-card ${isSelected ? 'selected' : ''} ${isFullscreen ? 'fullscreen' : ''} ${ratingClass}"
+                     data-id="${stream.id}">
+                    <div class="stream-card-content">
+                        <div class="stream-card-header">
+                            <div class="stream-card-info">
+                                <div class="stream-card-name">${escapeHtml(name)}</div>
+                                <div class="stream-card-meta">
+                                    <span class="stream-card-status ${stream.paused ? '' : 'playing'}">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            ${stream.paused
+                                                ? '<path d="M6 19h4V5H6zm8-14v14h4V5z"/>'
+                                                : '<path d="M8 5v14l11-7z"/>'}
+                                        </svg>
+                                        ${stream.paused ? 'Paused' : 'Playing'}
+                                    </span>
+                                    ${ratingStars ? `<span class="stream-card-rating">${ratingStars}</span>` : ''}
+                                    ${!stream.muted ? `
+                                        <span class="stream-card-audio">
+                                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                                            </svg>
+                                        </span>
+                                    ` : ''}
+                                </div>
+                            </div>
+                            <button class="stream-card-action" data-action="play">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    ${stream.paused
+                                        ? '<path d="M8 5v14l11-7z"/>'
+                                        : '<path d="M6 19h4V5H6zm8-14v14h4V5z"/>'}
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="stream-card-progress">
+                            <div class="stream-card-progress-bar" style="width: ${progress}%"></div>
+                        </div>
+                        <div class="stream-card-time">
+                            <span>${formatTime(stream.currentTime)}</span>
+                            <span>${formatTime(stream.duration)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        // Attach event listeners
+        el.streams.querySelectorAll('.stream-card').forEach(card => {
+            const id = card.dataset.id;
+
+            // Tap card to select
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.stream-card-action')) return;
+                send('selectStream', { streamId: id });
+            });
+
+            // Double tap for fullscreen
+            let lastTap = 0;
+            card.addEventListener('touchend', (e) => {
+                if (e.target.closest('.stream-card-action')) return;
+                const now = Date.now();
+                if (now - lastTap < 300) {
+                    send('enterFullscreen', { streamId: id });
+                }
+                lastTap = now;
+            });
+
+            // Play button
+            const playBtn = card.querySelector('.stream-card-action');
+            playBtn?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                send('togglePause', { streamId: id });
+            });
+        });
+    }
+
+    function renderNowPlaying() {
+        if (!el.nowPlaying || !state.streams || state.streams.length === 0) {
+            el.nowPlaying?.classList.add('hidden');
+            return;
+        }
+
+        const stream = state.streams.find(s => s.id === selectedStreamId) || state.streams[0];
+        if (!stream) {
+            el.nowPlaying.classList.add('hidden');
+            return;
+        }
+
+        el.nowPlaying.classList.remove('hidden');
+
+        const name = stream.fileName || getDisplayName(stream.url);
+        const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
+
+        if (el.npTitle) el.npTitle.textContent = name;
+        if (el.npTime) el.npTime.textContent = `${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}`;
+        if (el.npProgressBar) el.npProgressBar.style.width = `${progress}%`;
+
+        // Update play button state
+        if (el.npPlay) {
+            el.npPlay.classList.toggle('paused', stream.paused);
+        }
+    }
+
+    function renderPlayer() {
+        if (!el.player || !state.streams || state.streams.length === 0) return;
+
+        const stream = state.streams.find(s => s.id === selectedStreamId) || state.streams[0];
+        if (!stream) return;
+
+        const name = stream.fileName || getDisplayName(stream.url);
+        const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
+        const rating = stream.rating || 0;
+
+        if (el.playerTitle) el.playerTitle.textContent = name;
+        if (el.playerMeta) {
+            const parts = [];
+            if (rating > 0) parts.push('\u2605'.repeat(rating));
+            if (!stream.paused) parts.push('Playing');
+            if (!stream.muted) parts.push('Audio on');
+            el.playerMeta.textContent = parts.join(' \u2022 ');
+        }
+
+        if (el.playerProgress) {
+            el.playerProgress.value = progress;
+            el.playerProgress.style.setProperty('--progress', `${progress}%`);
+        }
+
+        if (el.playerCurrent) el.playerCurrent.textContent = formatTime(stream.currentTime);
+        if (el.playerDuration) el.playerDuration.textContent = formatTime(stream.duration);
+
+        // Play button state
+        if (el.ctrlPlay) {
+            el.ctrlPlay.classList.toggle('paused', stream.paused);
+        }
+
+        // Mute button state
+        if (el.actionMute) {
+            el.actionMute.classList.toggle('muted', stream.muted);
+            const label = el.actionMute.querySelector('span');
+            if (label) label.textContent = stream.muted ? 'Unmute' : 'Mute';
+        }
+
+        // Fullscreen state
+        if (el.actionFullscreen) {
+            const isFs = stream.id === state.fullscreenStreamId;
+            el.actionFullscreen.classList.toggle('active', isFs);
+            const label = el.actionFullscreen.querySelector('span');
+            if (label) label.textContent = isFs ? 'Unfocus' : 'Focus';
+        }
+
+        // Rating button state
+        if (el.actionRating) {
+            el.actionRating.classList.toggle('active', rating > 0);
+            const label = el.actionRating.querySelector('span');
+            if (label) label.textContent = rating > 0 ? `${rating} Star${rating > 1 ? 's' : ''}` : 'Rate';
+        }
+    }
+
+    function renderSheet() {
+        if (!el.moreSheet || !state) return;
+
+        // Update active states for options
+        const anyPlaying = state.streams?.some(s => !s.paused);
+        const anyUnmuted = state.streams?.some(s => !s.muted);
+
+        // Pause all button text
+        if (el.optPauseAll) {
+            const span = el.optPauseAll.querySelector('span');
+            if (span) span.textContent = anyPlaying ? 'Pause All' : 'Play All';
+        }
+
+        // Mute all button text
+        if (el.optMuteAll) {
+            const span = el.optMuteAll.querySelector('span');
+            if (span) span.textContent = anyUnmuted ? 'Mute All' : 'Unmute All';
+        }
+
+        // View mode states
+        if (el.optViewAll) {
+            el.optViewAll.classList.toggle('active', state.viewMode === 'all');
+        }
+        if (el.optViewFavorites) {
+            el.optViewFavorites.classList.toggle('active', state.viewMode !== 'all');
+        }
+
+        // Tetris mode
+        if (el.optTetris) {
+            el.optTetris.classList.toggle('active', state.tetrisMode);
+        }
+
+        // Clean mode
+        if (el.optClean) {
+            el.optClean.classList.toggle('active', state.cleanMode);
+        }
+    }
+
+    // ============================================
+    // Event Handlers
+    // ============================================
+    function setupEventListeners() {
+        // Now Playing bar - tap to expand player
+        el.nowPlaying?.querySelector('.now-playing-info')?.addEventListener('click', () => {
+            expandPlayer();
+        });
+
+        // Now Playing controls
+        el.npPrev?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            send('selectNext', { direction: 'left' });
+        });
+        el.npPlay?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (selectedStreamId) {
+                send('togglePause', { streamId: selectedStreamId });
+            } else {
+                send('togglePauseAll');
+            }
+        });
+        el.npNext?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            send('selectNext', { direction: 'right' });
+        });
+
+        // Player handle - swipe down to close
+        setupPlayerGestures();
+
+        // Player controls
+        el.ctrlBack?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: -10 });
+        });
+        el.ctrlPrev?.addEventListener('click', () => send('selectNext', { direction: 'left' }));
+        el.ctrlPlay?.addEventListener('click', () => {
+            if (selectedStreamId) {
+                send('togglePause', { streamId: selectedStreamId });
+            } else {
+                send('togglePauseAll');
+            }
+        });
+        el.ctrlNext?.addEventListener('click', () => send('selectNext', { direction: 'right' }));
+        el.ctrlForward?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
+        });
+
+        // Player progress scrubbing
+        el.playerProgress?.addEventListener('input', (e) => {
+            if (selectedStreamId && state) {
+                const stream = state.streams?.find(s => s.id === selectedStreamId);
+                if (stream && stream.duration > 0) {
+                    const time = (e.target.value / 100) * stream.duration;
+                    send('seek', { streamId: selectedStreamId, time });
                 }
             }
-        }, 300);
-    }
-
-    /**
-     * Cache DOM element references
-     */
-    function cacheElements() {
-        elements.connectionStatus = document.getElementById('connection-status');
-        elements.statusText = elements.connectionStatus?.querySelector('.status-text');
-        elements.streamList = document.getElementById('stream-list');
-
-        elements.btnPrev = document.getElementById('btn-prev');
-        elements.btnNext = document.getElementById('btn-next');
-        elements.btnPauseAll = document.getElementById('btn-pause-all');
-        elements.btnMuteAll = document.getElementById('btn-mute-all');
-        elements.btnSeekBack = document.getElementById('btn-seek-back');
-        elements.btnSeekFwd = document.getElementById('btn-seek-fwd');
-        elements.btnFullscreen = document.getElementById('btn-fullscreen');
-        elements.btnViewMode = document.getElementById('btn-view-mode');
-        elements.btnTetris = document.getElementById('btn-tetris');
-        elements.btnCoverflow = document.getElementById('btn-coverflow');
-        elements.btnClean = document.getElementById('btn-clean');
-    }
-
-    /**
-     * Set up event listeners for controls
-     */
-    function setupEventListeners() {
-        // Navigation
-        elements.btnPrev?.addEventListener('click', () => send('selectNext', { direction: 'left' }));
-        elements.btnNext?.addEventListener('click', () => send('selectNext', { direction: 'right' }));
-
-        // Playback
-        elements.btnPauseAll?.addEventListener('click', () => send('togglePauseAll'));
-        elements.btnMuteAll?.addEventListener('click', () => send('toggleMuteAll'));
-
-        // Seek
-        elements.btnSeekBack?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                send('seekRelative', { streamId: selectedStreamId, offset: -10 });
-            }
-        });
-        elements.btnSeekFwd?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                send('seekRelative', { streamId: selectedStreamId, offset: 10 });
-            }
         });
 
-        // View controls
-        elements.btnFullscreen?.addEventListener('click', () => send('toggleGlobalFullscreen'));
-        elements.btnViewMode?.addEventListener('click', () => send('cycleViewMode'));
-        elements.btnTetris?.addEventListener('click', () => send('toggleTetrisMode'));
-        elements.btnCoverflow?.addEventListener('click', () => send('toggleCoverflowMode'));
-        elements.btnClean?.addEventListener('click', () => send('toggleCleanMode'));
+        // Player actions
+        el.actionMute?.addEventListener('click', () => {
+            if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
+        });
+        el.actionRating?.addEventListener('click', () => {
+            if (selectedStreamId) send('cycleRating', { streamId: selectedStreamId });
+        });
+        el.actionFullscreen?.addEventListener('click', () => {
+            if (selectedStreamId) {
+                const stream = state?.streams?.find(s => s.id === selectedStreamId);
+                if (stream?.id === state?.fullscreenStreamId) {
+                    send('exitFullscreen');
+                } else {
+                    send('enterFullscreen', { streamId: selectedStreamId });
+                }
+            }
+        });
+        el.actionMore?.addEventListener('click', () => openSheet());
+
+        // Sheet controls
+        el.sheetBackdrop?.addEventListener('click', closeSheet);
+        el.sheetCancel?.addEventListener('click', closeSheet);
+
+        el.optPauseAll?.addEventListener('click', () => {
+            send('togglePauseAll');
+            closeSheet();
+        });
+        el.optMuteAll?.addEventListener('click', () => {
+            send('toggleMuteAll');
+            closeSheet();
+        });
+        el.optGlobalFullscreen?.addEventListener('click', () => {
+            send('toggleGlobalFullscreen');
+            closeSheet();
+        });
+        el.optViewAll?.addEventListener('click', () => {
+            send('setViewMode', { mode: 'all' });
+            closeSheet();
+        });
+        el.optViewFavorites?.addEventListener('click', () => {
+            send('cycleViewMode');
+            closeSheet();
+        });
+        el.optTetris?.addEventListener('click', () => {
+            send('toggleTetrisMode');
+            closeSheet();
+        });
+        el.optClean?.addEventListener('click', () => {
+            send('toggleCleanMode');
+            closeSheet();
+        });
 
         // Swipe gestures on stream list
         setupSwipeGestures();
     }
 
-    /**
-     * Set up swipe gestures for stream selection
-     */
-    function setupSwipeGestures() {
-        let touchStartX = 0;
-        let touchStartY = 0;
+    function setupPlayerGestures() {
+        if (!el.player) return;
 
-        elements.streamList?.addEventListener('touchstart', (e) => {
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
+        let startY = 0;
+        let currentY = 0;
+
+        const handle = el.player.querySelector('.player-handle');
+        const content = el.player.querySelector('.player-content');
+
+        // Tap handle area to collapse
+        handle?.addEventListener('click', collapsePlayer);
+
+        // Swipe down to collapse
+        el.player.addEventListener('touchstart', (e) => {
+            if (!playerExpanded) return;
+            startY = e.touches[0].clientY;
         }, { passive: true });
 
-        elements.streamList?.addEventListener('touchend', (e) => {
-            const touchEndX = e.changedTouches[0].clientX;
-            const touchEndY = e.changedTouches[0].clientY;
+        el.player.addEventListener('touchmove', (e) => {
+            if (!playerExpanded) return;
+            currentY = e.touches[0].clientY;
+            const deltaY = currentY - startY;
 
-            const deltaX = touchEndX - touchStartX;
-            const deltaY = touchEndY - touchStartY;
+            if (deltaY > 0) {
+                // Swiping down
+                el.player.style.transform = `translateY(${Math.min(deltaY, 200)}px)`;
+            }
+        }, { passive: true });
 
-            // Only handle horizontal swipes (not vertical scrolling)
+        el.player.addEventListener('touchend', () => {
+            if (!playerExpanded) return;
+            const deltaY = currentY - startY;
+
+            el.player.style.transform = '';
+
+            if (deltaY > 100) {
+                collapsePlayer();
+            }
+
+            startY = 0;
+            currentY = 0;
+        }, { passive: true });
+    }
+
+    function setupSwipeGestures() {
+        if (!el.streams) return;
+
+        let startX = 0;
+        let startY = 0;
+
+        el.streams.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        }, { passive: true });
+
+        el.streams.addEventListener('touchend', (e) => {
+            const endX = e.changedTouches[0].clientX;
+            const endY = e.changedTouches[0].clientY;
+            const deltaX = endX - startX;
+            const deltaY = endY - startY;
+
+            // Only handle horizontal swipes
             if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
                 if (deltaX > 0) {
                     send('selectNext', { direction: 'left' });
@@ -186,280 +600,53 @@ const PlexdRemoteClient = (function() {
         }, { passive: true });
     }
 
-    /**
-     * Send a command to the main display
-     */
-    function send(action, payload = {}) {
-        const command = {
-            action,
-            payload,
-            timestamp: Date.now()
-        };
-
-        // BroadcastChannel for same-browser
-        if (channel) {
-            channel.postMessage(command);
-        }
-
-        // HTTP API for cross-device (iPhone to MBP)
-        fetch('/api/remote/command', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(command)
-        }).catch(() => {
-            // API not available, fall back to localStorage
-            try {
-                localStorage.setItem(COMMAND_KEY, JSON.stringify(command));
-            } catch (e) {
-                console.warn('Could not write command');
-            }
-        });
+    // ============================================
+    // Player Expand/Collapse
+    // ============================================
+    function expandPlayer() {
+        if (!el.player) return;
+        playerExpanded = true;
+        el.player.classList.add('expanded');
+        document.body.style.overflow = 'hidden';
     }
 
-    /**
-     * Handle state update from main display
-     */
-    function handleStateUpdate(newState) {
-        state = newState;
-        lastStateTime = Date.now();
-        selectedStreamId = state.selectedStreamId;
-
-        if (!connected) {
-            connected = true;
-            updateConnectionStatus(true);
-        }
-
-        renderStreamList();
-        updateControls();
+    function collapsePlayer() {
+        if (!el.player) return;
+        playerExpanded = false;
+        el.player.classList.remove('expanded');
+        document.body.style.overflow = '';
     }
 
-    /**
-     * Check if we're still connected (receiving updates)
-     */
-    function checkConnection() {
-        const timeSinceLastUpdate = Date.now() - lastStateTime;
-
-        if (connected && timeSinceLastUpdate > 2000) {
-            connected = false;
-            updateConnectionStatus(false);
-            // Try to reconnect
-            send('ping');
-        }
+    // ============================================
+    // Sheet Open/Close
+    // ============================================
+    function openSheet() {
+        if (!el.moreSheet) return;
+        el.moreSheet.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
     }
 
-    /**
-     * Update connection status UI
-     */
-    function updateConnectionStatus(isConnected) {
-        if (!elements.connectionStatus) return;
-
-        if (isConnected) {
-            elements.connectionStatus.classList.remove('disconnected');
-            elements.connectionStatus.classList.add('connected');
-            if (elements.statusText) {
-                elements.statusText.textContent = 'Connected';
-            }
-        } else {
-            elements.connectionStatus.classList.remove('connected');
-            elements.connectionStatus.classList.add('disconnected');
-            if (elements.statusText) {
-                elements.statusText.textContent = 'Disconnected';
-            }
-        }
+    function closeSheet() {
+        if (!el.moreSheet) return;
+        el.moreSheet.classList.add('hidden');
+        document.body.style.overflow = '';
     }
 
-    /**
-     * Show error message
-     */
-    function showError(message) {
-        if (elements.streamList) {
-            elements.streamList.innerHTML = `
-                <div class="empty-state error">
-                    <p>${escapeHtml(message)}</p>
-                </div>
-            `;
-        }
-    }
-
-    /**
-     * Render the stream list
-     */
-    function renderStreamList() {
-        if (!state || !elements.streamList) return;
-
-        if (state.streams.length === 0) {
-            elements.streamList.innerHTML = `
-                <div class="empty-state">
-                    <p>No streams playing</p>
-                    <p class="hint">Add streams in the main Plexd app</p>
-                </div>
-            `;
-            return;
-        }
-
-        elements.streamList.innerHTML = state.streams.map(stream => {
-            const isSelected = stream.id === state.selectedStreamId;
-            const isFullscreen = stream.id === state.fullscreenStreamId;
-            const displayName = stream.fileName || getDisplayName(stream.url);
-            const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
-            const rating = stream.rating || 0;
-            const ratingStars = rating > 0 ? '★'.repeat(rating) : '';
-            const ratingClass = rating > 0 ? `rating-${rating}` : '';
-
-            return `
-                <div class="stream-item ${isSelected ? 'selected' : ''} ${isFullscreen ? 'fullscreen' : ''} ${ratingClass}"
-                     data-stream-id="${stream.id}">
-                    <div class="stream-info">
-                        <div class="stream-name">${escapeHtml(displayName)}</div>
-                        <div class="stream-meta">
-                            <span class="stream-state ${stream.paused ? 'paused' : 'playing'}">
-                                ${stream.paused ? '⏸' : '▶'}
-                            </span>
-                            <span class="stream-time">${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}</span>
-                            ${ratingStars ? `<span class="stream-rating ${ratingClass}">${ratingStars}</span>` : ''}
-                            ${stream.muted ? '' : '<span class="stream-audio">🔊</span>'}
-                        </div>
-                    </div>
-                    <div class="stream-progress">
-                        <div class="stream-progress-bar" style="width: ${progress}%"></div>
-                    </div>
-                    <div class="stream-actions">
-                        <button class="stream-btn play-btn" data-action="togglePause" title="${stream.paused ? 'Play' : 'Pause'}">
-                            ${stream.paused ? '▶' : '⏸'}
-                        </button>
-                        <button class="stream-btn mute-btn ${stream.muted ? '' : 'active'}" data-action="toggleMute" title="${stream.muted ? 'Unmute' : 'Mute'}">
-                            ${stream.muted ? '🔇' : '🔊'}
-                        </button>
-                        <button class="stream-btn rating-btn ${ratingClass}" data-action="cycleRating" title="Rate">
-                            ${rating > 0 ? '★' : '☆'}
-                        </button>
-                        <button class="stream-btn fullscreen-btn ${isFullscreen ? 'active' : ''}" data-action="enterFullscreen" title="Fullscreen">
-                            ⛶
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        // Add click handlers for stream items
-        elements.streamList.querySelectorAll('.stream-item').forEach(item => {
-            const streamId = item.dataset.streamId;
-
-            // Tap to select
-            item.addEventListener('click', (e) => {
-                if (e.target.closest('.stream-btn')) return; // Don't select if clicking a button
-                send('selectStream', { streamId });
-            });
-
-            // Double tap for fullscreen
-            let lastTap = 0;
-            item.addEventListener('touchend', (e) => {
-                if (e.target.closest('.stream-btn')) return;
-                const now = Date.now();
-                if (now - lastTap < 300) {
-                    send('enterFullscreen', { streamId });
-                }
-                lastTap = now;
-            });
-        });
-
-        // Add click handlers for stream action buttons
-        elements.streamList.querySelectorAll('.stream-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const streamId = btn.closest('.stream-item').dataset.streamId;
-                const action = btn.dataset.action;
-
-                switch (action) {
-                    case 'togglePause':
-                        send('togglePause', { streamId });
-                        break;
-                    case 'toggleMute':
-                        send('toggleMute', { streamId });
-                        break;
-                    case 'cycleRating':
-                        send('cycleRating', { streamId });
-                        break;
-                    case 'enterFullscreen':
-                        send('enterFullscreen', { streamId });
-                        break;
-                }
-            });
-        });
-    }
-
-    /**
-     * Update control button states
-     */
-    function updateControls() {
-        if (!state) return;
-
-        // Check if any stream is paused
-        const allPaused = state.streams.length > 0 && state.streams.every(s => s.paused);
-        const anyPlaying = state.streams.some(s => !s.paused);
-
-        if (elements.btnPauseAll) {
-            elements.btnPauseAll.querySelector('.icon').textContent = anyPlaying ? '⏸' : '▶';
-            elements.btnPauseAll.classList.toggle('active', anyPlaying);
-        }
-
-        // Check if any stream is unmuted
-        const anyUnmuted = state.streams.some(s => !s.muted);
-        if (elements.btnMuteAll) {
-            elements.btnMuteAll.querySelector('.icon').textContent = anyUnmuted ? '🔊' : '🔇';
-            elements.btnMuteAll.classList.toggle('active', anyUnmuted);
-        }
-
-        // Fullscreen state
-        if (elements.btnFullscreen) {
-            elements.btnFullscreen.classList.toggle('active', state.fullscreenMode !== 'none');
-        }
-
-        // View mode
-        if (elements.btnViewMode) {
-            const viewText = state.viewMode === 'all' ? 'All' : '★'.repeat(state.viewMode);
-            elements.btnViewMode.querySelector('.icon').textContent = viewText;
-        }
-
-        // Tetris mode
-        if (elements.btnTetris) {
-            elements.btnTetris.classList.toggle('active', state.tetrisMode);
-        }
-
-        // Clean mode
-        if (elements.btnClean) {
-            elements.btnClean.classList.toggle('active', state.cleanMode);
-        }
-
-        // Enable/disable seek buttons based on selection
-        const hasSelection = state.selectedStreamId !== null;
-        if (elements.btnSeekBack) {
-            elements.btnSeekBack.disabled = !hasSelection;
-        }
-        if (elements.btnSeekFwd) {
-            elements.btnSeekFwd.disabled = !hasSelection;
-        }
-    }
-
-    /**
-     * Get display name from URL
-     */
+    // ============================================
+    // Utilities
+    // ============================================
     function getDisplayName(url) {
         try {
             const urlObj = new URL(url);
             const pathname = urlObj.pathname;
             const filename = pathname.split('/').pop() || urlObj.hostname;
-            // Decode and truncate
             const decoded = decodeURIComponent(filename);
-            return decoded.length > 40 ? decoded.substring(0, 37) + '...' : decoded;
+            return decoded.length > 50 ? decoded.substring(0, 47) + '...' : decoded;
         } catch (e) {
-            return url.substring(0, 40);
+            return url.substring(0, 50);
         }
     }
 
-    /**
-     * Format time in MM:SS or HH:MM:SS
-     */
     function formatTime(seconds) {
         if (!seconds || !isFinite(seconds)) return '0:00';
 
@@ -473,40 +660,37 @@ const PlexdRemoteClient = (function() {
         return `${m}:${s.toString().padStart(2, '0')}`;
     }
 
-    /**
-     * Escape HTML for safe rendering
-     */
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
 
-    /**
-     * Cleanup
-     */
-    function destroy() {
-        if (connectionCheckInterval) {
-            clearInterval(connectionCheckInterval);
-        }
-        if (channel) {
-            channel.close();
-        }
+    // ============================================
+    // Initialize
+    // ============================================
+    function init() {
+        cacheElements();
+        setupEventListeners();
+        setupCommunication();
+        console.log('Plexd Remote initialized');
     }
 
-    // Initialize when DOM is ready
+    // Auto-init when DOM ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
         init();
     }
 
+    // Public API
     return {
         init,
         send,
         getState: () => state,
-        destroy
+        expandPlayer,
+        collapsePlayer
     };
 })();
 
-window.PlexdRemoteClient = PlexdRemoteClient;
+window.PlexdRemote = PlexdRemote;

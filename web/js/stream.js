@@ -3851,6 +3851,109 @@ const PlexdStream = (function() {
         }
     });
 
+    // =========================================
+    // Video Frame Capture for Remote Thumbnails
+    // =========================================
+
+    // Reusable canvas for frame capture (avoid creating new ones each time)
+    const captureCanvas = document.createElement('canvas');
+    const captureCtx = captureCanvas.getContext('2d');
+
+    // Cache for thumbnails (avoid recapturing identical frames)
+    const thumbnailCache = new Map();
+    const THUMBNAIL_WIDTH = 160;  // Small enough for fast transfer
+    const THUMBNAIL_HEIGHT = 90;  // 16:9 aspect ratio
+    const THUMBNAIL_QUALITY = 0.6; // JPEG quality (0-1)
+    const THUMBNAIL_CACHE_TTL = 2000; // Cache for 2 seconds
+
+    /**
+     * Capture a single frame from a video element
+     * Returns base64 JPEG data URL or null if capture fails (CORS, etc.)
+     */
+    function captureVideoFrame(video, width = THUMBNAIL_WIDTH, height = THUMBNAIL_HEIGHT) {
+        if (!video || video.readyState < 2) {
+            return null; // Video not ready
+        }
+
+        try {
+            // Set canvas size
+            captureCanvas.width = width;
+            captureCanvas.height = height;
+
+            // Draw video frame to canvas (scaled down)
+            captureCtx.drawImage(video, 0, 0, width, height);
+
+            // Convert to base64 JPEG
+            return captureCanvas.toDataURL('image/jpeg', THUMBNAIL_QUALITY);
+        } catch (e) {
+            // CORS or other security error - video is tainted
+            // This is expected for cross-origin streams
+            return null;
+        }
+    }
+
+    /**
+     * Capture frame for a specific stream by ID
+     * Uses caching to avoid redundant captures
+     */
+    function captureStreamFrame(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream || !stream.video) {
+            return null;
+        }
+
+        // Check cache
+        const cached = thumbnailCache.get(streamId);
+        if (cached && Date.now() - cached.timestamp < THUMBNAIL_CACHE_TTL) {
+            return cached.data;
+        }
+
+        // Capture new frame
+        const thumbnail = captureVideoFrame(stream.video);
+
+        // Update cache (even if null, to avoid repeated failed attempts)
+        thumbnailCache.set(streamId, {
+            data: thumbnail,
+            timestamp: Date.now()
+        });
+
+        return thumbnail;
+    }
+
+    /**
+     * Capture frames for all streams
+     * Returns Map of streamId -> base64 data URL (or null)
+     */
+    function captureAllFrames() {
+        const frames = new Map();
+        streams.forEach((stream, id) => {
+            frames.set(id, captureStreamFrame(id));
+        });
+        return frames;
+    }
+
+    /**
+     * Get all stream thumbnails as an object (for JSON serialization)
+     * Format: { streamId: base64DataUrl, ... }
+     */
+    function getAllThumbnails() {
+        const thumbnails = {};
+        streams.forEach((stream, id) => {
+            const thumb = captureStreamFrame(id);
+            if (thumb) {
+                thumbnails[id] = thumb;
+            }
+        });
+        return thumbnails;
+    }
+
+    /**
+     * Clear thumbnail cache (call when streams change significantly)
+     */
+    function clearThumbnailCache() {
+        thumbnailCache.clear();
+    }
+
     // Public API
     return {
         createStream,
@@ -3950,7 +4053,12 @@ const PlexdStream = (function() {
         startHealthMonitoring,
         stopHealthMonitoring,
         // Local file detection
-        isLocalFile
+        isLocalFile,
+        // Video frame capture for remote thumbnails
+        captureStreamFrame,
+        captureAllFrames,
+        getAllThumbnails,
+        clearThumbnailCache
     };
 })();
 

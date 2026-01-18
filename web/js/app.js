@@ -3486,8 +3486,11 @@ const PlexdApp = (function() {
                     <div class="plexd-drop-text">Drop video files here or click to browse</div>
                     <input type="file" id="local-files-input" multiple accept="video/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.ogv,.3gp,.flv,.mpeg,.mpg" style="display: none;">
                 </div>
+                <button id="local-modal-folder" class="plexd-button plexd-button-secondary plexd-folder-btn" style="margin-top: 10px; width: 100%;">
+                    Select Folder to Search...
+                </button>
                 <div class="plexd-modal-hint">
-                    Files will be matched by name. You can skip files you don't have.
+                    Files will be matched by name. Use "Select Folder" to auto-find files in a directory.
                 </div>
                 <div class="plexd-modal-actions">
                     <button id="local-modal-cancel" class="plexd-button plexd-button-secondary">Cancel</button>
@@ -3518,9 +3521,9 @@ const PlexdApp = (function() {
                     const fileBase = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
 
                     if (!matched && (file.name === expected || expectedBase === fileBase)) {
-                        // Create blob URL and store
+                        // Create blob URL and store with File object for efficient saving
                         const objectUrl = URL.createObjectURL(file);
-                        providedFiles[idx] = { url: objectUrl, fileName: file.name };
+                        providedFiles[idx] = { url: objectUrl, fileName: file.name, fileObj: file };
 
                         // Update UI
                         item.classList.add('plexd-local-file-matched');
@@ -3541,7 +3544,7 @@ const PlexdApp = (function() {
                         if (providedFiles[idx] === undefined &&
                             (expectedBase.includes(fileBase) || fileBase.includes(expectedBase))) {
                             const objectUrl = URL.createObjectURL(file);
-                            providedFiles[idx] = { url: objectUrl, fileName: file.name };
+                            providedFiles[idx] = { url: objectUrl, fileName: file.name, fileObj: file };
                             item.classList.add('plexd-local-file-matched');
                             item.querySelector('.plexd-local-file-status').textContent = '✓ ' + file.name;
                             matched = true;
@@ -3570,6 +3573,61 @@ const PlexdApp = (function() {
             dropZone.classList.remove('plexd-drop-active');
             if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files);
         });
+
+        // Folder selection (File System Access API)
+        const folderBtn = document.getElementById('local-modal-folder');
+        if ('showDirectoryPicker' in window) {
+            folderBtn.addEventListener('click', async () => {
+                try {
+                    folderBtn.textContent = 'Selecting folder...';
+                    const dirHandle = await window.showDirectoryPicker();
+                    folderBtn.textContent = 'Searching...';
+
+                    // Recursively search for video files
+                    const foundFiles = [];
+                    async function searchDir(handle, depth = 0) {
+                        if (depth > 5) return; // Limit recursion depth
+                        for await (const entry of handle.values()) {
+                            if (entry.kind === 'file') {
+                                const file = await entry.getFile();
+                                if (isVideoFile(file)) {
+                                    foundFiles.push(file);
+                                }
+                            } else if (entry.kind === 'directory') {
+                                await searchDir(entry, depth + 1);
+                            }
+                        }
+                    }
+
+                    await searchDir(dirHandle);
+
+                    if (foundFiles.length > 0) {
+                        handleFiles(foundFiles);
+                        const matchedCount = providedFiles.filter(Boolean).length;
+                        folderBtn.textContent = `Found ${foundFiles.length} videos, matched ${matchedCount}`;
+                    } else {
+                        folderBtn.textContent = 'No videos found in folder';
+                    }
+
+                    setTimeout(() => {
+                        folderBtn.textContent = 'Select Folder to Search...';
+                    }, 3000);
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        console.error('[Plexd] Folder selection error:', err);
+                        folderBtn.textContent = 'Folder access failed';
+                        setTimeout(() => {
+                            folderBtn.textContent = 'Select Folder to Search...';
+                        }, 2000);
+                    } else {
+                        folderBtn.textContent = 'Select Folder to Search...';
+                    }
+                }
+            });
+        } else {
+            // Hide button if not supported
+            folderBtn.style.display = 'none';
+        }
 
         // Button handlers
         document.getElementById('local-modal-cancel').addEventListener('click', () => {
@@ -3664,7 +3722,8 @@ const PlexdApp = (function() {
             if (file && file.url) {
                 const originalFileName = localFiles[index];
                 console.log(`[Plexd] Loading local file ${index + 1}: ${file.fileName}`);
-                addStreamFromFile(file.url, file.fileName);
+                // Pass fileObj if available for efficient saving later
+                addStreamFromFile(file.url, file.fileName, file.fileObj || null);
                 localLoaded++;
 
                 // Restore rating if saved (ratings are now automatically loaded via syncRatingStatus)

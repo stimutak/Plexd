@@ -1646,19 +1646,25 @@ const PlexdStream = (function() {
      * Used when upgrading from browser-fill to true-focused
      */
     function enterTrueFocusedFullscreen(streamId) {
+        console.log(`[Plexd] enterTrueFocusedFullscreen: streamId=${streamId}`);
         const container = document.querySelector('.plexd-app');
         const stream = streams.get(streamId);
-        if (!container || !stream) return;
+        if (!container || !stream) {
+            console.log(`[Plexd] enterTrueFocusedFullscreen: container=${!!container}, stream=${!!stream} - aborting`);
+            return;
+        }
 
         // Keep the focused stream state
         stream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = streamId;
         setAppFocusedMode(true);
+        console.log(`[Plexd] enterTrueFocusedFullscreen: set fullscreenStreamId=${fullscreenStreamId}, added plexd-fullscreen class`);
 
         container.tabIndex = 0;
 
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-focused';
+            console.log(`[Plexd] enterTrueFocusedFullscreen: requestFullscreen succeeded, mode=${fullscreenMode}`);
             stream.wrapper.focus();
             triggerLayoutUpdate();
         }).catch(err => {
@@ -1718,6 +1724,8 @@ const PlexdStream = (function() {
      * Only returns a stream if we're actually in a fullscreen mode
      */
     function getFullscreenStream() {
+        console.log(`[Plexd] getFullscreenStream: mode=${fullscreenMode}, fullscreenStreamId=${fullscreenStreamId}`);
+
         // Validate state: if fullscreenMode is 'none', we shouldn't have a fullscreen stream
         if (fullscreenMode === 'none') {
             // State cleanup: if we have a stale fullscreenStreamId, clear it
@@ -1729,6 +1737,7 @@ const PlexdStream = (function() {
                 }
                 fullscreenStreamId = null;
             }
+            console.log('[Plexd] getFullscreenStream: returning null (mode is none)');
             return null;
         }
 
@@ -1737,10 +1746,11 @@ const PlexdStream = (function() {
             const stream = streams.get(fullscreenStreamId);
             // Verify the stream still exists and has the fullscreen class
             if (stream && stream.wrapper.classList.contains('plexd-fullscreen')) {
+                console.log(`[Plexd] getFullscreenStream: returning stream ${fullscreenStreamId}`);
                 return stream;
             }
             // State is inconsistent - clean up
-            console.log('[Plexd] Fullscreen state inconsistent, cleaning up');
+            console.log(`[Plexd] Fullscreen state inconsistent (stream=${!!stream}, hasClass=${stream?.wrapper?.classList?.contains('plexd-fullscreen')}), cleaning up`);
             fullscreenStreamId = null;
             fullscreenMode = 'none';
             return null;
@@ -1879,14 +1889,18 @@ const PlexdStream = (function() {
             const isThisFocused = activeEl === wrapper;
             const isThisFullscreen = document.fullscreenElement === wrapper;
 
+            console.log(`[Plexd] Wrapper keydown: key=${e.key}, isThisFocused=${isThisFocused}, isThisFullscreen=${isThisFullscreen}, fullscreenMode=${fullscreenMode}, streamId=${stream.id}`);
+
             // If we're not focused and not fullscreen element, skip
             if (!isThisFocused && !isThisFullscreen) {
+                console.log('[Plexd] Wrapper keydown: skipping (not focused, not fullscreen element)');
                 return;
             }
 
             // If we're the fullscreen element but ANOTHER stream wrapper has focus, skip
             // (let the focused wrapper handle it to avoid double-dispatch)
             if (isThisFullscreen && !isThisFocused && activeEl && activeEl.classList.contains('plexd-stream')) {
+                console.log('[Plexd] Wrapper keydown: skipping (fullscreen but another wrapper has focus)');
                 return;
             }
 
@@ -1894,6 +1908,7 @@ const PlexdStream = (function() {
             // In grid mode (fullscreenMode === 'none'), let events bubble naturally to document
             if (fullscreenMode !== 'true-focused' && fullscreenMode !== 'browser-fill') {
                 // Not in fullscreen mode - don't interfere, let event bubble to document
+                console.log(`[Plexd] Wrapper keydown: letting bubble (mode is ${fullscreenMode})`);
                 return;
             }
 
@@ -1902,6 +1917,7 @@ const PlexdStream = (function() {
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?]$/.test(e.key);
             if (propagateKeys) {
+                console.log(`[Plexd] Wrapper keydown: dispatching ${e.key} to document`);
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
                 // in fullscreen/focused contexts. We MUST stop propagation of the original event

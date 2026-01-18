@@ -818,21 +818,27 @@ const PlexdApp = (function() {
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
                 const mode = PlexdStream.getFullscreenMode();
+                console.log(`[Plexd] F key pressed, current mode=${mode}`);
 
                 // F toggles true fullscreen
                 if (mode === 'true-grid' || mode === 'true-focused') {
                     // Exit true fullscreen completely
+                    console.log('[Plexd] F key: exiting true fullscreen');
                     PlexdStream.exitTrueFullscreen();
                 } else if (mode === 'browser-fill') {
                     // Already focused on a stream - upgrade to true fullscreen while keeping focus
                     const focusedStream = PlexdStream.getFullscreenStream();
+                    console.log(`[Plexd] F key: browser-fill mode, focusedStream=${focusedStream ? focusedStream.id : 'null'}`);
                     if (focusedStream) {
+                        console.log('[Plexd] F key: calling enterTrueFocusedFullscreen');
                         PlexdStream.enterTrueFocusedFullscreen(focusedStream.id);
                     } else {
+                        console.log('[Plexd] F key: no focused stream, calling enterGridFullscreen');
                         PlexdStream.enterGridFullscreen();
                     }
                 } else {
                     // Enter true fullscreen (grid mode)
+                    console.log('[Plexd] F key: mode is none, calling enterGridFullscreen');
                     PlexdStream.enterGridFullscreen();
                 }
             }
@@ -2743,8 +2749,11 @@ const PlexdApp = (function() {
     function handleArrowNav(direction, fullscreenStream, selected) {
         const mode = PlexdStream.getFullscreenMode();
 
+        console.log(`[Plexd] handleArrowNav: direction=${direction}, mode=${mode}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}, selected=${selected ? selected.id : 'null'}`);
+
         if (fullscreenStream) {
             // In focused mode - switch to next focused stream
+            console.log('[Plexd] handleArrowNav: calling switchFullscreenStream');
             switchFullscreenStream(direction);
         } else if (mode === 'true-grid') {
             // In true-grid mode - select and immediately focus the next stream
@@ -2778,6 +2787,7 @@ const PlexdApp = (function() {
             }
         } else {
             // Normal grid mode - just select next stream
+            console.log('[Plexd] handleArrowNav: fallback to selectNextStream (not fullscreen, not true-grid, not coverflow)');
             PlexdStream.selectNextStream(direction);
         }
     }
@@ -2791,12 +2801,21 @@ const PlexdApp = (function() {
      */
     function switchFullscreenStream(direction) {
         const fullscreenStream = PlexdStream.getFullscreenStream();
-        if (!fullscreenStream) return;
+        console.log(`[Plexd] switchFullscreenStream: direction=${direction}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}`);
+        if (!fullscreenStream) {
+            console.log('[Plexd] switchFullscreenStream: no fullscreen stream, returning');
+            return;
+        }
 
         const nextId = PlexdStream.getSpatialNeighborStreamId(fullscreenStream.id, direction);
-        if (!nextId || nextId === fullscreenStream.id) return;
+        console.log(`[Plexd] switchFullscreenStream: nextId=${nextId}`);
+        if (!nextId || nextId === fullscreenStream.id) {
+            console.log('[Plexd] switchFullscreenStream: no next stream or same stream, returning');
+            return;
+        }
 
         const mode = PlexdStream.getFullscreenMode();
+        console.log(`[Plexd] switchFullscreenStream: calling enterFocusedMode(${nextId}), mode=${mode}`);
         PlexdStream.enterFocusedMode(nextId);
 
         // If was in true-focused mode, ensure wrapper gets focus for keyboard events
@@ -4944,35 +4963,55 @@ const PlexdRemote = (function() {
         console.log('Plexd remote control listener initialized');
     }
 
+    // Track if HTTP API is available (avoids spamming console with 404 errors)
+    let httpApiAvailable = true;
+    let httpApiCheckCount = 0;
+
     /**
      * Poll for commands from remote devices (HTTP API + localStorage fallback)
      */
     function startCommandPolling() {
         // HTTP API polling for cross-device (iPhone to MBP)
         commandPollInterval = setInterval(async () => {
-            try {
-                const res = await fetch('/api/remote/command');
-                if (res.ok) {
-                    const cmd = await res.json();
-                    if (cmd && cmd.action) {
-                        handleRemoteCommand(cmd.action, cmd.payload);
+            // Only try HTTP API if it's available (or we haven't checked yet)
+            if (httpApiAvailable) {
+                try {
+                    const res = await fetch('/api/remote/command');
+                    if (res.ok) {
+                        const cmd = await res.json();
+                        if (cmd && cmd.action) {
+                            handleRemoteCommand(cmd.action, cmd.payload);
+                        }
+                    } else if (res.status === 404 || res.status === 501) {
+                        // API not implemented on this server - disable HTTP polling
+                        httpApiCheckCount++;
+                        if (httpApiCheckCount >= 2) {
+                            httpApiAvailable = false;
+                            console.log('[Plexd] Remote API not available, using localStorage fallback only');
+                        }
+                    }
+                } catch (e) {
+                    // Network error - disable HTTP polling
+                    httpApiCheckCount++;
+                    if (httpApiCheckCount >= 2) {
+                        httpApiAvailable = false;
                     }
                 }
-            } catch (e) {
-                // API not available, fall back to localStorage
-                const cmdData = localStorage.getItem(COMMAND_KEY);
-                if (cmdData) {
-                    try {
-                        const cmd = JSON.parse(cmdData);
-                        if (Date.now() - cmd.timestamp < 5000) {
-                            localStorage.removeItem(COMMAND_KEY);
-                            handleRemoteCommand(cmd.action, cmd.payload);
-                        } else {
-                            localStorage.removeItem(COMMAND_KEY);
-                        }
-                    } catch (err) {
+            }
+
+            // Always check localStorage fallback
+            const cmdData = localStorage.getItem(COMMAND_KEY);
+            if (cmdData) {
+                try {
+                    const cmd = JSON.parse(cmdData);
+                    if (Date.now() - cmd.timestamp < 5000) {
+                        localStorage.removeItem(COMMAND_KEY);
+                        handleRemoteCommand(cmd.action, cmd.payload);
+                    } else {
                         localStorage.removeItem(COMMAND_KEY);
                     }
+                } catch (err) {
+                    localStorage.removeItem(COMMAND_KEY);
                 }
             }
         }, 200);
@@ -5199,19 +5238,33 @@ const PlexdRemote = (function() {
             });
         }
 
-        // HTTP API for cross-device (iPhone to MBP)
-        fetch('/api/remote/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state)
-        }).catch(() => {
-            // API not available, use localStorage fallback
-            try {
-                localStorage.setItem(STATE_KEY, JSON.stringify(state));
-            } catch (e) {
-                // localStorage might be full or unavailable
-            }
-        });
+        // HTTP API for cross-device (iPhone to MBP) - only if available
+        if (httpApiAvailable) {
+            fetch('/api/remote/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(state)
+            }).then(res => {
+                if (res.status === 404 || res.status === 501) {
+                    httpApiCheckCount++;
+                    if (httpApiCheckCount >= 2) {
+                        httpApiAvailable = false;
+                    }
+                }
+            }).catch(() => {
+                httpApiCheckCount++;
+                if (httpApiCheckCount >= 2) {
+                    httpApiAvailable = false;
+                }
+            });
+        }
+
+        // localStorage fallback (always use)
+        try {
+            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        } catch (e) {
+            // localStorage might be full or unavailable
+        }
     }
 
     /**

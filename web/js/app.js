@@ -480,8 +480,8 @@ const PlexdApp = (function() {
                     // Create object URL for the file
                     const objectUrl = URL.createObjectURL(file);
 
-                    // Add as stream
-                    addStreamFromFile(objectUrl, file.name);
+                    // Add as stream - pass File object for efficient saving later
+                    addStreamFromFile(objectUrl, file.name, file);
                     addedCount++;
                 } else {
                     skippedCount++;
@@ -499,8 +499,11 @@ const PlexdApp = (function() {
 
     /**
      * Add a stream from a dropped file
+     * @param {string} objectUrl - Blob URL for the file
+     * @param {string} fileName - Original filename
+     * @param {File} [fileObj] - Original File object (for efficient saving)
      */
-    function addStreamFromFile(objectUrl, fileName) {
+    function addStreamFromFile(objectUrl, fileName, fileObj = null) {
         const stream = PlexdStream.createStream(objectUrl, {
             autoplay: true,
             muted: true
@@ -508,6 +511,10 @@ const PlexdApp = (function() {
 
         // Store the filename for display and rating persistence
         stream.fileName = fileName;
+        // Store original File object to avoid re-reading when saving
+        if (fileObj) {
+            stream.fileObj = fileObj;
+        }
 
         // Apply any persisted rating/favorite for this fileName immediately (blob URLs are ephemeral).
         PlexdStream.syncRatingStatus();
@@ -3164,13 +3171,20 @@ const PlexdApp = (function() {
             );
 
             if (saveToDisc) {
-                showMessage('Saving local files to disc...', 'info');
                 let savedCount = 0;
-                for (const stream of localFileStreams) {
-                    // Fetch the blob from the blob URL
+                const total = localFileStreams.length;
+                for (let i = 0; i < localFileStreams.length; i++) {
+                    const stream = localFileStreams[i];
+                    showMessage(`Saving file ${i + 1}/${total}: ${stream.fileName}...`, 'info');
                     try {
-                        const response = await fetch(stream.url);
-                        const blob = await response.blob();
+                        // Use stored File object if available (faster), otherwise fetch from blob URL
+                        let blob;
+                        if (stream.fileObj) {
+                            blob = stream.fileObj;
+                        } else {
+                            const response = await fetch(stream.url);
+                            blob = await response.blob();
+                        }
                         const success = await saveLocalFileToDisc(name, stream.fileName, blob);
                         if (success) savedCount++;
                     } catch (err) {
@@ -3323,12 +3337,20 @@ const PlexdApp = (function() {
             );
 
             if (saveToDisc) {
-                showMessage('Saving local files to disc...', 'info');
                 let savedCount = 0;
-                for (const stream of localFileStreams) {
+                const total = localFileStreams.length;
+                for (let i = 0; i < localFileStreams.length; i++) {
+                    const stream = localFileStreams[i];
+                    showMessage(`Saving file ${i + 1}/${total}: ${stream.fileName}...`, 'info');
                     try {
-                        const response = await fetch(stream.url);
-                        const blob = await response.blob();
+                        // Use stored File object if available (faster), otherwise fetch from blob URL
+                        let blob;
+                        if (stream.fileObj) {
+                            blob = stream.fileObj;
+                        } else {
+                            const response = await fetch(stream.url);
+                            blob = await response.blob();
+                        }
                         const success = await saveLocalFileToDisc(name, stream.fileName, blob);
                         if (success) savedCount++;
                     } catch (err) {

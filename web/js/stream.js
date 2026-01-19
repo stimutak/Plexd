@@ -1864,9 +1864,9 @@ const PlexdStream = (function() {
             wrapper.focus();
         });
 
-        // Double-click to toggle fullscreen
+        // Double-click to random seek
         wrapper.addEventListener('dblclick', () => {
-            toggleFullscreen(stream.id);
+            seekToRandomPosition(stream.id);
         });
 
         // Keyboard handling on wrapper (for fullscreen mode)

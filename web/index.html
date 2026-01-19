@@ -9,12 +9,12 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=43">
+    <link rel="stylesheet" href="css/plexd.css?v=44">
 </head>
 <body>
     <div class="plexd-app header-hidden">
         <!-- Header Toggle Button (always visible) -->
-        <button id="header-toggle" class="plexd-header-toggle" title="Toggle toolbar (T)">
+        <button id="header-toggle" class="plexd-header-toggle" title="Toggle toolbar [H]">
             ☰
         </button>
 
@@ -48,33 +48,33 @@
 
                 <!-- View Toggle (Favorites / All / Star Ratings) -->
                 <div class="plexd-view-toggle">
-                    <button id="view-favorites-btn" class="plexd-view-btn view-favorites" onclick="PlexdApp.setViewMode('favorites')" title="Show favorites only (★)">★ <span id="favorites-count" class="badge"></span></button>
-                    <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams (V to cycle)">All</button>
-                    <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="Slot 1">1 <span id="rating-1-count" class="badge"></span></button>
-                    <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="Slot 2">2 <span id="rating-2-count" class="badge"></span></button>
-                    <button id="view-3-btn" class="plexd-view-btn rating-3" onclick="PlexdApp.setViewMode(3)" title="Slot 3">3 <span id="rating-3-count" class="badge"></span></button>
-                    <button id="view-4-btn" class="plexd-view-btn rating-4" onclick="PlexdApp.setViewMode(4)" title="Slot 4">4 <span id="rating-4-count" class="badge"></span></button>
-                    <button id="view-5-btn" class="plexd-view-btn rating-5" onclick="PlexdApp.setViewMode(5)" title="Slot 5">5 <span id="rating-5-count" class="badge"></span></button>
-                    <button id="view-6-btn" class="plexd-view-btn rating-6" onclick="PlexdApp.setViewMode(6)" title="Slot 6">6 <span id="rating-6-count" class="badge"></span></button>
-                    <button id="view-7-btn" class="plexd-view-btn rating-7" onclick="PlexdApp.setViewMode(7)" title="Slot 7">7 <span id="rating-7-count" class="badge"></span></button>
-                    <button id="view-8-btn" class="plexd-view-btn rating-8" onclick="PlexdApp.setViewMode(8)" title="Slot 8">8 <span id="rating-8-count" class="badge"></span></button>
-                    <button id="view-9-btn" class="plexd-view-btn rating-9" onclick="PlexdApp.setViewMode(9)" title="Slot 9">9 <span id="rating-9-count" class="badge"></span></button>
+                    <button id="view-favorites-btn" class="plexd-view-btn view-favorites" onclick="PlexdApp.setViewMode('favorites')" title="Show favorites only [`]">★ <span id="favorites-count" class="badge"></span></button>
+                    <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams [0] [V to cycle]">All</button>
+                    <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="Slot 1 [double-tap 1]">1 <span id="rating-1-count" class="badge"></span></button>
+                    <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="Slot 2 [double-tap 2]">2 <span id="rating-2-count" class="badge"></span></button>
+                    <button id="view-3-btn" class="plexd-view-btn rating-3" onclick="PlexdApp.setViewMode(3)" title="Slot 3 [double-tap 3]">3 <span id="rating-3-count" class="badge"></span></button>
+                    <button id="view-4-btn" class="plexd-view-btn rating-4" onclick="PlexdApp.setViewMode(4)" title="Slot 4 [double-tap 4]">4 <span id="rating-4-count" class="badge"></span></button>
+                    <button id="view-5-btn" class="plexd-view-btn rating-5" onclick="PlexdApp.setViewMode(5)" title="Slot 5 [double-tap 5]">5 <span id="rating-5-count" class="badge"></span></button>
+                    <button id="view-6-btn" class="plexd-view-btn rating-6" onclick="PlexdApp.setViewMode(6)" title="Slot 6 [double-tap 6]">6 <span id="rating-6-count" class="badge"></span></button>
+                    <button id="view-7-btn" class="plexd-view-btn rating-7" onclick="PlexdApp.setViewMode(7)" title="Slot 7 [double-tap 7]">7 <span id="rating-7-count" class="badge"></span></button>
+                    <button id="view-8-btn" class="plexd-view-btn rating-8" onclick="PlexdApp.setViewMode(8)" title="Slot 8 [double-tap 8]">8 <span id="rating-8-count" class="badge"></span></button>
+                    <button id="view-9-btn" class="plexd-view-btn rating-9" onclick="PlexdApp.setViewMode(9)" title="Slot 9 [double-tap 9]">9 <span id="rating-9-count" class="badge"></span></button>
                 </div>
 
                 <!-- Layout Modes -->
-                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout (T) - eliminates black bars">T</button>
-                <button id="coverflow-btn" class="plexd-button plexd-button-secondary plexd-coverflow-btn" onclick="PlexdApp.toggleCoverflowMode()" title="Coverflow layout - z-depth overlapping">C</button>
+                <button id="tetris-btn" class="plexd-button plexd-button-secondary plexd-tetris-btn" onclick="PlexdApp.toggleTetrisMode()" title="Tetris layout [T] - eliminates black bars">T</button>
+                <button id="coverflow-btn" class="plexd-button plexd-button-secondary plexd-coverflow-btn" onclick="PlexdApp.toggleCoverflowMode()" title="Coverflow layout [O] - z-depth overlapping">C</button>
 
                 <!-- Global Controls -->
-                <button id="pause-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePauseAll()" title="Pause/Play all">⏸</button>
-                <button id="mute-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleMuteAll()" title="Mute all">🔇</button>
-                <button id="audio-focus-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleAudioFocus()" title="Audio focus mode">🎧</button>
-                <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls">👁</button>
-                <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="True fullscreen (F key)">⛶</button>
-                <button id="random-seek-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.randomSeekAll()" title="Random position all streams (Q key)">🔀</button>
+                <button id="pause-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePauseAll()" title="Pause/Play all [P]">⏸</button>
+                <button id="mute-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleMuteAll()" title="Mute all streams">🔇</button>
+                <button id="audio-focus-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleAudioFocus()" title="Audio focus mode [N] - solo selected">🎧</button>
+                <button id="clean-mode-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleCleanMode()" title="Hide per-stream controls [Shift+H]">👁</button>
+                <button id="fullscreen-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.toggleGlobalFullscreen()" title="True fullscreen [F]">⛶</button>
+                <button id="random-seek-all-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.randomSeekAll()" title="Random seek all streams [Q]">🔀</button>
 
                 <!-- Panels -->
-                <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list (S)">Strms</button>
+                <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list [S]">Strms</button>
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
             </div>
@@ -168,8 +168,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=43"></script>
-    <script src="js/stream.js?v=43"></script>
-    <script src="js/app.js?v=43"></script>
+    <script src="js/grid.js?v=44"></script>
+    <script src="js/stream.js?v=44"></script>
+    <script src="js/app.js?v=44"></script>
 </body>
 </html>

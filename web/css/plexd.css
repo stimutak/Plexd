@@ -443,14 +443,22 @@ body {
 .plexd-shortcuts {
     display: none;
     position: fixed;
-    bottom: 24px;
-    right: 24px;
-    padding: 12px 16px;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 16px;
     background: rgba(26, 26, 26, 0.95);
     border-radius: 8px;
     font-size: 12px;
     color: #888;
     z-index: 100;
+    white-space: nowrap;
+}
+
+.plexd-shortcuts-quick {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
 }
 
 .plexd-shortcuts kbd {
@@ -460,6 +468,67 @@ body {
     border-radius: 3px;
     font-family: monospace;
     color: #fff;
+    margin-right: 4px;
+}
+
+.plexd-shortcuts-more {
+    margin-left: 16px;
+    padding: 4px 10px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #aaa;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.plexd-shortcuts-more:hover {
+    background: #444;
+    color: #fff;
+    border-color: #555;
+}
+
+/* Shortcuts Modal */
+.plexd-modal-shortcuts {
+    max-width: 700px;
+}
+
+.plexd-shortcuts-grid {
+    display: grid;
+    max-height: calc(100vh - 180px);
+    overflow-y: auto;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.plexd-shortcuts-section h4 {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #333;
+}
+
+.plexd-shortcut {
+    font-size: 12px;
+    color: #999;
+    padding: 3px 0;
+}
+
+.plexd-shortcut kbd {
+    display: inline-block;
+    min-width: 20px;
+    padding: 2px 6px;
+    background: #333;
+    border-radius: 3px;
+    font-family: monospace;
+    font-size: 11px;
+    color: #fff;
+    text-align: center;
+    margin-right: 2px;
 }
 
 /* Show on desktop when not in input */
@@ -596,6 +665,27 @@ body {
     opacity: 1 !important;
 }
 
+/* In true fullscreen, position:fixed doesn't work correctly - use absolute positioning */
+.plexd-app:fullscreen .plexd-stream.plexd-fullscreen,
+.plexd-app:-webkit-full-screen .plexd-stream.plexd-fullscreen,
+.plexd-app:-moz-full-screen .plexd-stream.plexd-fullscreen,
+.plexd-app:-ms-fullscreen .plexd-stream.plexd-fullscreen {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    z-index: 99999 !important;
+}
+
+/* Ensure video fills the fullscreen stream wrapper */
+.plexd-app:fullscreen .plexd-stream.plexd-fullscreen video,
+.plexd-app:-webkit-full-screen .plexd-stream.plexd-fullscreen video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+}
+
 .plexd-stream.plexd-fullscreen .plexd-controls {
     opacity: 1;
     padding: 16px;
@@ -634,6 +724,13 @@ body {
 .plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-rating-indicator {
     opacity: 0 !important;
     pointer-events: none !important;
+}
+
+/* In true fullscreen focused mode, completely hide non-focused streams */
+.plexd-app:fullscreen.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen),
+.plexd-app:-webkit-full-screen.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) {
+    visibility: hidden !important;
+    opacity: 0 !important;
 }
 
 /* ========================================
@@ -1224,8 +1321,11 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 2000;
+    z-index: 2147483647; /* Max z-index to appear above fullscreen */
     backdrop-filter: blur(4px);
+    padding: 20px;
+    box-sizing: border-box;
+    overflow-y: auto;
 }
 
 .plexd-modal {
@@ -1235,6 +1335,8 @@ body {
     padding: 24px;
     max-width: 400px;
     width: 90%;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
 }
 
@@ -1364,6 +1466,116 @@ body {
     color: #888;
 }
 
+/* Stored Files Modal */
+.plexd-modal-subtitle {
+    color: #888;
+    font-size: 13px;
+    margin: -8px 0 16px 0;
+}
+
+.plexd-stored-files-container {
+    max-height: 400px;
+    overflow-y: auto;
+    background: #0a0a0a;
+    border-radius: 8px;
+    padding: 8px;
+    margin-bottom: 16px;
+}
+
+.plexd-stored-set {
+    margin-bottom: 12px;
+}
+
+.plexd-stored-set:last-child {
+    margin-bottom: 0;
+}
+
+.plexd-stored-set-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: #1a1a1a;
+    border-radius: 6px;
+    margin-bottom: 4px;
+}
+
+.plexd-stored-set-name {
+    font-weight: 500;
+    color: #fff;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plexd-stored-set-size {
+    font-size: 12px;
+    color: #666;
+}
+
+.plexd-stored-files {
+    padding-left: 12px;
+}
+
+.plexd-stored-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.plexd-stored-file:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.plexd-stored-file-name {
+    flex: 1;
+    font-size: 13px;
+    color: #aaa;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plexd-stored-file-size {
+    font-size: 12px;
+    color: #666;
+}
+
+.plexd-btn-icon {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #888;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.plexd-btn-icon:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.plexd-btn-icon.plexd-btn-danger:hover {
+    background: #b22;
+    color: #fff;
+}
+
+.plexd-button.plexd-btn-danger:hover,
+.plexd-button-small.plexd-btn-danger:hover {
+    background: #b22;
+    border-color: #b22;
+    color: #fff;
+}
+
 /* ========================================
    Header Toggle (Floating Action Button)
    ======================================== */
@@ -1425,6 +1637,16 @@ body {
 .plexd-app.clean-mode .plexd-info-overlay,
 .plexd-app.clean-mode .plexd-rating-indicator,
 .plexd-app.clean-mode .plexd-status {
+    display: none !important;
+}
+
+/* Clean mode: hide selection indicator and header toggle */
+.plexd-app.clean-mode .plexd-stream.plexd-selected {
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+.plexd-app.clean-mode .plexd-header-toggle {
     display: none !important;
 }
 

@@ -17,6 +17,26 @@ const PlexdApp = (function() {
     const STORE_NAME = 'files';
     let dbInstance = null;
 
+    // ========================================
+    // Video File Detection
+    // ========================================
+
+    const VIDEO_EXTENSIONS = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg', '.ts', '.mts', '.m2ts', '.wmv', '.asf', '.rm', '.rmvb', '.vob', '.divx', '.f4v'];
+
+    function isVideoFile(file) {
+        // Check MIME type - if it starts with 'video/', it's a video
+        if (file.type && file.type.startsWith('video/')) {
+            return true;
+        }
+        // Also accept application/x-mpegURL (HLS) and application/octet-stream for some video files
+        if (file.type === 'application/x-mpegURL' || file.type === 'application/vnd.apple.mpegurl') {
+            return true;
+        }
+        // Fallback to extension check
+        const name = file.name.toLowerCase();
+        return VIDEO_EXTENSIONS.some(ext => name.endsWith(ext));
+    }
+
     /**
      * Open or create the IndexedDB database
      */
@@ -174,6 +194,60 @@ const PlexdApp = (function() {
             }
         } catch (err) {
             console.error('[Plexd] Failed to delete local files:', err);
+        }
+    }
+
+    /**
+     * Get all stored files from IndexedDB
+     * @returns {Promise<Array<{id: string, setName: string, fileName: string, size: number, savedAt: number}>>}
+     */
+    async function getAllStoredFiles() {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+
+            return new Promise((resolve, reject) => {
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const files = request.result.map(f => ({
+                        id: f.id,
+                        setName: f.setName,
+                        fileName: f.fileName,
+                        size: f.size || 0,
+                        savedAt: f.savedAt || 0
+                    }));
+                    resolve(files);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        } catch (err) {
+            console.error('[Plexd] Failed to get all stored files:', err);
+            return [];
+        }
+    }
+
+    /**
+     * Delete a specific stored file by ID
+     * @param {string} fileId - The file ID (setName::fileName)
+     */
+    async function deleteStoredFile(fileId) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+
+            await new Promise((resolve, reject) => {
+                const request = store.delete(fileId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+
+            console.log(`[Plexd] Deleted stored file: ${fileId}`);
+            return true;
+        } catch (err) {
+            console.error('[Plexd] Failed to delete stored file:', err);
+            return false;
         }
     }
 
@@ -397,33 +471,7 @@ const PlexdApp = (function() {
         `;
         app.appendChild(dropOverlay);
 
-        // Supported video MIME types
-        const videoTypes = [
-            'video/quicktime',      // .mov
-            'video/mp4',            // .mp4
-            'video/webm',           // .webm
-            'video/x-m4v',          // .m4v
-            'video/x-matroska',     // .mkv
-            'video/avi',            // .avi
-            'video/x-msvideo',      // .avi (alt)
-            'video/ogg',            // .ogv
-            'video/3gpp',           // .3gp
-            'video/x-flv',          // .flv
-            'video/mpeg'            // .mpeg
-        ];
-
-        // Also check file extensions as fallback
-        const videoExtensions = ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg'];
-
-        function isVideoFile(file) {
-            // Check MIME type
-            if (file.type && videoTypes.some(t => file.type.startsWith(t.split('/')[0] + '/'))) {
-                return true;
-            }
-            // Fallback to extension check
-            const name = file.name.toLowerCase();
-            return videoExtensions.some(ext => name.endsWith(ext));
-        }
+        // isVideoFile is now defined at module level
 
         let dragCounter = 0;
 
@@ -818,21 +866,27 @@ const PlexdApp = (function() {
             if (e.key === 'f' || e.key === 'F') {
                 e.preventDefault();
                 const mode = PlexdStream.getFullscreenMode();
+                console.log(`[Plexd] F key pressed, current mode=${mode}`);
 
                 // F toggles true fullscreen
                 if (mode === 'true-grid' || mode === 'true-focused') {
                     // Exit true fullscreen completely
+                    console.log('[Plexd] F key: exiting true fullscreen');
                     PlexdStream.exitTrueFullscreen();
                 } else if (mode === 'browser-fill') {
                     // Already focused on a stream - upgrade to true fullscreen while keeping focus
                     const focusedStream = PlexdStream.getFullscreenStream();
+                    console.log(`[Plexd] F key: browser-fill mode, focusedStream=${focusedStream ? focusedStream.id : 'null'}`);
                     if (focusedStream) {
+                        console.log('[Plexd] F key: calling enterTrueFocusedFullscreen');
                         PlexdStream.enterTrueFocusedFullscreen(focusedStream.id);
                     } else {
+                        console.log('[Plexd] F key: no focused stream, calling enterGridFullscreen');
                         PlexdStream.enterGridFullscreen();
                     }
                 } else {
                     // Enter true fullscreen (grid mode)
+                    console.log('[Plexd] F key: mode is none, calling enterGridFullscreen');
                     PlexdStream.enterGridFullscreen();
                 }
             }
@@ -2255,6 +2309,11 @@ const PlexdApp = (function() {
      * Handle keyboard shortcuts
      */
     function handleKeyboard(e) {
+        // Log all key events to debug fullscreen navigation
+        if (e.key.startsWith('Arrow')) {
+            console.log(`[Plexd] handleKeyboard: received ${e.key}, target=${e.target.tagName}, activeElement=${document.activeElement?.tagName || 'null'}, className=${document.activeElement?.className || 'null'}`);
+        }
+
         // If a modal is open, avoid accidental destructive/global shortcuts.
         // Let modal-specific handlers deal with Escape/etc.
         if (document.querySelector('.plexd-modal-overlay') && e.key !== 'Escape') {
@@ -2743,8 +2802,11 @@ const PlexdApp = (function() {
     function handleArrowNav(direction, fullscreenStream, selected) {
         const mode = PlexdStream.getFullscreenMode();
 
+        console.log(`[Plexd] handleArrowNav: direction=${direction}, mode=${mode}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}, selected=${selected ? selected.id : 'null'}`);
+
         if (fullscreenStream) {
             // In focused mode - switch to next focused stream
+            console.log('[Plexd] handleArrowNav: calling switchFullscreenStream');
             switchFullscreenStream(direction);
         } else if (mode === 'true-grid') {
             // In true-grid mode - select and immediately focus the next stream
@@ -2778,6 +2840,7 @@ const PlexdApp = (function() {
             }
         } else {
             // Normal grid mode - just select next stream
+            console.log('[Plexd] handleArrowNav: fallback to selectNextStream (not fullscreen, not true-grid, not coverflow)');
             PlexdStream.selectNextStream(direction);
         }
     }
@@ -2791,12 +2854,21 @@ const PlexdApp = (function() {
      */
     function switchFullscreenStream(direction) {
         const fullscreenStream = PlexdStream.getFullscreenStream();
-        if (!fullscreenStream) return;
+        console.log(`[Plexd] switchFullscreenStream: direction=${direction}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}`);
+        if (!fullscreenStream) {
+            console.log('[Plexd] switchFullscreenStream: no fullscreen stream, returning');
+            return;
+        }
 
         const nextId = PlexdStream.getSpatialNeighborStreamId(fullscreenStream.id, direction);
-        if (!nextId || nextId === fullscreenStream.id) return;
+        console.log(`[Plexd] switchFullscreenStream: nextId=${nextId}`);
+        if (!nextId || nextId === fullscreenStream.id) {
+            console.log('[Plexd] switchFullscreenStream: no next stream or same stream, returning');
+            return;
+        }
 
         const mode = PlexdStream.getFullscreenMode();
+        console.log(`[Plexd] switchFullscreenStream: calling enterFocusedMode(${nextId}), mode=${mode}`);
         PlexdStream.enterFocusedMode(nextId);
 
         // If was in true-focused mode, ensure wrapper gets focus for keyboard events
@@ -3633,7 +3705,8 @@ const PlexdApp = (function() {
                     let errorCount = 0;
 
                     async function searchDir(handle, depth = 0) {
-                        if (depth > 5) return; // Limit recursion depth
+                        if (depth > 10) return; // Limit recursion depth
+                        console.log(`[Plexd] Scanning directory at depth ${depth}: ${handle.name || 'root'}`);
                         try {
                             for await (const entry of handle.values()) {
                                 try {
@@ -3644,9 +3717,13 @@ const PlexdApp = (function() {
                                             setStatus(`Scanning... ${scannedCount} files checked`);
                                         }
                                         const file = await entry.getFile();
+                                        const ext = file.name.toLowerCase().split('.').pop();
                                         if (isVideoFile(file)) {
                                             foundFiles.push(file);
-                                            console.log(`[Plexd] Found video: ${file.name}`);
+                                            console.log(`[Plexd] Found video: ${file.name} (type: ${file.type || 'unknown'})`);
+                                        } else if (scannedCount <= 20) {
+                                            // Log first 20 non-video files for debugging
+                                            console.log(`[Plexd] Not a video: ${file.name} (type: ${file.type || 'unknown'}, ext: .${ext})`);
                                         }
                                     } else if (entry.kind === 'directory') {
                                         // Skip hidden directories (start with .)
@@ -3657,13 +3734,13 @@ const PlexdApp = (function() {
                                 } catch (fileErr) {
                                     // Skip files we can't access (permissions, system files, etc.)
                                     errorCount++;
-                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name}`);
+                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name} (${fileErr.message})`);
                                 }
                             }
                         } catch (dirErr) {
                             // Skip directories we can't access
                             errorCount++;
-                            console.log(`[Plexd] Skipping inaccessible directory`);
+                            console.log(`[Plexd] Skipping inaccessible directory: ${handle.name || 'unknown'} (${dirErr.message})`);
                         }
                     }
 
@@ -3904,6 +3981,239 @@ const PlexdApp = (function() {
         document.getElementById('modal-continue').addEventListener('click', () => {
             modal.remove();
             onContinue();
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    /**
+     * Show modal to manage all stored files in IndexedDB
+     */
+    async function showManageStoredFilesModal() {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('manage-files-modal');
+        if (existingModal) existingModal.remove();
+
+        const files = await getAllStoredFiles();
+        const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+
+        // Group files by set name
+        const filesBySet = {};
+        files.forEach(f => {
+            if (!filesBySet[f.setName]) filesBySet[f.setName] = [];
+            filesBySet[f.setName].push(f);
+        });
+
+        const modal = document.createElement('div');
+        modal.id = 'manage-files-modal';
+        modal.className = 'plexd-modal-overlay';
+
+        const renderFileList = () => {
+            if (files.length === 0) {
+                return '<div class="plexd-panel-empty">No stored files</div>';
+            }
+            return Object.entries(filesBySet).map(([setName, setFiles]) => `
+                <div class="plexd-stored-set">
+                    <div class="plexd-stored-set-header">
+                        <span class="plexd-stored-set-name">${escapeHtml(setName)}</span>
+                        <span class="plexd-stored-set-size">${setFiles.length} file${setFiles.length !== 1 ? 's' : ''}, ${formatBytes(setFiles.reduce((s, f) => s + f.size, 0))}</span>
+                        <button class="plexd-button-small plexd-btn-danger" onclick="PlexdApp._deleteStoredSet('${escapeAttr(setName)}')" title="Delete all files in this set">Del Set</button>
+                    </div>
+                    <div class="plexd-stored-files">
+                        ${setFiles.map(f => `
+                            <div class="plexd-stored-file" data-id="${escapeAttr(f.id)}">
+                                <span class="plexd-stored-file-name" title="${escapeAttr(f.fileName)}">${escapeHtml(f.fileName)}</span>
+                                <span class="plexd-stored-file-size">${formatBytes(f.size)}</span>
+                                <button class="plexd-btn-icon plexd-btn-danger" onclick="PlexdApp._deleteStoredFile('${escapeAttr(f.id)}')" title="Delete this file">x</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        modal.innerHTML = `
+            <div class="plexd-modal plexd-modal-wide">
+                <h3>Stored Files</h3>
+                <p class="plexd-modal-subtitle">${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(totalSize)} total</p>
+                <div id="stored-files-list" class="plexd-stored-files-container">
+                    ${renderFileList()}
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="manage-files-clear-all" class="plexd-button plexd-button-secondary plexd-btn-danger" ${files.length === 0 ? 'disabled' : ''}>Clear All</button>
+                    <button id="manage-files-close" class="plexd-button plexd-button-primary">Done</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // Expose delete functions temporarily
+        PlexdApp._deleteStoredFile = async (fileId) => {
+            if (await deleteStoredFile(fileId)) {
+                // Remove from local arrays
+                const idx = files.findIndex(f => f.id === fileId);
+                if (idx >= 0) {
+                    const file = files[idx];
+                    files.splice(idx, 1);
+                    const setFiles = filesBySet[file.setName];
+                    const setIdx = setFiles.findIndex(f => f.id === fileId);
+                    if (setIdx >= 0) setFiles.splice(setIdx, 1);
+                    if (setFiles.length === 0) delete filesBySet[file.setName];
+                }
+                // Re-render
+                document.getElementById('stored-files-list').innerHTML = renderFileList();
+                const newTotal = files.reduce((sum, f) => sum + f.size, 0);
+                modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
+                document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+            }
+        };
+
+        PlexdApp._deleteStoredSet = async (setName) => {
+            await deleteLocalFilesForSet(setName);
+            // Remove from local arrays
+            const setFiles = filesBySet[setName] || [];
+            setFiles.forEach(f => {
+                const idx = files.findIndex(ff => ff.id === f.id);
+                if (idx >= 0) files.splice(idx, 1);
+            });
+            delete filesBySet[setName];
+            // Re-render
+            document.getElementById('stored-files-list').innerHTML = renderFileList();
+            const newTotal = files.reduce((sum, f) => sum + f.size, 0);
+            modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
+            document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+        };
+
+        document.getElementById('manage-files-close').addEventListener('click', () => {
+            delete PlexdApp._deleteStoredFile;
+            delete PlexdApp._deleteStoredSet;
+            modal.remove();
+        });
+
+        document.getElementById('manage-files-clear-all').addEventListener('click', async () => {
+            if (confirm('Delete all stored files? This cannot be undone.')) {
+                for (const f of files) {
+                    await deleteStoredFile(f.id);
+                }
+                files.length = 0;
+                Object.keys(filesBySet).forEach(k => delete filesBySet[k]);
+                document.getElementById('stored-files-list').innerHTML = renderFileList();
+                modal.querySelector('.plexd-modal-subtitle').textContent = '0 files stored, 0 B total';
+                document.getElementById('manage-files-clear-all').disabled = true;
+            }
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                delete PlexdApp._deleteStoredFile;
+                delete PlexdApp._deleteStoredSet;
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                delete PlexdApp._deleteStoredFile;
+                delete PlexdApp._deleteStoredSet;
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    /**
+     * Show modal with all keyboard shortcuts
+     */
+    function showShortcutsModal() {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('shortcuts-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'shortcuts-modal';
+        modal.className = 'plexd-modal-overlay';
+        modal.innerHTML = `
+            <div class="plexd-modal plexd-modal-shortcuts">
+                <h3>Keyboard Shortcuts</h3>
+                <div class="plexd-shortcuts-grid">
+                    <div class="plexd-shortcuts-section">
+                        <h4>Navigation</h4>
+                        <div class="plexd-shortcut"><kbd>Arrows</kbd> Navigate streams</div>
+                        <div class="plexd-shortcut"><kbd>Z</kbd> / <kbd>Enter</kbd> Focus/zoom stream</div>
+                        <div class="plexd-shortcut"><kbd>Esc</kbd> Exit focus / back</div>
+                        <div class="plexd-shortcut"><kbd>F</kbd> Toggle fullscreen</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Playback</h4>
+                        <div class="plexd-shortcut"><kbd>Space</kbd> Play/Pause</div>
+                        <div class="plexd-shortcut"><kbd>M</kbd> Mute/unmute</div>
+                        <div class="plexd-shortcut"><kbd>N</kbd> Solo (mute others)</div>
+                        <div class="plexd-shortcut"><kbd>P</kbd> Pause all</div>
+                        <div class="plexd-shortcut"><kbd>,</kbd> <kbd>.</kbd> Seek 10s</div>
+                        <div class="plexd-shortcut"><kbd>&lt;</kbd> <kbd>&gt;</kbd> Seek 60s</div>
+                        <div class="plexd-shortcut"><kbd>/</kbd> Random seek</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Stream Management</h4>
+                        <div class="plexd-shortcut"><kbd>X</kbd> Close stream</div>
+                        <div class="plexd-shortcut"><kbd>R</kbd> Reload stream</div>
+                        <div class="plexd-shortcut"><kbd>D</kbd> Download stream</div>
+                        <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Likes & Slots</h4>
+                        <div class="plexd-shortcut"><kbd>L</kbd> Toggle like</div>
+                        <div class="plexd-shortcut"><kbd>\`</kbd> View likes only</div>
+                        <div class="plexd-shortcut"><kbd>1-9</kbd> Assign to slot (tap)</div>
+                        <div class="plexd-shortcut"><kbd>1-9</kbd> View slot (double-tap)</div>
+                        <div class="plexd-shortcut"><kbd>0</kbd> View all streams</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Layout Modes</h4>
+                        <div class="plexd-shortcut"><kbd>T</kbd> Cycle Tetris mode</div>
+                        <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
+                        <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
+                        <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>UI</h4>
+                        <div class="plexd-shortcut"><kbd>H</kbd> Toggle header</div>
+                        <div class="plexd-shortcut"><kbd>Shift+H</kbd> Clean mode</div>
+                        <div class="plexd-shortcut"><kbd>V</kbd> Cycle views</div>
+                        <div class="plexd-shortcut"><kbd>I</kbd> Stream info</div>
+                        <div class="plexd-shortcut"><kbd>S</kbd> Streams panel</div>
+                        <div class="plexd-shortcut"><kbd>C</kbd> Copy URL</div>
+                        <div class="plexd-shortcut"><kbd>?</kbd> Toggle hints</div>
+                    </div>
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="shortcuts-modal-close" class="plexd-button plexd-button-primary">Done</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        document.getElementById('shortcuts-modal-close').addEventListener('click', () => {
+            modal.remove();
         });
 
         // Close on overlay click
@@ -4886,7 +5196,11 @@ const PlexdApp = (function() {
         toggleCleanMode,
         toggleGlobalFullscreen,
         randomSeekAll,
-        randomSeekSelected
+        randomSeekSelected,
+        // File management
+        showManageStoredFilesModal,
+        // Help
+        showShortcutsModal
     };
 })();
 
@@ -4944,36 +5258,56 @@ const PlexdRemote = (function() {
         console.log('Plexd remote control listener initialized');
     }
 
+    // Track if HTTP API is available (avoids spamming console with 404 errors)
+    let httpApiAvailable = true;
+    let httpApiCheckCount = 0;
+
     /**
      * Poll for commands from remote devices (HTTP API + localStorage fallback)
      */
     function startCommandPolling() {
         // HTTP API polling for cross-device (iPhone to MBP)
         commandPollInterval = setInterval(async () => {
-            try {
-                const res = await fetch('/api/remote/command');
-                if (res.ok) {
-                    const cmd = await res.json();
-                    if (cmd && cmd.action) {
-                        console.log('[Remote] Polled command:', cmd.action);
-                        handleRemoteCommand(cmd.action, cmd.payload);
+            // Only try HTTP API if it's available (or we haven't checked yet)
+            if (httpApiAvailable) {
+                try {
+                    const res = await fetch('/api/remote/command');
+                    if (res.ok) {
+                        const cmd = await res.json();
+                        if (cmd && cmd.action) {
+                            console.log('[Remote] Polled command:', cmd.action);
+                            handleRemoteCommand(cmd.action, cmd.payload);
+                        }
+                    } else if (res.status === 404 || res.status === 501) {
+                        // API not implemented on this server - disable HTTP polling
+                        httpApiCheckCount++;
+                        if (httpApiCheckCount >= 2) {
+                            httpApiAvailable = false;
+                            console.log('[Plexd] Remote API not available, using localStorage fallback only');
+                        }
+                    }
+                } catch (e) {
+                    // Network error - disable HTTP polling
+                    httpApiCheckCount++;
+                    if (httpApiCheckCount >= 2) {
+                        httpApiAvailable = false;
                     }
                 }
-            } catch (e) {
-                // API not available, fall back to localStorage
-                const cmdData = localStorage.getItem(COMMAND_KEY);
-                if (cmdData) {
-                    try {
-                        const cmd = JSON.parse(cmdData);
-                        if (Date.now() - cmd.timestamp < 5000) {
-                            localStorage.removeItem(COMMAND_KEY);
-                            handleRemoteCommand(cmd.action, cmd.payload);
-                        } else {
-                            localStorage.removeItem(COMMAND_KEY);
-                        }
-                    } catch (err) {
+            }
+
+            // Always check localStorage fallback
+            const cmdData = localStorage.getItem(COMMAND_KEY);
+            if (cmdData) {
+                try {
+                    const cmd = JSON.parse(cmdData);
+                    if (Date.now() - cmd.timestamp < 5000) {
+                        localStorage.removeItem(COMMAND_KEY);
+                        handleRemoteCommand(cmd.action, cmd.payload);
+                    } else {
                         localStorage.removeItem(COMMAND_KEY);
                     }
+                } catch (err) {
+                    localStorage.removeItem(COMMAND_KEY);
                 }
             }
         }, 200);
@@ -5219,19 +5553,33 @@ const PlexdRemote = (function() {
             });
         }
 
-        // HTTP API for cross-device (iPhone to MBP)
-        fetch('/api/remote/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state)
-        }).catch(() => {
-            // API not available, use localStorage fallback
-            try {
-                localStorage.setItem(STATE_KEY, JSON.stringify(state));
-            } catch (e) {
-                // localStorage might be full or unavailable
-            }
-        });
+        // HTTP API for cross-device (iPhone to MBP) - only if available
+        if (httpApiAvailable) {
+            fetch('/api/remote/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(state)
+            }).then(res => {
+                if (res.status === 404 || res.status === 501) {
+                    httpApiCheckCount++;
+                    if (httpApiCheckCount >= 2) {
+                        httpApiAvailable = false;
+                    }
+                }
+            }).catch(() => {
+                httpApiCheckCount++;
+                if (httpApiCheckCount >= 2) {
+                    httpApiAvailable = false;
+                }
+            });
+        }
+
+        // localStorage fallback (always use)
+        try {
+            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        } catch (e) {
+            // localStorage might be full or unavailable
+        }
     }
 
     /**

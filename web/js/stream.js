@@ -1250,6 +1250,7 @@ const PlexdStream = (function() {
     // - 'true-grid': True fullscreen on app container (grid view)
     // - 'true-focused': True fullscreen on a specific stream
     let fullscreenMode = 'none';
+    let fullscreenKeyHandler = null; // Capture-phase handler for fullscreen keyboard events
 
     // =====================================================================
     // Resource saving policies (focus/zoom + filtered views)
@@ -1270,8 +1271,11 @@ const PlexdStream = (function() {
         streams.forEach((s, id) => {
             if (id === focusedStreamId) {
                 // Ensure the focused stream plays (unless globally paused)
-                if (!isPausedGlobally && s._plexdAutoPausedForFocus) {
-                    resumeStream(id);
+                if (!isPausedGlobally) {
+                    // Always try to play the focused stream
+                    if (s.video && s.video.paused) {
+                        resumeStream(id);
+                    }
                     s._plexdAutoPausedForFocus = false;
                 }
                 // If we previously downgraded HLS quality for this stream, restore it now.
@@ -1460,8 +1464,12 @@ const PlexdStream = (function() {
      * Enter focused mode on a stream (used from grid mode in true fullscreen)
      */
     function enterFocusedMode(streamId) {
+        console.log(`[Plexd] enterFocusedMode: entering with streamId=${streamId}, current fullscreenStreamId=${fullscreenStreamId}`);
         const stream = streams.get(streamId);
-        if (!stream) return;
+        if (!stream) {
+            console.log('[Plexd] enterFocusedMode: stream not found, aborting');
+            return;
+        }
 
         // Blur any focused input to enable keyboard shortcuts
         if (document.activeElement && document.activeElement.tagName === 'INPUT') {
@@ -1471,13 +1479,17 @@ const PlexdStream = (function() {
         // Exit any existing browser-fill fullscreen
         if (fullscreenStreamId && fullscreenStreamId !== streamId) {
             const prevStream = streams.get(fullscreenStreamId);
+            console.log(`[Plexd] enterFocusedMode: removing plexd-fullscreen from ${fullscreenStreamId}, prevStream exists: ${!!prevStream}`);
             if (prevStream) {
                 prevStream.wrapper.classList.remove('plexd-fullscreen');
+                console.log(`[Plexd] enterFocusedMode: ${fullscreenStreamId} now has plexd-fullscreen: ${prevStream.wrapper.classList.contains('plexd-fullscreen')}`);
             }
         }
 
         // Apply CSS fullscreen to this stream
+        console.log(`[Plexd] enterFocusedMode: adding plexd-fullscreen to ${streamId}`);
         stream.wrapper.classList.add('plexd-fullscreen');
+        console.log(`[Plexd] enterFocusedMode: ${streamId} now has plexd-fullscreen: ${stream.wrapper.classList.contains('plexd-fullscreen')}`);
         fullscreenStreamId = streamId;
         setAppFocusedMode(true);
 
@@ -1566,6 +1578,7 @@ const PlexdStream = (function() {
     /**
      * Toggle true fullscreen (hides browser chrome)
      * If no stream specified, enters grid fullscreen mode
+     * Always fullscreens the container, not individual wrappers, to allow arrow navigation
      */
     function toggleTrueFullscreen(streamId) {
         if (document.fullscreenElement) {
@@ -1573,31 +1586,8 @@ const PlexdStream = (function() {
             exitTrueFullscreen();
         } else if (streamId) {
             // Enter true fullscreen focused on a specific stream
-            const stream = streams.get(streamId);
-            if (!stream) return;
-
-            // First ensure browser-fill mode is active
-            if (fullscreenStreamId !== streamId) {
-                if (fullscreenStreamId) {
-                    const prevStream = streams.get(fullscreenStreamId);
-                    if (prevStream) {
-                        prevStream.wrapper.classList.remove('plexd-fullscreen');
-                    }
-                }
-                stream.wrapper.classList.add('plexd-fullscreen');
-                fullscreenStreamId = streamId;
-            }
-            setAppFocusedMode(true);
-
-            // Request true fullscreen on the stream
-            stream.wrapper.requestFullscreen().then(() => {
-                fullscreenMode = 'true-focused';
-                stream.wrapper.focus();
-                selectStream(streamId);
-                applyFocusResourcePolicy(streamId);
-            }).catch(err => {
-                console.log('Fullscreen request failed:', err);
-            });
+            // Use enterTrueFocusedFullscreen which fullscreens the container (not wrapper)
+            enterTrueFocusedFullscreen(streamId);
         } else {
             // Enter grid fullscreen (fullscreen on app container)
             enterGridFullscreen();
@@ -1632,6 +1622,30 @@ const PlexdStream = (function() {
         // (Some browsers/iPad Safari behave better when the fullscreen element is focusable.)
         container.tabIndex = 0;
 
+        // Add capture-phase keyboard listener on container for fullscreen mode
+        if (fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+        }
+        fullscreenKeyHandler = (e) => {
+            console.log(`[Plexd] Fullscreen container capture: key=${e.key}, target=${e.target.tagName}`);
+            if (e.key.startsWith('Arrow')) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log(`[Plexd] Fullscreen capture: dispatching ${e.key} to document`);
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key,
+                    code: e.code,
+                    shiftKey: e.shiftKey,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }
+        };
+        container.addEventListener('keydown', fullscreenKeyHandler, true);
+
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-grid';
             container.focus();
@@ -1646,20 +1660,55 @@ const PlexdStream = (function() {
      * Used when upgrading from browser-fill to true-focused
      */
     function enterTrueFocusedFullscreen(streamId) {
+        console.log(`[Plexd] enterTrueFocusedFullscreen: streamId=${streamId}`);
         const container = document.querySelector('.plexd-app');
         const stream = streams.get(streamId);
-        if (!container || !stream) return;
+        if (!container || !stream) {
+            console.log(`[Plexd] enterTrueFocusedFullscreen: container=${!!container}, stream=${!!stream} - aborting`);
+            return;
+        }
 
         // Keep the focused stream state
         stream.wrapper.classList.add('plexd-fullscreen');
         fullscreenStreamId = streamId;
         setAppFocusedMode(true);
+        console.log(`[Plexd] enterTrueFocusedFullscreen: set fullscreenStreamId=${fullscreenStreamId}, added plexd-fullscreen class`);
 
         container.tabIndex = 0;
 
+        // Add capture-phase keyboard listener on container for fullscreen mode
+        // This ensures we intercept keys before browser can consume them
+        if (fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+        }
+        fullscreenKeyHandler = (e) => {
+            console.log(`[Plexd] Fullscreen container capture: key=${e.key}, target=${e.target.tagName}`);
+
+            // Handle arrow keys with capture to ensure they work in fullscreen
+            if (e.key.startsWith('Arrow')) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log(`[Plexd] Fullscreen capture: dispatching ${e.key} to document`);
+                // Dispatch to document for app.js to handle
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key,
+                    code: e.code,
+                    shiftKey: e.shiftKey,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }
+        };
+        container.addEventListener('keydown', fullscreenKeyHandler, true); // capture phase
+
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-focused';
-            stream.wrapper.focus();
+            console.log(`[Plexd] enterTrueFocusedFullscreen: requestFullscreen succeeded, mode=${fullscreenMode}`);
+            // Focus the container itself to receive keyboard events
+            container.focus();
             triggerLayoutUpdate();
         }).catch(err => {
             console.log('True focused fullscreen request failed:', err);
@@ -1671,6 +1720,13 @@ const PlexdStream = (function() {
      */
     function exitTrueFullscreen() {
         if (!document.fullscreenElement) return;
+
+        // Clean up fullscreen key handler
+        const container = document.querySelector('.plexd-app');
+        if (container && fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+            fullscreenKeyHandler = null;
+        }
 
         document.exitFullscreen().then(() => {
             // Also exit browser-fill mode
@@ -1718,6 +1774,8 @@ const PlexdStream = (function() {
      * Only returns a stream if we're actually in a fullscreen mode
      */
     function getFullscreenStream() {
+        console.log(`[Plexd] getFullscreenStream: mode=${fullscreenMode}, fullscreenStreamId=${fullscreenStreamId}`);
+
         // Validate state: if fullscreenMode is 'none', we shouldn't have a fullscreen stream
         if (fullscreenMode === 'none') {
             // State cleanup: if we have a stale fullscreenStreamId, clear it
@@ -1729,6 +1787,7 @@ const PlexdStream = (function() {
                 }
                 fullscreenStreamId = null;
             }
+            console.log('[Plexd] getFullscreenStream: returning null (mode is none)');
             return null;
         }
 
@@ -1737,10 +1796,11 @@ const PlexdStream = (function() {
             const stream = streams.get(fullscreenStreamId);
             // Verify the stream still exists and has the fullscreen class
             if (stream && stream.wrapper.classList.contains('plexd-fullscreen')) {
+                console.log(`[Plexd] getFullscreenStream: returning stream ${fullscreenStreamId}`);
                 return stream;
             }
             // State is inconsistent - clean up
-            console.log('[Plexd] Fullscreen state inconsistent, cleaning up');
+            console.log(`[Plexd] Fullscreen state inconsistent (stream=${!!stream}, hasClass=${stream?.wrapper?.classList?.contains('plexd-fullscreen')}), cleaning up`);
             fullscreenStreamId = null;
             fullscreenMode = 'none';
             return null;
@@ -1879,14 +1939,18 @@ const PlexdStream = (function() {
             const isThisFocused = activeEl === wrapper;
             const isThisFullscreen = document.fullscreenElement === wrapper;
 
+            console.log(`[Plexd] Wrapper keydown: key=${e.key}, isThisFocused=${isThisFocused}, isThisFullscreen=${isThisFullscreen}, fullscreenMode=${fullscreenMode}, streamId=${stream.id}`);
+
             // If we're not focused and not fullscreen element, skip
             if (!isThisFocused && !isThisFullscreen) {
+                console.log('[Plexd] Wrapper keydown: skipping (not focused, not fullscreen element)');
                 return;
             }
 
             // If we're the fullscreen element but ANOTHER stream wrapper has focus, skip
             // (let the focused wrapper handle it to avoid double-dispatch)
             if (isThisFullscreen && !isThisFocused && activeEl && activeEl.classList.contains('plexd-stream')) {
+                console.log('[Plexd] Wrapper keydown: skipping (fullscreen but another wrapper has focus)');
                 return;
             }
 
@@ -1894,6 +1958,7 @@ const PlexdStream = (function() {
             // In grid mode (fullscreenMode === 'none'), let events bubble naturally to document
             if (fullscreenMode !== 'true-focused' && fullscreenMode !== 'browser-fill') {
                 // Not in fullscreen mode - don't interfere, let event bubble to document
+                console.log(`[Plexd] Wrapper keydown: letting bubble (mode is ${fullscreenMode})`);
                 return;
             }
 
@@ -1902,6 +1967,7 @@ const PlexdStream = (function() {
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
             const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?]$/.test(e.key);
             if (propagateKeys) {
+                console.log(`[Plexd] Wrapper keydown: dispatching ${e.key} to document`);
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
                 // in fullscreen/focused contexts. We MUST stop propagation of the original event

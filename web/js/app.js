@@ -5491,6 +5491,7 @@ const PlexdRemote = (function() {
 
             // Fullscreen
             case 'enterFullscreen':
+                console.log('[Remote] enterFullscreen called, streamId:', payload.streamId);
                 if (payload.streamId) {
                     PlexdStream.enterFocusedMode(payload.streamId);
                 } else {
@@ -5499,6 +5500,7 @@ const PlexdRemote = (function() {
                 sendState();
                 break;
             case 'exitFullscreen':
+                console.log('[Remote] exitFullscreen called');
                 const mode = PlexdStream.getFullscreenMode();
                 if (mode === 'true-focused') {
                     PlexdStream.exitFocusedMode();
@@ -5511,6 +5513,7 @@ const PlexdRemote = (function() {
                 sendState();
                 break;
             case 'toggleGlobalFullscreen':
+                console.log('[Remote] toggleGlobalFullscreen called');
                 PlexdApp.toggleGlobalFullscreen();
                 sendState();
                 break;

@@ -107,7 +107,8 @@ button {
     align-items: center;
     justify-content: space-between;
     padding: 10px 16px;
-    border-bottom: 0.5px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    background: #111;
 }
 
 .logo {
@@ -165,6 +166,7 @@ button {
     min-height: 300px;
     padding: 32px 24px;
     text-align: center;
+    background: var(--bg-primary);
 }
 
 .empty-state.hidden { display: none; }
@@ -185,11 +187,12 @@ button {
     font-size: 18px;
     font-weight: 600;
     margin-bottom: 6px;
+    color: #fff;
 }
 
 .empty-hint {
     font-size: 14px;
-    color: var(--text-secondary);
+    color: #999;
 }
 
 /* ============================================

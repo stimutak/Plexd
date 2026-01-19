@@ -657,6 +657,13 @@ body {
     pointer-events: none !important;
 }
 
+/* In true fullscreen focused mode, completely hide non-focused streams */
+.plexd-app:fullscreen.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen),
+.plexd-app:-webkit-full-screen.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) {
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
 /* ========================================
    Stream Selection
    ======================================== */

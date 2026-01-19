@@ -317,7 +317,7 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select, double-tap for fullscreen
+            // Tap to select, double-tap for random seek
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.stream-action')) return;
 
@@ -325,8 +325,8 @@ const PlexdRemote = (function() {
                 const lastTap = lastTapTimes[id] || 0;
 
                 if (now - lastTap < 400) {
-                    // Double-tap: enter fullscreen
-                    send('enterFullscreen', { streamId: id });
+                    // Double-tap: random seek
+                    send('randomSeek', { streamId: id });
                     lastTapTimes[id] = 0;
                 } else {
                     // Single tap: select stream

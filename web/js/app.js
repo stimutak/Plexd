@@ -2255,6 +2255,11 @@ const PlexdApp = (function() {
      * Handle keyboard shortcuts
      */
     function handleKeyboard(e) {
+        // Log all key events to debug fullscreen navigation
+        if (e.key.startsWith('Arrow')) {
+            console.log(`[Plexd] handleKeyboard: received ${e.key}, target=${e.target.tagName}, activeElement=${document.activeElement?.tagName || 'null'}, className=${document.activeElement?.className || 'null'}`);
+        }
+
         // If a modal is open, avoid accidental destructive/global shortcuts.
         // Let modal-specific handlers deal with Escape/etc.
         if (document.querySelector('.plexd-modal-overlay') && e.key !== 'Escape') {

@@ -1250,6 +1250,7 @@ const PlexdStream = (function() {
     // - 'true-grid': True fullscreen on app container (grid view)
     // - 'true-focused': True fullscreen on a specific stream
     let fullscreenMode = 'none';
+    let fullscreenKeyHandler = null; // Capture-phase handler for fullscreen keyboard events
 
     // =====================================================================
     // Resource saving policies (focus/zoom + filtered views)
@@ -1640,6 +1641,30 @@ const PlexdStream = (function() {
         // (Some browsers/iPad Safari behave better when the fullscreen element is focusable.)
         container.tabIndex = 0;
 
+        // Add capture-phase keyboard listener on container for fullscreen mode
+        if (fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+        }
+        fullscreenKeyHandler = (e) => {
+            console.log(`[Plexd] Fullscreen container capture: key=${e.key}, target=${e.target.tagName}`);
+            if (e.key.startsWith('Arrow')) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log(`[Plexd] Fullscreen capture: dispatching ${e.key} to document`);
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key,
+                    code: e.code,
+                    shiftKey: e.shiftKey,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }
+        };
+        container.addEventListener('keydown', fullscreenKeyHandler, true);
+
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-grid';
             container.focus();
@@ -1670,10 +1695,39 @@ const PlexdStream = (function() {
 
         container.tabIndex = 0;
 
+        // Add capture-phase keyboard listener on container for fullscreen mode
+        // This ensures we intercept keys before browser can consume them
+        if (fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+        }
+        fullscreenKeyHandler = (e) => {
+            console.log(`[Plexd] Fullscreen container capture: key=${e.key}, target=${e.target.tagName}`);
+
+            // Handle arrow keys with capture to ensure they work in fullscreen
+            if (e.key.startsWith('Arrow')) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log(`[Plexd] Fullscreen capture: dispatching ${e.key} to document`);
+                // Dispatch to document for app.js to handle
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key,
+                    code: e.code,
+                    shiftKey: e.shiftKey,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                    bubbles: true,
+                    cancelable: true
+                }));
+            }
+        };
+        container.addEventListener('keydown', fullscreenKeyHandler, true); // capture phase
+
         container.requestFullscreen().then(() => {
             fullscreenMode = 'true-focused';
             console.log(`[Plexd] enterTrueFocusedFullscreen: requestFullscreen succeeded, mode=${fullscreenMode}`);
-            stream.wrapper.focus();
+            // Focus the container itself to receive keyboard events
+            container.focus();
             triggerLayoutUpdate();
         }).catch(err => {
             console.log('True focused fullscreen request failed:', err);
@@ -1685,6 +1739,13 @@ const PlexdStream = (function() {
      */
     function exitTrueFullscreen() {
         if (!document.fullscreenElement) return;
+
+        // Clean up fullscreen key handler
+        const container = document.querySelector('.plexd-app');
+        if (container && fullscreenKeyHandler) {
+            container.removeEventListener('keydown', fullscreenKeyHandler, true);
+            fullscreenKeyHandler = null;
+        }
 
         document.exitFullscreen().then(() => {
             // Also exit browser-fill mode

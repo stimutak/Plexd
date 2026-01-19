@@ -317,13 +317,10 @@ const PlexdRemote = (function() {
                     <div class="stream-info">
                         <div class="stream-name">${escapeHtml(name)}</div>
                         <div class="stream-meta">
-                            <span class="stream-status ${stream.paused ? '' : 'playing'}">
-                                <svg viewBox="0 0 24 24" fill="currentColor">
-                                    ${stream.paused
-                                        ? '<path d="M6 19h4V5H6zm8-14v14h4V5z"/>'
-                                        : '<path d="M8 5v14l11-7z"/>'}
-                                </svg>
-                                ${stream.paused ? 'Paused' : 'Playing'}
+                            <span class="stream-play-strip" data-stream-id="${stream.id}">
+                                <span class="play-btn" data-action="back" title="-10s">◀◀</span>
+                                <span class="play-btn ${stream.paused ? 'paused' : 'playing'}" data-action="toggle" title="${stream.paused ? 'Play' : 'Pause'}">${stream.paused ? '▶' : '⏸'}</span>
+                                <span class="play-btn" data-action="forward" title="+10s">▶▶</span>
                             </span>
                             <span class="stream-rating-strip" data-stream-id="${stream.id}">
                                 <span class="rating-btn" data-rating="0">✕</span>
@@ -352,7 +349,11 @@ const PlexdRemote = (function() {
 
             // Tap to select, double-tap for browser fullscreen
             item.addEventListener('click', (e) => {
-                if (e.target.closest('.stream-action')) return;
+                // Ignore clicks on interactive elements
+                if (e.target.closest('.stream-action') ||
+                    e.target.closest('.stream-rating-strip') ||
+                    e.target.closest('.stream-play-strip') ||
+                    e.target.closest('.stream-thumb')) return;
 
                 const now = Date.now();
                 const lastTap = lastTapTimes[id] || 0;
@@ -388,6 +389,29 @@ const PlexdRemote = (function() {
                     const newRating = parseInt(btn.dataset.rating, 10);
                     send('setRating', { streamId: id, rating: newRating });
                 });
+            });
+
+            // Play strip buttons
+            const playStrip = item.querySelector('.stream-play-strip');
+            playStrip?.querySelectorAll('.play-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const action = btn.dataset.action;
+                    if (action === 'back') {
+                        send('seekRelative', { streamId: id, offset: -10 });
+                    } else if (action === 'forward') {
+                        send('seekRelative', { streamId: id, offset: 10 });
+                    } else if (action === 'toggle') {
+                        send('togglePause', { streamId: id });
+                    }
+                });
+            });
+
+            // Thumbnail click - random seek
+            const thumb = item.querySelector('.stream-thumb');
+            thumb?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                send('randomSeek', { streamId: id });
             });
         });
     }

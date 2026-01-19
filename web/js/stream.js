@@ -1578,6 +1578,7 @@ const PlexdStream = (function() {
     /**
      * Toggle true fullscreen (hides browser chrome)
      * If no stream specified, enters grid fullscreen mode
+     * Always fullscreens the container, not individual wrappers, to allow arrow navigation
      */
     function toggleTrueFullscreen(streamId) {
         if (document.fullscreenElement) {
@@ -1585,31 +1586,8 @@ const PlexdStream = (function() {
             exitTrueFullscreen();
         } else if (streamId) {
             // Enter true fullscreen focused on a specific stream
-            const stream = streams.get(streamId);
-            if (!stream) return;
-
-            // First ensure browser-fill mode is active
-            if (fullscreenStreamId !== streamId) {
-                if (fullscreenStreamId) {
-                    const prevStream = streams.get(fullscreenStreamId);
-                    if (prevStream) {
-                        prevStream.wrapper.classList.remove('plexd-fullscreen');
-                    }
-                }
-                stream.wrapper.classList.add('plexd-fullscreen');
-                fullscreenStreamId = streamId;
-            }
-            setAppFocusedMode(true);
-
-            // Request true fullscreen on the stream
-            stream.wrapper.requestFullscreen().then(() => {
-                fullscreenMode = 'true-focused';
-                stream.wrapper.focus();
-                selectStream(streamId);
-                applyFocusResourcePolicy(streamId);
-            }).catch(err => {
-                console.log('Fullscreen request failed:', err);
-            });
+            // Use enterTrueFocusedFullscreen which fullscreens the container (not wrapper)
+            enterTrueFocusedFullscreen(streamId);
         } else {
             // Enter grid fullscreen (fullscreen on app container)
             enterGridFullscreen();

@@ -328,9 +328,11 @@ const PlexdRemote = (function() {
 
                 const now = Date.now();
                 const lastTap = lastTapTimes[id] || 0;
+                console.log('[Remote] Tap detected, id:', id, 'timeSinceLastTap:', now - lastTap);
 
                 if (now - lastTap < 400) {
                     // Double-tap: toggle focus mode
+                    console.log('[Remote] Double-tap detected, fullscreenStreamId:', state?.fullscreenStreamId);
                     if (state?.fullscreenStreamId === id) {
                         send('exitFullscreen');
                     } else {
@@ -451,6 +453,7 @@ const PlexdRemote = (function() {
         });
         el.actionFullscreen?.addEventListener('click', () => {
             // Toggle browser fullscreen
+            console.log('[Remote] Fullscr button clicked');
             send('toggleGlobalFullscreen');
         });
         el.actionMore?.addEventListener('click', openSheet);

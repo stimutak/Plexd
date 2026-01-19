@@ -57,8 +57,8 @@ const PlexdRemote = (function() {
 
         // Action bar
         el.actionBar = $('action-bar');
-        el.actionMute = $('action-mute');
-        el.actionRating = $('action-rating');
+        el.actionSeekBack = $('action-seek-back');
+        el.actionSeekForward = $('action-seek-forward');
         el.actionRandom = $('action-random');
         el.actionFullscreen = $('action-fullscreen');
         el.actionMore = $('action-more');
@@ -440,11 +440,11 @@ const PlexdRemote = (function() {
         });
 
         // Action bar
-        el.actionMute?.addEventListener('click', () => {
-            if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
+        el.actionSeekBack?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: -10 });
         });
-        el.actionRating?.addEventListener('click', () => {
-            if (selectedStreamId) send('cycleRating', { streamId: selectedStreamId });
+        el.actionSeekForward?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
         });
         el.actionRandom?.addEventListener('click', () => {
             if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });

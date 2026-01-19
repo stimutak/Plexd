@@ -1,6 +1,14 @@
 /**
- * Plexd Remote Control - iOS Optimized with Live Preview
- * Control without looking at the laptop
+ * Plexd Remote - Triage Mode
+ * Ergonomic, one-thumb operation for rapid clip review
+ *
+ * Core workflow:
+ * 1. Swipe left/right to switch streams (within current filter)
+ * 2. Swipe up to random seek
+ * 3. Tap progress bar to seek
+ * 4. Tap 1-9 to rate
+ * 5. Tap filter tabs to show only clips with that exact rating
+ * 6. Audio toggle for current stream
  */
 
 const PlexdRemote = (function() {
@@ -14,15 +22,19 @@ const PlexdRemote = (function() {
     let connected = false;
     let lastStateTime = 0;
     let selectedStreamId = null;
-    let lastLocalSelectionTime = 0; // Track when we last made a local selection
-    const lastTapTimes = {}; // Track double-tap per stream ID
-    let currentFilter = 'all'; // Rating filter: 'all' or 1-5
+    let lastLocalSelectionTime = 0;
+    let currentFilter = 'all'; // 'all', '0', '1', '2', ... '9' (exact rating)
+    let filteredStreams = []; // Streams matching current filter
+    let currentIndex = 0; // Index within filteredStreams
+    let swipeHintShown = false;
+    let isDraggingProgress = false;
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
     const POLL_INTERVAL = 300;
     const CONNECTION_TIMEOUT = 2000;
-    const SELECTION_GRACE_PERIOD = 1000; // Ignore state updates for selection for 1s after local selection
+    const SELECTION_GRACE_PERIOD = 1000;
+    const SWIPE_THRESHOLD = 50;
 
     // ============================================
     // DOM Elements
@@ -31,44 +43,48 @@ const PlexdRemote = (function() {
     const el = {};
 
     function cacheElements() {
-        // Main sections
+        // Header
+        el.audioToggle = $('audio-toggle');
         el.connection = $('connection');
+
+        // Main sections
         el.emptyState = $('empty-state');
+        el.triageUI = $('triage-ui');
 
-        // Preview section
-        el.previewSection = $('preview-section');
-        el.previewImage = $('preview-image');
-        el.previewStatus = $('preview-status');
-        el.previewTitle = $('preview-title');
-        el.previewTime = $('preview-time');
-        el.previewRating = $('preview-rating');
-        el.previewProgress = $('preview-progress');
-        el.previewProgressBar = $('preview-progress-bar');
+        // Hero
+        el.hero = $('hero');
+        el.heroPreview = $('hero-preview');
+        el.heroImage = $('hero-image');
+        el.heroStatus = $('hero-status');
+        el.heroCounter = $('hero-counter');
+        el.swipeHintLR = $('swipe-hint-lr');
+        el.swipeHintUD = $('swipe-hint-ud');
 
-        // Preview controls
-        el.previewBack = $('preview-back');
-        el.previewPrev = $('preview-prev');
-        el.previewPlay = $('preview-play');
-        el.previewNext = $('preview-next');
-        el.previewForward = $('preview-forward');
+        // Info
+        el.streamTitle = $('stream-title');
+        el.streamTime = $('stream-time');
 
-        // Rating bar
-        el.ratingBar = $('rating-bar');
-        el.ratingStars = $('rating-stars');
+        // Progress
+        el.progressTrack = $('progress-track');
+        el.progressFill = $('progress-fill');
+        el.progressThumb = $('progress-thumb');
 
-        // Streams section
-        el.streamsSection = $('streams-section');
-        el.streamsList = $('streams-list');
-        el.streamsCount = $('streams-count');
-        el.filterChips = $('filter-chips');
+        // Actions
+        el.btnBack = $('btn-back');
+        el.btnRandom = $('btn-random');
+        el.btnPlay = $('btn-play');
+        el.btnForward = $('btn-forward');
+        el.btnFocus = $('btn-focus');
 
-        // Action bar
-        el.actionBar = $('action-bar');
-        el.actionSeekBack = $('action-seek-back');
-        el.actionSeekForward = $('action-seek-forward');
-        el.actionRandom = $('action-random');
-        el.actionFullscreen = $('action-fullscreen');
-        el.actionMore = $('action-more');
+        // Rating
+        el.ratingStrip = $('rating-strip');
+
+        // Filters
+        el.filterTabs = $('filter-tabs');
+
+        // Thumbnails
+        el.thumbsSection = $('thumbs-section');
+        el.thumbsStrip = $('thumbs-strip');
 
         // Sheet
         el.moreSheet = $('more-sheet');
@@ -76,20 +92,15 @@ const PlexdRemote = (function() {
         el.sheetCancel = $('sheet-cancel');
         el.optPauseAll = $('opt-pause-all');
         el.optMuteAll = $('opt-mute-all');
-        el.optGlobalFullscreen = $('opt-global-fullscreen');
-        el.optViewAll = $('opt-view-all');
-        el.optViewFavorites = $('opt-view-favorites');
+        el.optRandomAll = $('opt-random-all');
         el.optTetris = $('opt-tetris');
         el.optClean = $('opt-clean');
-        el.optRandom = $('opt-random');
-        el.optRandomAll = $('opt-random-all');
     }
 
     // ============================================
     // Communication
     // ============================================
     function setupCommunication() {
-        // BroadcastChannel for same-browser tabs
         if (typeof BroadcastChannel !== 'undefined') {
             channel = new BroadcastChannel('plexd-remote');
             channel.onmessage = (e) => {
@@ -99,7 +110,6 @@ const PlexdRemote = (function() {
             };
         }
 
-        // Listen for localStorage changes
         window.addEventListener('storage', (e) => {
             if (e.key === STATE_KEY && e.newValue) {
                 try {
@@ -111,11 +121,8 @@ const PlexdRemote = (function() {
             }
         });
 
-        // Poll for state
         setInterval(pollState, POLL_INTERVAL);
         setInterval(checkConnection, 1000);
-
-        // Initial ping
         send('ping');
     }
 
@@ -125,17 +132,15 @@ const PlexdRemote = (function() {
             if (res.ok) {
                 const newState = await res.json();
                 const age = Date.now() - (newState.timestamp || 0);
-                console.log('[Remote] State received, age:', age, 'ms, streams:', newState.streams?.length || 0);
                 if (newState.timestamp && age < 3000) {
                     handleStateUpdate(newState);
                     return;
                 }
             }
         } catch (e) {
-            console.log('[Remote] API fetch failed:', e.message);
+            // Silently fail - will try localStorage
         }
 
-        // Fallback to localStorage
         const stored = localStorage.getItem(STATE_KEY);
         if (stored) {
             try {
@@ -149,7 +154,7 @@ const PlexdRemote = (function() {
 
     function send(action, payload = {}) {
         const command = { action, payload, timestamp: Date.now() };
-        console.log('[Remote] Sending command:', action, payload);
+        console.log('[Remote] Sending:', action, payload);
 
         if (channel) {
             channel.postMessage(command);
@@ -173,15 +178,17 @@ const PlexdRemote = (function() {
         const now = Date.now();
         const withinGracePeriod = (now - lastLocalSelectionTime) < SELECTION_GRACE_PERIOD;
 
-        // Update selection from state, but respect local selection grace period
-        if (!selectedStreamId && state.streams && state.streams.length > 0) {
-            // No local selection - use state or first stream
-            selectedStreamId = state.selectedStreamId || state.streams[0].id;
-        } else if (!withinGracePeriod) {
-            // Grace period expired - sync with main app
+        // Update filtered streams
+        updateFilteredStreams();
+
+        // Handle selection
+        if (!selectedStreamId && filteredStreams.length > 0) {
+            selectedStreamId = state.selectedStreamId || filteredStreams[0].id;
+            updateCurrentIndex();
+        } else if (!withinGracePeriod && state.selectedStreamId) {
             selectedStreamId = state.selectedStreamId;
+            updateCurrentIndex();
         }
-        // If within grace period, keep local selection
 
         if (!connected) {
             connected = true;
@@ -206,6 +213,73 @@ const PlexdRemote = (function() {
     }
 
     // ============================================
+    // Filtering
+    // ============================================
+    function updateFilteredStreams() {
+        if (!state?.streams) {
+            filteredStreams = [];
+            return;
+        }
+
+        if (currentFilter === 'all') {
+            filteredStreams = [...state.streams];
+        } else {
+            const targetRating = parseInt(currentFilter, 10);
+            filteredStreams = state.streams.filter(s => (s.rating || 0) === targetRating);
+        }
+    }
+
+    function updateCurrentIndex() {
+        if (!selectedStreamId || filteredStreams.length === 0) {
+            currentIndex = 0;
+            return;
+        }
+        const idx = filteredStreams.findIndex(s => s.id === selectedStreamId);
+        currentIndex = idx >= 0 ? idx : 0;
+    }
+
+    function getFilterCounts() {
+        const counts = { all: 0, 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 };
+        if (!state?.streams) return counts;
+
+        counts.all = state.streams.length;
+        state.streams.forEach(s => {
+            const rating = s.rating || 0;
+            counts[rating] = (counts[rating] || 0) + 1;
+        });
+        return counts;
+    }
+
+    // ============================================
+    // Navigation
+    // ============================================
+    function navigateStream(direction) {
+        if (filteredStreams.length === 0) return;
+
+        if (direction === 'next' || direction === 'right') {
+            currentIndex = (currentIndex + 1) % filteredStreams.length;
+        } else if (direction === 'prev' || direction === 'left') {
+            currentIndex = (currentIndex - 1 + filteredStreams.length) % filteredStreams.length;
+        }
+
+        const stream = filteredStreams[currentIndex];
+        if (stream) {
+            selectedStreamId = stream.id;
+            lastLocalSelectionTime = Date.now();
+            send('selectStream', { streamId: stream.id });
+            render();
+        }
+    }
+
+    function selectStreamById(streamId) {
+        selectedStreamId = streamId;
+        lastLocalSelectionTime = Date.now();
+        updateCurrentIndex();
+        send('selectStream', { streamId });
+        render();
+    }
+
+    // ============================================
     // Rendering
     // ============================================
     function render() {
@@ -213,275 +287,254 @@ const PlexdRemote = (function() {
 
         const hasStreams = state.streams && state.streams.length > 0;
 
-        // Toggle sections
         el.emptyState?.classList.toggle('hidden', hasStreams);
-        el.previewSection?.classList.toggle('hidden', !hasStreams);
-        el.streamsSection?.classList.toggle('hidden', !hasStreams);
-        el.actionBar?.classList.toggle('hidden', !hasStreams);
+        el.triageUI?.classList.toggle('hidden', !hasStreams);
 
         if (hasStreams) {
-            renderPreview();
-            renderStreamList();
-            renderActionBar();
-            renderSheet();
+            renderHero();
+            renderInfo();
+            renderActions();
+            renderRating();
+            renderFilters();
+            renderThumbnails();
+            renderAudioButton();
         }
     }
 
-    function renderPreview() {
-        const stream = state.streams.find(s => s.id === selectedStreamId) || state.streams[0];
+    function renderHero() {
+        const stream = getCurrentStream();
+        if (!stream) return;
+
+        // Thumbnail
+        if (el.heroImage) {
+            if (stream.thumbnail) {
+                el.heroImage.src = stream.thumbnail;
+                el.heroImage.classList.add('visible');
+            } else {
+                el.heroImage.classList.remove('visible');
+            }
+        }
+
+        // Status
+        if (el.heroStatus) {
+            const isPlaying = !stream.paused;
+            el.heroStatus.classList.toggle('playing', isPlaying);
+            el.heroStatus.classList.toggle('paused', !isPlaying);
+            const statusText = el.heroStatus.querySelector('.status-text');
+            if (statusText) {
+                statusText.textContent = isPlaying ? 'Playing' : 'Paused';
+            }
+        }
+
+        // Counter
+        if (el.heroCounter) {
+            const total = filteredStreams.length;
+            el.heroCounter.textContent = total > 0 ? `${currentIndex + 1} / ${total}` : '0 / 0';
+        }
+
+        // Hide swipe hints after first interaction
+        if (!swipeHintShown) {
+            el.swipeHintLR?.classList.remove('faded');
+            el.swipeHintUD?.classList.remove('faded');
+        }
+    }
+
+    function renderInfo() {
+        const stream = getCurrentStream();
         if (!stream) return;
 
         const name = stream.fileName || getDisplayName(stream.url);
-        const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
-        const rating = stream.rating || 0;
+        if (el.streamTitle) el.streamTitle.textContent = name;
 
-        // Thumbnail
-        if (el.previewImage) {
-            if (stream.thumbnail) {
-                el.previewImage.src = stream.thumbnail;
-                el.previewImage.classList.add('visible');
-            } else {
-                el.previewImage.classList.remove('visible');
-            }
+        if (el.streamTime) {
+            el.streamTime.textContent = `${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}`;
         }
 
-        // Status badge
-        if (el.previewStatus) {
-            el.previewStatus.classList.toggle('playing', !stream.paused);
-            el.previewStatus.classList.toggle('paused', stream.paused);
-            const statusText = el.previewStatus.querySelector('.status-text');
-            if (statusText) {
-                statusText.textContent = stream.paused ? 'Paused' : 'Playing';
-            }
-        }
-
-        // Info
-        if (el.previewTitle) el.previewTitle.textContent = name;
-        if (el.previewTime) {
-            el.previewTime.textContent = `${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}`;
-        }
-        if (el.previewRating) {
-            el.previewRating.textContent = rating > 0 ? '\u2605'.repeat(rating) : '';
-        }
-        if (el.previewProgressBar) {
-            el.previewProgressBar.style.width = `${progress}%`;
-        }
-
-        // Update rating buttons (1-9)
-        if (el.ratingStars) {
-            el.ratingStars.querySelectorAll('.rating-btn').forEach(btn => {
-                const btnRating = parseInt(btn.dataset.rating, 10);
-                btn.classList.toggle('active', btnRating === rating);
-            });
-        }
-
-        // Play button state
-        if (el.previewPlay) {
-            el.previewPlay.classList.toggle('paused', stream.paused);
+        // Progress bar (only if not dragging)
+        if (!isDraggingProgress) {
+            const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
+            if (el.progressFill) el.progressFill.style.width = `${progress}%`;
+            if (el.progressThumb) el.progressThumb.style.left = `${progress}%`;
         }
     }
 
-    function renderStreamList() {
-        if (!el.streamsList || !el.streamsCount) return;
-        if (!state?.streams?.length) {
-            el.streamsCount.textContent = '0';
-            el.streamsList.innerHTML = '<div class="no-streams">No streams available</div>';
+    function renderActions() {
+        const stream = getCurrentStream();
+        if (!stream) return;
+
+        // Play button state
+        if (el.btnPlay) {
+            el.btnPlay.classList.toggle('playing', !stream.paused);
+        }
+
+        // Focus button state
+        if (el.btnFocus) {
+            const isFocused = stream.id === state.fullscreenStreamId;
+            el.btnFocus.classList.toggle('active', isFocused);
+        }
+    }
+
+    function renderRating() {
+        const stream = getCurrentStream();
+        const rating = stream?.rating || 0;
+
+        el.ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+            const btnRating = parseInt(btn.dataset.rating, 10);
+            btn.classList.toggle('active', btnRating === rating);
+        });
+    }
+
+    function renderFilters() {
+        const counts = getFilterCounts();
+
+        el.filterTabs?.querySelectorAll('.filter-tab').forEach(tab => {
+            const filter = tab.dataset.filter;
+            const isActive = filter === currentFilter;
+            const count = filter === 'all' ? counts.all : (counts[filter] || 0);
+            const isEmpty = count === 0;
+
+            tab.classList.toggle('active', isActive);
+            tab.classList.toggle('empty', isEmpty);
+
+            const countEl = tab.querySelector('.filter-count');
+            if (countEl) countEl.textContent = count;
+        });
+    }
+
+    function renderThumbnails() {
+        if (!el.thumbsStrip) return;
+
+        if (filteredStreams.length === 0) {
+            el.thumbsStrip.innerHTML = '<div class="no-streams-msg">No streams match filter</div>';
             return;
         }
 
-        // Filter streams by rating if a filter is active
-        let filteredStreams = state.streams;
-        if (currentFilter !== 'all') {
-            const minRating = parseInt(currentFilter, 10);
-            filteredStreams = state.streams.filter(s => (s.rating || 0) >= minRating);
-        }
-
-        // If filter results in no streams, show message
-        if (!filteredStreams.length) {
-            el.streamsCount.textContent = '0';
-            el.streamsList.innerHTML = '<div class="no-streams">No streams match filter</div>';
-            return;
-        }
-
-        el.streamsCount.textContent = filteredStreams.length;
-
-        el.streamsList.innerHTML = filteredStreams.map(stream => {
+        el.thumbsStrip.innerHTML = filteredStreams.map((stream, idx) => {
             const isSelected = stream.id === selectedStreamId;
-            const isFullscreen = stream.id === state.fullscreenStreamId;
-            const name = stream.fileName || getDisplayName(stream.url);
+            const isFocused = stream.id === state?.fullscreenStreamId;
             const rating = stream.rating || 0;
             const hasThumbnail = !!stream.thumbnail;
 
             return `
-                <div class="stream-item ${isSelected ? 'selected' : ''} ${isFullscreen ? 'fullscreen' : ''}"
-                     data-id="${stream.id}">
-                    <div class="stream-thumb">
-                        ${hasThumbnail
-                            ? `<img class="stream-thumb-img visible" src="${stream.thumbnail}" alt="">`
-                            : `<div class="stream-thumb-placeholder"></div>`
-                        }
-                        ${rating > 0 ? `<span class="stream-rating-badge">${rating}</span>` : ''}
-                    </div>
-                    <div class="stream-name">${escapeHtml(name)}</div>
+                <div class="thumb-item ${isSelected ? 'selected' : ''} ${isFocused ? 'focused' : ''}"
+                     data-id="${stream.id}" data-index="${idx}">
+                    ${hasThumbnail
+                        ? `<img class="thumb-img" src="${stream.thumbnail}" alt="">`
+                        : `<div class="thumb-placeholder"></div>`
+                    }
+                    ${rating > 0 ? `<span class="thumb-rating">${rating}</span>` : ''}
                 </div>
             `;
         }).join('');
 
-        // Event listeners - tap to select
-        el.streamsList.querySelectorAll('.stream-item').forEach(item => {
-            const id = item.dataset.id;
-
+        // Event listeners
+        el.thumbsStrip.querySelectorAll('.thumb-item').forEach(item => {
             item.addEventListener('click', () => {
-                selectedStreamId = id;
-                lastLocalSelectionTime = Date.now();
-                send('selectStream', { streamId: id });
-                render();
+                selectStreamById(item.dataset.id);
             });
         });
-    }
 
-    function renderActionBar() {
-        if (!state) return;
-
-        const stream = state.streams.find(s => s.id === selectedStreamId) || state.streams[0];
-        if (!stream) return;
-
-        // Mute button
-        if (el.actionMute) {
-            el.actionMute.classList.toggle('muted', stream.muted);
-            const label = el.actionMute.querySelector('span');
-            if (label) label.textContent = stream.muted ? 'Unmute' : 'Mute';
-        }
-
-        // Rating button
-        if (el.actionRating) {
-            const rating = stream.rating || 0;
-            el.actionRating.classList.toggle('active', rating > 0);
-            const label = el.actionRating.querySelector('span');
-            if (label) label.textContent = rating > 0 ? `${rating}\u2605` : 'Rate';
-        }
-
-        // Fullscreen button
-        if (el.actionFullscreen) {
-            const isFs = stream.id === state.fullscreenStreamId;
-            el.actionFullscreen.classList.toggle('active', isFs);
-            const label = el.actionFullscreen.querySelector('span');
-            if (label) label.textContent = isFs ? 'Unfocus' : 'Focus';
+        // Scroll selected into view
+        const selectedThumb = el.thumbsStrip.querySelector('.thumb-item.selected');
+        if (selectedThumb) {
+            selectedThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
         }
     }
 
-    function renderSheet() {
-        if (!el.moreSheet || !state) return;
+    function renderAudioButton() {
+        const stream = getCurrentStream();
+        if (!el.audioToggle || !stream) return;
 
-        const anyPlaying = state.streams?.some(s => !s.paused);
-        const anyUnmuted = state.streams?.some(s => !s.muted);
+        const isMuted = stream.muted;
+        el.audioToggle.classList.toggle('muted', isMuted);
+        el.audioToggle.classList.toggle('unmuted', !isMuted);
+    }
 
-        if (el.optPauseAll) {
-            const span = el.optPauseAll.querySelector('span');
-            if (span) span.textContent = anyPlaying ? 'Pause All' : 'Play All';
+    function getCurrentStream() {
+        if (!state?.streams || !selectedStreamId) {
+            return filteredStreams[0] || state?.streams?.[0];
         }
-
-        if (el.optMuteAll) {
-            const span = el.optMuteAll.querySelector('span');
-            if (span) span.textContent = anyUnmuted ? 'Mute All' : 'Unmute All';
-        }
-
-        if (el.optViewAll) {
-            el.optViewAll.classList.toggle('active', state.viewMode === 'all');
-        }
-        if (el.optViewFavorites) {
-            el.optViewFavorites.classList.toggle('active', state.viewMode !== 'all');
-        }
-        if (el.optTetris) {
-            el.optTetris.classList.toggle('active', state.tetrisMode);
-        }
-        if (el.optClean) {
-            el.optClean.classList.toggle('active', state.cleanMode);
-        }
+        return state.streams.find(s => s.id === selectedStreamId) || filteredStreams[0];
     }
 
     // ============================================
     // Event Handlers
     // ============================================
     function setupEventListeners() {
-        // Preview controls
-        el.previewBack?.addEventListener('click', () => {
-            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: -10 });
-        });
-        el.previewPrev?.addEventListener('click', () => {
-            send('selectNext', { direction: 'left' });
-        });
-        el.previewPlay?.addEventListener('click', () => {
+        // Audio toggle
+        el.audioToggle?.addEventListener('click', () => {
             if (selectedStreamId) {
-                send('togglePause', { streamId: selectedStreamId });
-            }
-        });
-        el.previewNext?.addEventListener('click', () => {
-            send('selectNext', { direction: 'right' });
-        });
-        el.previewForward?.addEventListener('click', () => {
-            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
-        });
-
-        // Progress bar click/tap to seek
-        const handleProgressSeek = (clientX) => {
-            if (!selectedStreamId) {
-                console.log('[Remote] Progress seek: no selectedStreamId');
-                return;
-            }
-            const stream = state?.streams?.find(s => s.id === selectedStreamId);
-            if (!stream) {
-                console.log('[Remote] Progress seek: stream not found');
-                return;
-            }
-            if (!stream.duration || stream.duration <= 0) {
-                console.log('[Remote] Progress seek: no duration', stream.duration);
-                return;
-            }
-
-            const rect = el.previewProgress.getBoundingClientRect();
-            const clickX = clientX - rect.left;
-            const percent = Math.max(0, Math.min(1, clickX / rect.width));
-            const seekTime = percent * stream.duration;
-
-            console.log('[Remote] Progress seek: rect.width=', rect.width, 'clickX=', clickX, 'percent=', percent, 'duration=', stream.duration, 'seekTime=', seekTime);
-            send('seek', { streamId: selectedStreamId, time: seekTime });
-        };
-
-        el.previewProgress?.addEventListener('click', (e) => {
-            handleProgressSeek(e.clientX);
-        });
-
-        // Touch support for progress bar
-        el.previewProgress?.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            if (e.changedTouches.length > 0) {
-                handleProgressSeek(e.changedTouches[0].clientX);
+                send('toggleMute', { streamId: selectedStreamId });
             }
         });
 
-        // Action bar
-        el.actionSeekBack?.addEventListener('click', () => {
+        // Action buttons
+        el.btnBack?.addEventListener('click', () => {
             if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: -10 });
         });
-        el.actionSeekForward?.addEventListener('click', () => {
+
+        el.btnForward?.addEventListener('click', () => {
             if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
         });
-        el.actionRandom?.addEventListener('click', () => {
+
+        el.btnRandom?.addEventListener('click', () => {
             if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
-        el.actionFullscreen?.addEventListener('click', () => {
-            // Toggle focus mode on selected stream
-            console.log('[Remote] Focus button clicked, selectedStreamId:', selectedStreamId);
-            if (selectedStreamId) {
-                if (state?.fullscreenStreamId === selectedStreamId) {
-                    send('exitFullscreen');
-                } else {
-                    send('enterFullscreen', { streamId: selectedStreamId });
-                }
+
+        el.btnPlay?.addEventListener('click', () => {
+            if (selectedStreamId) send('togglePause', { streamId: selectedStreamId });
+        });
+
+        el.btnFocus?.addEventListener('click', () => {
+            if (!selectedStreamId) return;
+            if (state?.fullscreenStreamId === selectedStreamId) {
+                send('exitFullscreen');
+            } else {
+                send('enterFullscreen', { streamId: selectedStreamId });
             }
         });
-        el.actionMore?.addEventListener('click', openSheet);
+
+        // Rating buttons
+        el.ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const rating = parseInt(btn.dataset.rating, 10);
+                if (selectedStreamId) {
+                    send('setRating', { streamId: selectedStreamId, rating });
+                    // Visual feedback
+                    btn.classList.add('just-set');
+                    setTimeout(() => btn.classList.remove('just-set'), 300);
+                }
+            });
+        });
+
+        // Filter tabs
+        el.filterTabs?.querySelectorAll('.filter-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const newFilter = tab.dataset.filter;
+                if (newFilter === currentFilter) return;
+
+                currentFilter = newFilter;
+                updateFilteredStreams();
+
+                // Try to keep current stream if it's in the filter
+                if (selectedStreamId) {
+                    const inFilter = filteredStreams.some(s => s.id === selectedStreamId);
+                    if (!inFilter && filteredStreams.length > 0) {
+                        selectedStreamId = filteredStreams[0].id;
+                        lastLocalSelectionTime = Date.now();
+                        send('selectStream', { streamId: selectedStreamId });
+                    }
+                }
+                updateCurrentIndex();
+                render();
+            });
+        });
+
+        // Swipe gestures on hero
+        setupHeroGestures();
+
+        // Progress bar interactions
+        setupProgressBar();
 
         // Sheet
         el.sheetBackdrop?.addEventListener('click', closeSheet);
@@ -489,66 +542,60 @@ const PlexdRemote = (function() {
 
         el.optPauseAll?.addEventListener('click', () => { send('togglePauseAll'); closeSheet(); });
         el.optMuteAll?.addEventListener('click', () => { send('toggleMuteAll'); closeSheet(); });
-        el.optGlobalFullscreen?.addEventListener('click', () => { send('toggleGlobalFullscreen'); closeSheet(); });
-        el.optViewAll?.addEventListener('click', () => { send('setViewMode', { mode: 'all' }); closeSheet(); });
-        el.optViewFavorites?.addEventListener('click', () => { send('cycleViewMode'); closeSheet(); });
+        el.optRandomAll?.addEventListener('click', () => { send('randomSeekAll'); closeSheet(); });
         el.optTetris?.addEventListener('click', () => { send('toggleTetrisMode'); closeSheet(); });
         el.optClean?.addEventListener('click', () => { send('toggleCleanMode'); closeSheet(); });
-        el.optRandom?.addEventListener('click', () => {
-            if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
-            closeSheet();
-        });
-        el.optRandomAll?.addEventListener('click', () => { send('randomSeekAll'); closeSheet(); });
 
-        // Swipe gestures on preview
-        setupSwipeGestures();
+        // Long press on random for more options
+        let longPressTimer = null;
+        el.btnRandom?.addEventListener('touchstart', () => {
+            longPressTimer = setTimeout(() => {
+                openSheet();
+            }, 500);
+        }, { passive: true });
 
-        // Rating buttons (1-9)
-        el.ratingStars?.querySelectorAll('.rating-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const rating = parseInt(btn.dataset.rating, 10);
-                if (selectedStreamId) {
-                    send('setRating', { streamId: selectedStreamId, rating });
-                }
-            });
-        });
-
-        // Filter chips
-        el.filterChips?.querySelectorAll('.filter-chip').forEach(chip => {
-            chip.addEventListener('click', () => {
-                currentFilter = chip.dataset.filter;
-                el.filterChips.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-                render();
-            });
-        });
+        el.btnRandom?.addEventListener('touchend', () => {
+            if (longPressTimer) clearTimeout(longPressTimer);
+        }, { passive: true });
     }
 
-    function setupSwipeGestures() {
-        const previewContainer = el.previewSection?.querySelector('.preview-container');
-        if (!previewContainer) return;
+    function setupHeroGestures() {
+        if (!el.heroPreview) return;
 
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
 
-        // Prevent default to stop page scrolling - must be non-passive
-        previewContainer.addEventListener('touchstart', (e) => {
+        el.heroPreview.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
             isSwiping = true;
         }, { passive: false });
 
-        previewContainer.addEventListener('touchmove', (e) => {
-            if (isSwiping) {
-                // Prevent page scroll while swiping on preview
-                e.preventDefault();
+        el.heroPreview.addEventListener('touchmove', (e) => {
+            if (!isSwiping) return;
+            e.preventDefault();
+
+            const currentX = e.touches[0].clientX;
+            const currentY = e.touches[0].clientY;
+            const deltaX = currentX - startX;
+            const deltaY = currentY - startY;
+
+            // Visual feedback during swipe
+            if (Math.abs(deltaX) > 20 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                el.heroPreview.classList.toggle('swiping-left', deltaX < -20);
+                el.heroPreview.classList.toggle('swiping-right', deltaX > 20);
+            } else if (deltaY < -20 && Math.abs(deltaY) > Math.abs(deltaX)) {
+                el.heroPreview.classList.add('swiping-up');
             }
         }, { passive: false });
 
-        previewContainer.addEventListener('touchend', (e) => {
+        el.heroPreview.addEventListener('touchend', (e) => {
             if (!isSwiping) return;
             isSwiping = false;
+
+            // Clear visual feedback
+            el.heroPreview.classList.remove('swiping-left', 'swiping-right', 'swiping-up');
 
             const endX = e.changedTouches[0].clientX;
             const endY = e.changedTouches[0].clientY;
@@ -557,29 +604,124 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Need at least 50px movement
-            if (absX < 50 && absY < 50) return;
-
-            if (absX > absY) {
-                // Horizontal swipe
-                if (deltaX > 0) {
-                    send('selectNext', { direction: 'left' });
-                } else {
-                    send('selectNext', { direction: 'right' });
+            // Tap detection (minimal movement)
+            if (absX < 10 && absY < 10) {
+                // Tap = toggle play/pause
+                if (selectedStreamId) {
+                    send('togglePause', { streamId: selectedStreamId });
                 }
-            } else {
-                // Vertical swipe
-                if (deltaY > 0) {
-                    send('selectNext', { direction: 'up' });
-                } else {
-                    send('selectNext', { direction: 'down' });
+                return;
+            }
+
+            // Swipe detection
+            if (absX < SWIPE_THRESHOLD && absY < SWIPE_THRESHOLD) return;
+
+            // Hide hints after first swipe
+            if (!swipeHintShown) {
+                swipeHintShown = true;
+                el.swipeHintLR?.classList.add('faded');
+                el.swipeHintUD?.classList.add('faded');
+            }
+
+            if (absY > absX && deltaY < -SWIPE_THRESHOLD) {
+                // Swipe UP = random seek
+                if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
+            } else if (absX > absY) {
+                // Horizontal swipe = navigate
+                if (deltaX > SWIPE_THRESHOLD) {
+                    navigateStream('prev');
+                } else if (deltaX < -SWIPE_THRESHOLD) {
+                    navigateStream('next');
                 }
             }
         }, { passive: false });
 
-        previewContainer.addEventListener('touchcancel', () => {
+        el.heroPreview.addEventListener('touchcancel', () => {
             isSwiping = false;
+            el.heroPreview.classList.remove('swiping-left', 'swiping-right', 'swiping-up');
         }, { passive: true });
+    }
+
+    function setupProgressBar() {
+        if (!el.progressTrack) return;
+
+        const seekToPosition = (clientX) => {
+            const stream = getCurrentStream();
+            if (!stream?.duration || stream.duration <= 0) return;
+
+            const rect = el.progressTrack.getBoundingClientRect();
+            const percent = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+            const seekTime = percent * stream.duration;
+
+            // Update UI immediately
+            if (el.progressFill) el.progressFill.style.width = `${percent * 100}%`;
+            if (el.progressThumb) el.progressThumb.style.left = `${percent * 100}%`;
+
+            return seekTime;
+        };
+
+        // Touch events
+        el.progressTrack.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            isDraggingProgress = true;
+            el.progressTrack.classList.add('dragging');
+            seekToPosition(e.touches[0].clientX);
+        }, { passive: false });
+
+        el.progressTrack.addEventListener('touchmove', (e) => {
+            if (!isDraggingProgress) return;
+            e.preventDefault();
+            seekToPosition(e.touches[0].clientX);
+        }, { passive: false });
+
+        el.progressTrack.addEventListener('touchend', (e) => {
+            if (!isDraggingProgress) return;
+            isDraggingProgress = false;
+            el.progressTrack.classList.remove('dragging');
+
+            const seekTime = seekToPosition(e.changedTouches[0].clientX);
+            if (seekTime !== undefined && selectedStreamId) {
+                send('seek', { streamId: selectedStreamId, time: seekTime });
+            }
+        }, { passive: false });
+
+        // Mouse events (for testing on desktop)
+        el.progressTrack.addEventListener('mousedown', (e) => {
+            isDraggingProgress = true;
+            el.progressTrack.classList.add('dragging');
+            seekToPosition(e.clientX);
+
+            const onMouseMove = (e) => {
+                if (!isDraggingProgress) return;
+                seekToPosition(e.clientX);
+            };
+
+            const onMouseUp = (e) => {
+                if (!isDraggingProgress) return;
+                isDraggingProgress = false;
+                el.progressTrack.classList.remove('dragging');
+
+                const seekTime = seekToPosition(e.clientX);
+                if (seekTime !== undefined && selectedStreamId) {
+                    send('seek', { streamId: selectedStreamId, time: seekTime });
+                }
+
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+
+        // Simple click
+        el.progressTrack.addEventListener('click', (e) => {
+            if (isDraggingProgress) return;
+            const seekTime = seekToPosition(e.clientX);
+            if (seekTime !== undefined && selectedStreamId) {
+                send('seek', { streamId: selectedStreamId, time: seekTime });
+            }
+        });
     }
 
     function openSheet() {
@@ -601,9 +743,9 @@ const PlexdRemote = (function() {
             const pathname = urlObj.pathname;
             const filename = pathname.split('/').pop() || urlObj.hostname;
             const decoded = decodeURIComponent(filename);
-            return decoded.length > 40 ? decoded.substring(0, 37) + '...' : decoded;
+            return decoded.length > 50 ? decoded.substring(0, 47) + '...' : decoded;
         } catch (e) {
-            return url.substring(0, 40);
+            return url.substring(0, 50);
         }
     }
 
@@ -620,12 +762,6 @@ const PlexdRemote = (function() {
         return `${m}:${s.toString().padStart(2, '0')}`;
     }
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
     // ============================================
     // Initialize
     // ============================================
@@ -633,7 +769,7 @@ const PlexdRemote = (function() {
         cacheElements();
         setupEventListeners();
         setupCommunication();
-        console.log('Plexd Remote initialized');
+        console.log('Plexd Remote (Triage Mode) initialized');
     }
 
     if (document.readyState === 'loading') {

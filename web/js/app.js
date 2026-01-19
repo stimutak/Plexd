@@ -4995,6 +4995,7 @@ const PlexdRemote = (function() {
      * Handle incoming remote commands
      */
     function handleRemoteCommand(action, payload = {}) {
+        console.log('[Remote] Command received:', action, payload);
         switch (action) {
             // Connection
             case 'ping':

@@ -14,12 +14,14 @@ const PlexdRemote = (function() {
     let connected = false;
     let lastStateTime = 0;
     let selectedStreamId = null;
+    let lastLocalSelectionTime = 0; // Track when we last made a local selection
     const lastTapTimes = {}; // Track double-tap per stream ID
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
     const POLL_INTERVAL = 300;
     const CONNECTION_TIMEOUT = 2000;
+    const SELECTION_GRACE_PERIOD = 1000; // Ignore state updates for selection for 1s after local selection
 
     // ============================================
     // DOM Elements
@@ -135,6 +137,7 @@ const PlexdRemote = (function() {
 
     function send(action, payload = {}) {
         const command = { action, payload, timestamp: Date.now() };
+        console.log('[Remote] Sending command:', action, payload);
 
         if (channel) {
             channel.postMessage(command);
@@ -155,12 +158,18 @@ const PlexdRemote = (function() {
         state = newState;
         lastStateTime = Date.now();
 
-        // Auto-select first stream if none selected
+        const now = Date.now();
+        const withinGracePeriod = (now - lastLocalSelectionTime) < SELECTION_GRACE_PERIOD;
+
+        // Update selection from state, but respect local selection grace period
         if (!selectedStreamId && state.streams && state.streams.length > 0) {
+            // No local selection - use state or first stream
             selectedStreamId = state.selectedStreamId || state.streams[0].id;
-        } else {
+        } else if (!withinGracePeriod) {
+            // Grace period expired - sync with main app
             selectedStreamId = state.selectedStreamId;
         }
+        // If within grace period, keep local selection
 
         if (!connected) {
             connected = true;
@@ -308,24 +317,24 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select
+            // Tap to select, double-tap for fullscreen
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.stream-action')) return;
-                selectedStreamId = id;
-                send('selectStream', { streamId: id });
-                render(); // Update preview immediately
-            });
 
-            // Double tap for fullscreen
-            item.addEventListener('touchend', (e) => {
-                if (e.target.closest('.stream-action')) return;
                 const now = Date.now();
                 const lastTap = lastTapTimes[id] || 0;
+
                 if (now - lastTap < 400) {
+                    // Double-tap: enter fullscreen
                     send('enterFullscreen', { streamId: id });
-                    lastTapTimes[id] = 0; // Reset to prevent triple-tap
+                    lastTapTimes[id] = 0;
                 } else {
+                    // Single tap: select stream
                     lastTapTimes[id] = now;
+                    selectedStreamId = id;
+                    lastLocalSelectionTime = now; // Prevent state updates from overwriting
+                    send('selectStream', { streamId: id });
+                    render();
                 }
             });
 

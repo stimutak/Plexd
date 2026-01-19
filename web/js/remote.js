@@ -59,6 +59,7 @@ const PlexdRemote = (function() {
         el.actionBar = $('action-bar');
         el.actionMute = $('action-mute');
         el.actionRating = $('action-rating');
+        el.actionRandom = $('action-random');
         el.actionFullscreen = $('action-fullscreen');
         el.actionMore = $('action-more');
 
@@ -321,7 +322,7 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select, double-tap for random seek
+            // Tap to select, double-tap for fullscreen
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.stream-action')) return;
 
@@ -329,8 +330,8 @@ const PlexdRemote = (function() {
                 const lastTap = lastTapTimes[id] || 0;
 
                 if (now - lastTap < 400) {
-                    // Double-tap: random seek
-                    send('randomSeek', { streamId: id });
+                    // Double-tap: toggle fullscreen
+                    send('enterFullscreen', { streamId: id });
                     lastTapTimes[id] = 0;
                 } else {
                     // Single tap: select stream
@@ -440,6 +441,9 @@ const PlexdRemote = (function() {
         });
         el.actionRating?.addEventListener('click', () => {
             if (selectedStreamId) send('cycleRating', { streamId: selectedStreamId });
+        });
+        el.actionRandom?.addEventListener('click', () => {
+            if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
         el.actionFullscreen?.addEventListener('click', () => {
             if (selectedStreamId) {

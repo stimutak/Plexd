@@ -4955,6 +4955,7 @@ const PlexdRemote = (function() {
                 if (res.ok) {
                     const cmd = await res.json();
                     if (cmd && cmd.action) {
+                        console.log('[Remote] Polled command:', cmd.action);
                         handleRemoteCommand(cmd.action, cmd.payload);
                     }
                 }

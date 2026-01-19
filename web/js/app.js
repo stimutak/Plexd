@@ -5375,6 +5375,16 @@ const PlexdRemote = (function() {
                 }
                 sendState();
                 break;
+            case 'randomSeek':
+                if (payload.streamId) {
+                    PlexdStream.seekToRandomPosition(payload.streamId);
+                }
+                sendState();
+                break;
+            case 'randomSeekAll':
+                PlexdStream.seekAllToRandomPosition();
+                sendState();
+                break;
 
             // Selection/Navigation
             case 'selectStream':

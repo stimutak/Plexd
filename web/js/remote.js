@@ -71,6 +71,8 @@ const PlexdRemote = (function() {
         el.optViewFavorites = $('opt-view-favorites');
         el.optTetris = $('opt-tetris');
         el.optClean = $('opt-clean');
+        el.optRandom = $('opt-random');
+        el.optRandomAll = $('opt-random-all');
     }
 
     // ============================================
@@ -449,6 +451,11 @@ const PlexdRemote = (function() {
         el.optViewFavorites?.addEventListener('click', () => { send('cycleViewMode'); closeSheet(); });
         el.optTetris?.addEventListener('click', () => { send('toggleTetrisMode'); closeSheet(); });
         el.optClean?.addEventListener('click', () => { send('toggleCleanMode'); closeSheet(); });
+        el.optRandom?.addEventListener('click', () => {
+            if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
+            closeSheet();
+        });
+        el.optRandomAll?.addEventListener('click', () => { send('randomSeekAll'); closeSheet(); });
 
         // Swipe gestures on preview
         setupSwipeGestures();

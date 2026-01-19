@@ -1640,6 +1640,16 @@ body {
     display: none !important;
 }
 
+/* Clean mode: hide selection indicator and header toggle */
+.plexd-app.clean-mode .plexd-stream.plexd-selected {
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+.plexd-app.clean-mode .plexd-header-toggle {
+    display: none !important;
+}
+
 /* ========================================
    Responsive Per-Stream Controls
    ======================================== */

@@ -5192,6 +5192,9 @@ const PlexdRemote = (function() {
      * Get current application state for remotes
      */
     function getState() {
+        // Get thumbnails for all streams (captures video frames)
+        const thumbnails = PlexdStream.getAllThumbnails ? PlexdStream.getAllThumbnails() : {};
+
         const streams = PlexdStream.getAllStreams().map(s => ({
             id: s.id,
             url: s.url,
@@ -5202,7 +5205,8 @@ const PlexdRemote = (function() {
             duration: s.video ? s.video.duration : 0,
             aspectRatio: s.aspectRatio,
             rating: PlexdStream.getRating(s.url),
-            fileName: s.fileName || null
+            fileName: s.fileName || null,
+            thumbnail: thumbnails[s.id] || null
         }));
 
         const selected = PlexdStream.getSelectedStream();

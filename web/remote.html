@@ -2,83 +2,167 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0a0a0a">
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-title" content="Plexd">
 
     <title>Plexd Remote</title>
 
+    <link rel="apple-touch-icon" href="assets/icon-180.png">
     <link rel="stylesheet" href="css/remote.css">
 </head>
 <body>
-    <div class="remote-app">
-        <!-- Connection Status -->
-        <header class="remote-header">
-            <div class="remote-logo">Plex<span>d</span> Remote</div>
-            <div id="connection-status" class="connection-status disconnected">
-                <span class="status-dot"></span>
-                <span class="status-text">Connecting...</span>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">Plexd</h1>
+                <div id="connection" class="connection">
+                    <span class="connection-dot"></span>
+                </div>
             </div>
         </header>
 
-        <!-- Stream List -->
-        <main class="remote-main">
-            <div id="stream-list" class="stream-list">
-                <div class="empty-state">
-                    <p>Waiting for connection to Plexd...</p>
-                    <p class="hint">Make sure the main Plexd app is open in another tab/window on the same device or network.</p>
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Empty State -->
+            <div id="empty-state" class="empty-state">
+                <div class="empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="2" y="3" width="20" height="14" rx="2"/>
+                        <path d="M8 21h8M12 17v4"/>
+                    </svg>
                 </div>
+                <p class="empty-title">No Streams</p>
+                <p class="empty-hint">Open Plexd on your computer to start</p>
             </div>
+
+            <!-- Preview Section (Selected Stream) -->
+            <section id="preview-section" class="preview-section hidden">
+                <div class="preview-container">
+                    <div class="preview-thumbnail" id="preview-thumbnail">
+                        <div class="preview-placeholder">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>
+                            </svg>
+                            <span>No preview</span>
+                        </div>
+                        <img class="preview-image" id="preview-image" alt="Stream preview">
+                    </div>
+                    <div class="preview-overlay">
+                        <div class="preview-status" id="preview-status">
+                            <span class="status-icon"></span>
+                            <span class="status-text">Paused</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="preview-info">
+                    <h2 class="preview-title" id="preview-title">Select a stream</h2>
+                    <div class="preview-meta">
+                        <span class="preview-time" id="preview-time">0:00 / 0:00</span>
+                        <span class="preview-rating" id="preview-rating"></span>
+                    </div>
+                    <div class="preview-progress">
+                        <div class="preview-progress-bar" id="preview-progress-bar"></div>
+                    </div>
+                </div>
+                <!-- Quick Controls Under Preview -->
+                <div class="preview-controls">
+                    <button class="preview-btn" id="preview-back" aria-label="Skip back 10s">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                    </button>
+                    <button class="preview-btn" id="preview-prev" aria-label="Previous">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                    </button>
+                    <button class="preview-btn preview-btn-play" id="preview-play" aria-label="Play/Pause">
+                        <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+                    </button>
+                    <button class="preview-btn" id="preview-next" aria-label="Next">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
+                    </button>
+                    <button class="preview-btn" id="preview-forward" aria-label="Skip forward 10s">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/></svg>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Stream List with Thumbnails -->
+            <section id="streams-section" class="streams-section hidden">
+                <div class="streams-header">
+                    <h3>All Streams</h3>
+                    <span class="streams-count" id="streams-count">0</span>
+                </div>
+                <div class="streams-list" id="streams-list"></div>
+            </section>
         </main>
 
-        <!-- Global Controls -->
-        <footer class="remote-controls">
-            <!-- Transport Controls -->
-            <div class="control-row transport-controls">
-                <button id="btn-prev" class="control-btn nav-btn" title="Previous">
-                    <span class="icon">◀</span>
-                </button>
-                <button id="btn-pause-all" class="control-btn large-btn" title="Play/Pause All">
-                    <span class="icon">⏸</span>
-                </button>
-                <button id="btn-next" class="control-btn nav-btn" title="Next">
-                    <span class="icon">▶</span>
-                </button>
-            </div>
+        <!-- Bottom Action Bar -->
+        <div id="action-bar" class="action-bar hidden">
+            <button class="action-bar-btn" id="action-mute" aria-label="Mute">
+                <svg class="icon-unmuted" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                <svg class="icon-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+                <span>Mute</span>
+            </button>
+            <button class="action-bar-btn" id="action-rating" aria-label="Rate">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                <span>Rate</span>
+            </button>
+            <button class="action-bar-btn" id="action-fullscreen" aria-label="Focus">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                <span>Focus</span>
+            </button>
+            <button class="action-bar-btn" id="action-more" aria-label="More">
+                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+                <span>More</span>
+            </button>
+        </div>
 
-            <!-- Seek Controls -->
-            <div class="control-row seek-controls">
-                <button id="btn-seek-back" class="control-btn" title="Skip -10s">
-                    <span class="icon">-10s</span>
-                </button>
-                <button id="btn-mute-all" class="control-btn" title="Mute/Unmute All">
-                    <span class="icon">🔇</span>
-                </button>
-                <button id="btn-seek-fwd" class="control-btn" title="Skip +10s">
-                    <span class="icon">+10s</span>
-                </button>
+        <!-- More Options Sheet -->
+        <div id="more-sheet" class="sheet hidden">
+            <div class="sheet-backdrop"></div>
+            <div class="sheet-content">
+                <div class="sheet-handle"></div>
+                <div class="sheet-header">
+                    <h3>More Options</h3>
+                </div>
+                <div class="sheet-options">
+                    <button class="sheet-option" id="opt-pause-all">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+                        <span>Pause All</span>
+                    </button>
+                    <button class="sheet-option" id="opt-mute-all">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                        <span>Mute All</span>
+                    </button>
+                    <button class="sheet-option" id="opt-global-fullscreen">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                        <span>Global Fullscreen</span>
+                    </button>
+                    <div class="sheet-divider"></div>
+                    <button class="sheet-option" id="opt-view-all">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
+                        <span>View All Streams</span>
+                    </button>
+                    <button class="sheet-option" id="opt-view-favorites">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                        <span>View Favorites Only</span>
+                    </button>
+                    <div class="sheet-divider"></div>
+                    <button class="sheet-option" id="opt-tetris">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4z"/></svg>
+                        <span>Tetris Mode</span>
+                    </button>
+                    <button class="sheet-option" id="opt-clean">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                        <span>Clean Mode</span>
+                    </button>
+                </div>
+                <button class="sheet-cancel" id="sheet-cancel">Cancel</button>
             </div>
-
-            <!-- View Controls -->
-            <div class="control-row view-controls">
-                <button id="btn-fullscreen" class="control-btn" title="Fullscreen">
-                    <span class="icon">⛶</span>
-                </button>
-                <button id="btn-view-mode" class="control-btn" title="View Mode">
-                    <span class="icon">All</span>
-                </button>
-                <button id="btn-tetris" class="control-btn" title="Tetris Mode">
-                    <span class="icon">T</span>
-                </button>
-                <button id="btn-coverflow" class="control-btn" title="Coverflow Mode">
-                    <span class="icon">C</span>
-                </button>
-                <button id="btn-clean" class="control-btn" title="Clean Mode">
-                    <span class="icon">👁</span>
-                </button>
-            </div>
-        </footer>
+        </div>
     </div>
 
     <script src="js/remote.js"></script>

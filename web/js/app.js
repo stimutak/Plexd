@@ -4234,6 +4234,49 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Show QR code modal for remote control
+     */
+    function showRemoteQR() {
+        const modal = document.getElementById('remote-qr-modal');
+        if (!modal) return;
+
+        // Get the remote URL
+        const protocol = window.location.protocol;
+        const host = window.location.hostname;
+        const port = window.location.port ? ':' + window.location.port : '';
+        const remoteUrl = `${protocol}//${host}${port}/remote.html`;
+
+        // Show the URL
+        const urlEl = document.getElementById('remote-qr-url');
+        if (urlEl) urlEl.textContent = remoteUrl;
+
+        // Generate QR code
+        const canvas = document.getElementById('remote-qr-canvas');
+        if (canvas && typeof QRCode !== 'undefined') {
+            QRCode.toCanvas(canvas, remoteUrl, {
+                width: 200,
+                margin: 0,
+                color: {
+                    dark: '#000000',
+                    light: '#ffffff'
+                }
+            }, function(error) {
+                if (error) console.error('QR generation error:', error);
+            });
+        }
+
+        modal.style.display = 'flex';
+    }
+
+    /**
+     * Hide QR code modal
+     */
+    function hideRemoteQR() {
+        const modal = document.getElementById('remote-qr-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    /**
      * Delete a saved combination
      */
     async function deleteStreamCombination(name) {
@@ -5200,7 +5243,10 @@ const PlexdApp = (function() {
         // File management
         showManageStoredFilesModal,
         // Help
-        showShortcutsModal
+        showShortcutsModal,
+        // Remote QR
+        showRemoteQR,
+        hideRemoteQR
     };
 })();
 

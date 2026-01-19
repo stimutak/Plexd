@@ -1391,6 +1391,34 @@ body {
     justify-content: flex-end;
 }
 
+/* QR Code Modal */
+.plexd-qr-modal {
+    text-align: center;
+}
+
+.plexd-qr-container {
+    background: #fff;
+    padding: 16px;
+    border-radius: 12px;
+    display: inline-block;
+    margin: 16px 0;
+}
+
+.plexd-qr-container canvas {
+    display: block;
+}
+
+.plexd-qr-url {
+    font-family: monospace;
+    font-size: 12px;
+    color: #0af;
+    word-break: break-all;
+    background: #0a0a0a;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+}
+
 /* Local Files Modal */
 .plexd-modal-wide {
     max-width: 500px;

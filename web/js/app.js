@@ -5391,16 +5391,18 @@ const PlexdRemote = (function() {
             // Selection/Navigation
             case 'selectStream':
                 PlexdStream.selectStream(payload.streamId || null);
-                // If in focused mode, switch focus to the selected stream
-                if (payload.streamId && PlexdStream.getFullscreenMode() === 'true-focused') {
+                // If in any focused mode, switch focus to the selected stream
+                const modeSelect = PlexdStream.getFullscreenMode();
+                if (payload.streamId && (modeSelect === 'true-focused' || modeSelect === 'browser-fill')) {
                     PlexdStream.enterFocusedMode(payload.streamId);
                 }
                 sendState();
                 break;
             case 'selectNext':
                 PlexdStream.selectNextStream(payload.direction || 'right');
-                // If in focused mode, switch focus to the newly selected stream
-                if (PlexdStream.getFullscreenMode() === 'true-focused') {
+                // If in any focused mode, switch focus to the newly selected stream
+                const modeNext = PlexdStream.getFullscreenMode();
+                if (modeNext === 'true-focused' || modeNext === 'browser-fill') {
                     const selected = PlexdStream.getSelectedStream();
                     if (selected) {
                         PlexdStream.enterFocusedMode(selected.id);

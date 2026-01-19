@@ -859,6 +859,30 @@ const PlexdApp = (function() {
         // Keyboard shortcuts
         document.addEventListener('keydown', handleKeyboard);
 
+        // Capture-phase Escape handler for Bug Eye/Mosaic - highest priority
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (isTypingTarget(e.target)) return;
+
+            // Priority 1: Close Bug Eye
+            if (bugEyeMode) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                toggleBugEyeMode(true);
+                return;
+            }
+
+            // Priority 2: Close Mosaic
+            if (mosaicMode) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                toggleMosaicMode(true);
+                return;
+            }
+        }, true); // Capture phase
+
         // F key for true fullscreen - toggles true fullscreen (hides browser chrome)
         document.addEventListener('keydown', (e) => {
             if (isTypingTarget(e.target)) return;
@@ -1466,16 +1490,26 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Update bug eye if stream changes
+     * Update bug eye or mosaic if stream changes
      */
     function updateBugEyeIfNeeded() {
-        if (!bugEyeMode) return;
         const fullscreenStream = PlexdStream.getFullscreenStream();
         const selected = PlexdStream.getSelectedStream();
         const targetStream = fullscreenStream || selected;
+        if (!targetStream) return;
 
-        if (targetStream && targetStream.id !== bugEyeStreamId) {
+        // Update Bug Eye if active
+        if (bugEyeMode && targetStream.id !== bugEyeStreamId) {
             createBugEyeOverlay(targetStream);
+        }
+
+        // Update Mosaic if active
+        if (mosaicMode && targetStream.id !== mosaicStreamId) {
+            destroyMosaicOverlay();
+            mosaicMode = true; // Keep mode on after destroy resets it
+            const app = document.querySelector('.plexd-app');
+            if (app) app.classList.add('mosaic-mode');
+            createMosaicOverlay(targetStream);
         }
     }
 
@@ -1484,11 +1518,22 @@ const PlexdApp = (function() {
     let mosaicOverlay = null;
     let mosaicAnimationFrame = null;
     let mosaicPausedStreams = []; // Track streams we paused for power efficiency
+    let mosaicStreamId = null; // Track which stream is shown in mosaic
 
     /**
      * Toggle Mosaic mode - simpler effect with a few non-overlapping video copies
+     * @param {boolean} forceOff - If true, always turns mosaic off
      */
-    function toggleMosaicMode() {
+    function toggleMosaicMode(forceOff = false) {
+        // If forcing off or already on, turn off
+        if (forceOff || mosaicMode) {
+            const app = document.querySelector('.plexd-app');
+            if (app) app.classList.remove('mosaic-mode');
+            destroyMosaicOverlay();
+            showMessage('Mosaic: OFF', 'info');
+            return;
+        }
+
         const fullscreenStream = PlexdStream.getFullscreenStream();
         const selected = PlexdStream.getSelectedStream();
         const targetStream = fullscreenStream || selected;
@@ -1503,18 +1548,11 @@ const PlexdApp = (function() {
             destroyBugEyeOverlay();
         }
 
-        mosaicMode = !mosaicMode;
+        mosaicMode = true;
         const app = document.querySelector('.plexd-app');
-
-        if (mosaicMode) {
-            if (app) app.classList.add('mosaic-mode');
-            createMosaicOverlay(targetStream);
-            showMessage('Mosaic: ON (Shift+B to exit)', 'info');
-        } else {
-            if (app) app.classList.remove('mosaic-mode');
-            destroyMosaicOverlay();
-            showMessage('Mosaic: OFF', 'info');
-        }
+        if (app) app.classList.add('mosaic-mode');
+        createMosaicOverlay(targetStream);
+        showMessage('Mosaic: ON (Esc to exit)', 'info');
     }
 
     /**
@@ -1529,6 +1567,8 @@ const PlexdApp = (function() {
 
         const container = document.getElementById('plexd-container');
         if (!container) return;
+
+        mosaicStreamId = stream.id; // Track which stream is shown
 
         // Pause all background streams for power efficiency and add grey overlay
         mosaicPausedStreams = [];
@@ -1720,6 +1760,7 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.remove('mosaic-mode');
         mosaicMode = false;
+        mosaicStreamId = null;
     }
 
     /**
@@ -2323,6 +2364,9 @@ const PlexdApp = (function() {
         // Ignore only when typing into text-entry controls (not sliders/buttons).
         if (isTypingTarget(e.target)) return;
 
+        // Handle Sets panel keyboard navigation first
+        if (handleSetsPanelKeyboard(e)) return;
+
         const selected = PlexdStream.getSelectedStream();
         const fullscreenStream = PlexdStream.getFullscreenStream();
 
@@ -2555,12 +2599,13 @@ const PlexdApp = (function() {
                 break;
             case 'Escape':
                 // Escape priority: Bug Eye > Mosaic > Fullscreen modes
+                // Note: capture-phase handler should catch these first
                 if (bugEyeMode) {
                     toggleBugEyeMode(true);
                     break;
                 }
                 if (mosaicMode) {
-                    toggleMosaicMode();
+                    toggleMosaicMode(true);
                     break;
                 }
                 // Escape handles all fullscreen modes:
@@ -2602,6 +2647,7 @@ const PlexdApp = (function() {
             case 'b':
             case 'B':
                 // B = Bug Eye mode (compound vision), Shift+B = Mosaic mode (cleaner)
+                console.log('[Plexd] B key: shiftKey=' + e.shiftKey + ', mosaicMode=' + mosaicMode + ', bugEyeMode=' + bugEyeMode);
                 if (e.shiftKey) {
                     toggleMosaicMode();
                 } else {
@@ -2809,26 +2855,8 @@ const PlexdApp = (function() {
             console.log('[Plexd] handleArrowNav: calling switchFullscreenStream');
             switchFullscreenStream(direction);
         } else if (mode === 'true-grid') {
-            // In true-grid mode - select and immediately focus the next stream
-            const nextDir = (direction === 'up' || direction === 'left') ? 'prev' : 'next';
-            const filteredStreams = getFilteredStreams();
-            if (filteredStreams.length === 0) return;
-
-            // Find current index and next stream
-            const currentId = selected ? selected.id : filteredStreams[0].id;
-            const currentIdx = filteredStreams.findIndex(s => s.id === currentId);
-            let nextIdx;
-
-            if (direction === 'left' || direction === 'up') {
-                nextIdx = currentIdx > 0 ? currentIdx - 1 : filteredStreams.length - 1;
-            } else {
-                nextIdx = currentIdx < filteredStreams.length - 1 ? currentIdx + 1 : 0;
-            }
-
-            const nextStream = filteredStreams[nextIdx];
-            if (nextStream) {
-                PlexdStream.enterFocusedMode(nextStream.id);
-            }
+            // In true-grid mode - just select the next stream (stay in grid view)
+            PlexdStream.selectNextStream(direction);
         } else if (coverflowMode) {
             // In coverflow mode - navigate carousel
             const streams = getFilteredStreams();
@@ -4727,6 +4755,9 @@ const PlexdApp = (function() {
         return Math.floor(seconds / 86400) + 'd ago';
     }
 
+    // Sets panel keyboard navigation state
+    let selectedSetIndex = -1;
+
     /**
      * Toggle panel visibility
      */
@@ -4746,12 +4777,61 @@ const PlexdApp = (function() {
                 // Refresh panel content when opening
                 if (panelId === 'saved-panel') {
                     updateCombinationsList();
+                    selectedSetIndex = -1; // Reset selection
                 } else if (panelId === 'streams-panel') {
                     updateStreamsPanelUI();
                 }
+            } else {
+                selectedSetIndex = -1; // Reset when closing
             }
             panel.classList.toggle('plexd-panel-open');
         }
+    }
+
+    /**
+     * Handle keyboard navigation in Sets panel
+     */
+    function handleSetsPanelKeyboard(e) {
+        const panel = document.getElementById('saved-panel');
+        if (!panel || !panel.classList.contains('plexd-panel-open')) return false;
+
+        const items = panel.querySelectorAll('.plexd-combo-item');
+        if (items.length === 0) return false;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedSetIndex = Math.min(selectedSetIndex + 1, items.length - 1);
+            updateSetSelection(items);
+            return true;
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedSetIndex = Math.max(selectedSetIndex - 1, 0);
+            updateSetSelection(items);
+            return true;
+        } else if (e.key === 'Enter' && selectedSetIndex >= 0) {
+            e.preventDefault();
+            const selectedItem = items[selectedSetIndex];
+            if (selectedItem) {
+                const name = selectedItem.dataset.name;
+                if (name) loadStreamCombination(name);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Update visual selection in Sets panel
+     */
+    function updateSetSelection(items) {
+        items.forEach((item, i) => {
+            if (i === selectedSetIndex) {
+                item.classList.add('plexd-combo-selected');
+                item.scrollIntoView({ block: 'nearest' });
+            } else {
+                item.classList.remove('plexd-combo-selected');
+            }
+        });
     }
 
     /**

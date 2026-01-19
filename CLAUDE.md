@@ -208,3 +208,41 @@ Example: "Always search with Grep before creating utility functions"
 1. `/parallel-review` - Comprehensive review
 2. Fix confirmed issues
 3. `/shared-knowledge` - Document learnings
+
+---
+
+## Technical Knowledge
+
+### Keyboard Event Handling in Fullscreen
+
+**Critical Pattern:** In true fullscreen mode, keyboard events need special handling:
+
+1. **stream.js `propagateKeys`** - Keys that need app-level handling must be in this regex. They get dispatched to document via synthetic event.
+
+2. **Capture-phase handlers** - Use `addEventListener(..., true)` for highest priority. Essential for Bug Eye/Mosaic to close before fullscreen exit.
+
+3. **Browser Escape behavior** - Cannot be overridden. Browser exits fullscreen synchronously BEFORE any JS handler runs. Design around this (overlay stays visible, second Escape closes it).
+
+4. **forceOff pattern** - Toggle functions that can be called from multiple places should use:
+   ```javascript
+   function toggleMode(forceOff = false) {
+       if (forceOff || modeIsOn) { /* turn off */ return; }
+       /* turn on */
+   }
+   ```
+
+### State Variable Tracking
+
+When creating overlay modes (Bug Eye, Mosaic), track:
+- `xxxMode` - boolean for mode state
+- `xxxStreamId` - which stream is displayed (for update detection)
+- `xxxOverlay` - DOM element reference
+
+### Panel Keyboard Navigation Pattern
+
+For panels with selectable items:
+1. Track `selectedIndex` state
+2. Handle Arrow keys to change index
+3. Handle Enter to activate selection
+4. Reset index when panel opens/closes
+5. Call navigation handler early in main `handleKeyboard()`

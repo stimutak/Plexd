@@ -872,6 +872,12 @@ body {
     margin-bottom: 4px;
 }
 
+.plexd-combo-item.plexd-combo-selected {
+    background: #3a3a3a;
+    outline: 2px solid #3b82f6;
+    outline-offset: -2px;
+}
+
 .plexd-combo-name {
     flex: 1;
     font-size: 12px;

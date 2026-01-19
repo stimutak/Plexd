@@ -1958,16 +1958,14 @@ const PlexdStream = (function() {
             // In grid mode (fullscreenMode === 'none'), let events bubble naturally to document
             if (fullscreenMode !== 'true-focused' && fullscreenMode !== 'browser-fill') {
                 // Not in fullscreen mode - don't interfere, let event bubble to document
-                console.log(`[Plexd] Wrapper keydown: letting bubble (mode is ${fullscreenMode})`);
                 return;
             }
 
-            // Number keys (0-9), arrow keys, and seeking/random keys should propagate to document handler
-            // for rating filter/assignment, stream navigation, seeking, and random seek
+            // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
+            // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?]$/.test(e.key);
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bB]$/.test(e.key) || e.key === 'Escape';
             if (propagateKeys) {
-                console.log(`[Plexd] Wrapper keydown: dispatching ${e.key} to document`);
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
                 // in fullscreen/focused contexts. We MUST stop propagation of the original event
@@ -2009,16 +2007,8 @@ const PlexdStream = (function() {
                     e.stopPropagation(); // Prevent app.js from re-entering focused mode
                     exitFocusedMode();
                     break;
-                case 'Escape':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Escape only handles true fullscreen modes
-                    if (fullscreenMode === 'true-focused') {
-                        // Return to grid view (stay in true fullscreen)
-                        exitFocusedMode();
-                    }
-                    // In browser-fill mode: do nothing (use Z/Enter to exit)
-                    break;
+                // Escape is now handled via propagateKeys dispatch to document
+                // where app.js handles Bug Eye/Mosaic priority before fullscreen exit
                 case 'f':
                 case 'F':
                     e.preventDefault();

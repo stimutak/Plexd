@@ -423,18 +423,41 @@ const PlexdRemote = (function() {
             if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
         });
 
-        // Progress bar click to seek
-        el.previewProgress?.addEventListener('click', (e) => {
-            if (!selectedStreamId) return;
+        // Progress bar click/tap to seek
+        const handleProgressSeek = (clientX) => {
+            if (!selectedStreamId) {
+                console.log('[Remote] Progress seek: no selectedStreamId');
+                return;
+            }
             const stream = state?.streams?.find(s => s.id === selectedStreamId);
-            if (!stream || !stream.duration) return;
+            if (!stream) {
+                console.log('[Remote] Progress seek: stream not found');
+                return;
+            }
+            if (!stream.duration || stream.duration <= 0) {
+                console.log('[Remote] Progress seek: no duration', stream.duration);
+                return;
+            }
 
             const rect = el.previewProgress.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
+            const clickX = clientX - rect.left;
             const percent = Math.max(0, Math.min(1, clickX / rect.width));
             const seekTime = percent * stream.duration;
 
+            console.log('[Remote] Progress seek: rect.width=', rect.width, 'clickX=', clickX, 'percent=', percent, 'duration=', stream.duration, 'seekTime=', seekTime);
             send('seek', { streamId: selectedStreamId, time: seekTime });
+        };
+
+        el.previewProgress?.addEventListener('click', (e) => {
+            handleProgressSeek(e.clientX);
+        });
+
+        // Touch support for progress bar
+        el.previewProgress?.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (e.changedTouches.length > 0) {
+                handleProgressSeek(e.changedTouches[0].clientX);
+            }
         });
 
         // Action bar

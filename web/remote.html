@@ -101,13 +101,34 @@
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/></svg>
                     </button>
                 </div>
+                <!-- Rating Bar -->
+                <div class="rating-bar" id="rating-bar">
+                    <span class="rating-label">Rate:</span>
+                    <div class="rating-stars" id="rating-stars">
+                        <button class="rating-star" data-rating="0">✕</button>
+                        <button class="rating-star" data-rating="1">★</button>
+                        <button class="rating-star" data-rating="2">★</button>
+                        <button class="rating-star" data-rating="3">★</button>
+                        <button class="rating-star" data-rating="4">★</button>
+                        <button class="rating-star" data-rating="5">★</button>
+                    </div>
+                </div>
             </section>
 
             <!-- Stream List with Thumbnails -->
             <section id="streams-section" class="streams-section hidden">
                 <div class="streams-header">
-                    <h3>All Streams</h3>
+                    <h3>Streams</h3>
                     <span class="streams-count" id="streams-count">0</span>
+                </div>
+                <!-- Filter Chips -->
+                <div class="filter-chips" id="filter-chips">
+                    <button class="filter-chip active" data-filter="all">All</button>
+                    <button class="filter-chip" data-filter="1">★</button>
+                    <button class="filter-chip" data-filter="2">★★</button>
+                    <button class="filter-chip" data-filter="3">★★★</button>
+                    <button class="filter-chip" data-filter="4">★★★★</button>
+                    <button class="filter-chip" data-filter="5">★★★★★</button>
                 </div>
                 <div class="streams-list" id="streams-list"></div>
             </section>
@@ -127,9 +148,9 @@
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
                 <span>Random</span>
             </button>
-            <button class="action-bar-btn" id="action-fullscreen" aria-label="Fullscreen">
+            <button class="action-bar-btn" id="action-fullscreen" aria-label="Focus">
                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-                <span>Fullscr</span>
+                <span>Focus</span>
             </button>
             <button class="action-bar-btn" id="action-more" aria-label="More">
                 <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/></svg>

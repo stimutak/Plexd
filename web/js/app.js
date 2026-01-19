@@ -5399,6 +5399,13 @@ const PlexdRemote = (function() {
                 break;
             case 'selectNext':
                 PlexdStream.selectNextStream(payload.direction || 'right');
+                // If in focused mode, switch focus to the newly selected stream
+                if (PlexdStream.getFullscreenMode() === 'true-focused') {
+                    const selected = PlexdStream.getSelectedStream();
+                    if (selected) {
+                        PlexdStream.enterFocusedMode(selected.id);
+                    }
+                }
                 sendState();
                 break;
 

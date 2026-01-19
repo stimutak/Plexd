@@ -57,8 +57,9 @@ const PlexdRemote = (function() {
 
         // Action bar
         el.actionBar = $('action-bar');
-        el.actionMute = $('action-mute');
-        el.actionRating = $('action-rating');
+        el.actionSeekBack = $('action-seek-back');
+        el.actionSeekForward = $('action-seek-forward');
+        el.actionRandom = $('action-random');
         el.actionFullscreen = $('action-fullscreen');
         el.actionMore = $('action-more');
 
@@ -321,7 +322,7 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select, double-tap for random seek
+            // Tap to select, double-tap to toggle focus
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.stream-action')) return;
 
@@ -329,8 +330,12 @@ const PlexdRemote = (function() {
                 const lastTap = lastTapTimes[id] || 0;
 
                 if (now - lastTap < 400) {
-                    // Double-tap: random seek
-                    send('randomSeek', { streamId: id });
+                    // Double-tap: toggle focus mode
+                    if (state?.fullscreenStreamId === id) {
+                        send('exitFullscreen');
+                    } else {
+                        send('enterFullscreen', { streamId: id });
+                    }
                     lastTapTimes[id] = 0;
                 } else {
                     // Single tap: select stream
@@ -435,21 +440,17 @@ const PlexdRemote = (function() {
         });
 
         // Action bar
-        el.actionMute?.addEventListener('click', () => {
-            if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
+        el.actionSeekBack?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: -10 });
         });
-        el.actionRating?.addEventListener('click', () => {
-            if (selectedStreamId) send('cycleRating', { streamId: selectedStreamId });
+        el.actionSeekForward?.addEventListener('click', () => {
+            if (selectedStreamId) send('seekRelative', { streamId: selectedStreamId, offset: 10 });
+        });
+        el.actionRandom?.addEventListener('click', () => {
+            if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
         el.actionFullscreen?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                const stream = state?.streams?.find(s => s.id === selectedStreamId);
-                if (stream?.id === state?.fullscreenStreamId) {
-                    send('exitFullscreen');
-                } else {
-                    send('enterFullscreen', { streamId: selectedStreamId });
-                }
-            }
+            send('toggleGlobalFullscreen');
         });
         el.actionMore?.addEventListener('click', openSheet);
 

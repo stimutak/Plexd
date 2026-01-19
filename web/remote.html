@@ -12,30 +12,18 @@
 
     <link rel="apple-touch-icon" href="assets/icon-180.png">
     <link rel="stylesheet" href="css/remote.css">
-
-    <!-- Fallback inline styles in case CSS doesn't load -->
-    <style>
-        body { background: #000; color: #fff; font-family: -apple-system, sans-serif; margin: 0; padding: 0; }
-        .app { min-height: 100vh; }
-        .header-content { padding: 16px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
-        .logo { font-size: 20px; font-weight: bold; }
-        .connection-dot { width: 10px; height: 10px; border-radius: 50%; background: #f00; display: inline-block; }
-        .connection.connected .connection-dot { background: #0f0; }
-        .empty-state { padding: 60px 20px; text-align: center; }
-        .empty-title { font-size: 18px; margin: 20px 0 8px; }
-        .empty-hint { color: #888; }
-        .hidden { display: none !important; }
-    </style>
 </head>
 <body>
     <div class="app">
-        <!-- Header -->
+        <!-- Minimal Header -->
         <header class="header">
-            <div class="header-content">
-                <h1 class="logo">Plexd</h1>
-                <div id="connection" class="connection">
-                    <span class="connection-dot"></span>
-                </div>
+            <button class="header-btn audio-btn" id="audio-toggle" aria-label="Toggle audio">
+                <svg class="icon-unmuted" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                <svg class="icon-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+            </button>
+            <h1 class="logo">Plexd</h1>
+            <div id="connection" class="connection">
+                <span class="connection-dot"></span>
             </div>
         </header>
 
@@ -53,58 +41,79 @@
                 <p class="empty-hint">Open Plexd on your computer to start</p>
             </div>
 
-            <!-- Preview Section (Selected Stream) -->
-            <section id="preview-section" class="preview-section hidden">
-                <div class="preview-container">
-                    <div class="preview-thumbnail" id="preview-thumbnail">
-                        <div class="preview-placeholder">
+            <!-- Triage Interface (when streams exist) -->
+            <div id="triage-ui" class="triage-ui hidden">
+                <!-- Hero Preview - Swipeable -->
+                <section class="hero" id="hero">
+                    <div class="hero-preview" id="hero-preview">
+                        <div class="hero-placeholder">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>
                             </svg>
-                            <span>No preview</span>
                         </div>
-                        <img class="preview-image" id="preview-image" alt="Stream preview">
-                    </div>
-                    <div class="preview-overlay">
-                        <div class="preview-status" id="preview-status">
-                            <span class="status-icon"></span>
-                            <span class="status-text">Paused</span>
+                        <img class="hero-image" id="hero-image" alt="Stream preview">
+                        <!-- Swipe hints (fade after first use) -->
+                        <div class="swipe-hint swipe-hint-lr" id="swipe-hint-lr">
+                            <span>◀</span>
+                            <span>▶</span>
+                        </div>
+                        <div class="swipe-hint swipe-hint-ud" id="swipe-hint-ud">
+                            <span>↑ Random</span>
                         </div>
                     </div>
-                </div>
-                <div class="preview-info">
-                    <h2 class="preview-title" id="preview-title">Select a stream</h2>
-                    <div class="preview-meta">
-                        <span class="preview-time" id="preview-time">0:00 / 0:00</span>
-                        <span class="preview-rating" id="preview-rating"></span>
+
+                    <!-- Status overlay -->
+                    <div class="hero-status" id="hero-status">
+                        <span class="status-indicator"></span>
+                        <span class="status-text">Paused</span>
                     </div>
-                    <div class="preview-progress" id="preview-progress">
-                        <div class="preview-progress-bar" id="preview-progress-bar"></div>
+
+                    <!-- Stream counter -->
+                    <div class="hero-counter" id="hero-counter">1 / 5</div>
+                </section>
+
+                <!-- Stream Info + Progress Bar -->
+                <section class="info-section">
+                    <div class="stream-info">
+                        <h2 class="stream-title" id="stream-title">Select a stream</h2>
+                        <div class="stream-time" id="stream-time">0:00 / 0:00</div>
                     </div>
-                </div>
-                <!-- Quick Controls Under Preview -->
-                <div class="preview-controls">
-                    <button class="preview-btn" id="preview-back" aria-label="Skip back 10s">
+
+                    <!-- BIG Progress Bar -->
+                    <div class="progress-track" id="progress-track">
+                        <div class="progress-fill" id="progress-fill"></div>
+                        <div class="progress-thumb" id="progress-thumb"></div>
+                    </div>
+                </section>
+
+                <!-- Quick Actions -->
+                <section class="actions-row">
+                    <button class="action-btn" id="btn-back" aria-label="Back 10 seconds">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                        <span>-10s</span>
                     </button>
-                    <button class="preview-btn" id="preview-prev" aria-label="Previous">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                    <button class="action-btn action-btn-accent" id="btn-random" aria-label="Random seek">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+                        <span>Random</span>
                     </button>
-                    <button class="preview-btn preview-btn-play" id="preview-play" aria-label="Play/Pause">
+                    <button class="action-btn action-btn-play" id="btn-play" aria-label="Play/Pause">
                         <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                         <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
                     </button>
-                    <button class="preview-btn" id="preview-next" aria-label="Next">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6z"/></svg>
-                    </button>
-                    <button class="preview-btn" id="preview-forward" aria-label="Skip forward 10s">
+                    <button class="action-btn" id="btn-forward" aria-label="Forward 10 seconds">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/></svg>
+                        <span>+10s</span>
                     </button>
-                </div>
-                <!-- Rating Bar (1-9 filter categories) -->
-                <div class="rating-bar" id="rating-bar">
-                    <div class="rating-btns" id="rating-stars">
-                        <button class="rating-btn" data-rating="0">✕</button>
+                    <button class="action-btn" id="btn-focus" aria-label="Focus mode">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                        <span>Focus</span>
+                    </button>
+                </section>
+
+                <!-- Rating Strip - BIG thumb-friendly buttons -->
+                <section class="rating-section">
+                    <div class="rating-strip" id="rating-strip">
+                        <button class="rating-btn rating-btn-clear" data-rating="0" aria-label="Clear rating">✕</button>
                         <button class="rating-btn" data-rating="1">1</button>
                         <button class="rating-btn" data-rating="2">2</button>
                         <button class="rating-btn" data-rating="3">3</button>
@@ -115,55 +124,64 @@
                         <button class="rating-btn" data-rating="8">8</button>
                         <button class="rating-btn" data-rating="9">9</button>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <!-- Stream List with Thumbnails -->
-            <section id="streams-section" class="streams-section hidden">
-                <div class="streams-header">
-                    <h3>Streams</h3>
-                    <span class="streams-count" id="streams-count">0</span>
-                </div>
-                <!-- Filter Chips (1-9) -->
-                <div class="filter-chips" id="filter-chips">
-                    <button class="filter-chip active" data-filter="all">All</button>
-                    <button class="filter-chip" data-filter="1">1+</button>
-                    <button class="filter-chip" data-filter="2">2+</button>
-                    <button class="filter-chip" data-filter="3">3+</button>
-                    <button class="filter-chip" data-filter="4">4+</button>
-                    <button class="filter-chip" data-filter="5">5+</button>
-                    <button class="filter-chip" data-filter="6">6+</button>
-                    <button class="filter-chip" data-filter="7">7+</button>
-                    <button class="filter-chip" data-filter="8">8+</button>
-                    <button class="filter-chip" data-filter="9">9</button>
-                </div>
-                <div class="streams-list" id="streams-list"></div>
-            </section>
+                <!-- Filter Tabs - Exact rating filters -->
+                <section class="filter-section">
+                    <div class="filter-tabs" id="filter-tabs">
+                        <button class="filter-tab active" data-filter="all">
+                            <span class="filter-label">All</span>
+                            <span class="filter-count" id="count-all">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="0">
+                            <span class="filter-label">☆</span>
+                            <span class="filter-count" id="count-0">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="1">
+                            <span class="filter-label">1</span>
+                            <span class="filter-count" id="count-1">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="2">
+                            <span class="filter-label">2</span>
+                            <span class="filter-count" id="count-2">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="3">
+                            <span class="filter-label">3</span>
+                            <span class="filter-count" id="count-3">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="4">
+                            <span class="filter-label">4</span>
+                            <span class="filter-count" id="count-4">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="5">
+                            <span class="filter-label">5</span>
+                            <span class="filter-count" id="count-5">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="6">
+                            <span class="filter-label">6</span>
+                            <span class="filter-count" id="count-6">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="7">
+                            <span class="filter-label">7</span>
+                            <span class="filter-count" id="count-7">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="8">
+                            <span class="filter-label">8</span>
+                            <span class="filter-count" id="count-8">0</span>
+                        </button>
+                        <button class="filter-tab" data-filter="9">
+                            <span class="filter-label">9</span>
+                            <span class="filter-count" id="count-9">0</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Mini Thumbnail Strip -->
+                <section class="thumbs-section" id="thumbs-section">
+                    <div class="thumbs-strip" id="thumbs-strip"></div>
+                </section>
+            </div>
         </main>
-
-        <!-- Bottom Action Bar -->
-        <div id="action-bar" class="action-bar hidden">
-            <button class="action-bar-btn" id="action-seek-back" aria-label="Seek back">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
-                <span>-10s</span>
-            </button>
-            <button class="action-bar-btn" id="action-seek-forward" aria-label="Seek forward">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/></svg>
-                <span>+10s</span>
-            </button>
-            <button class="action-bar-btn" id="action-random" aria-label="Random">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-                <span>Random</span>
-            </button>
-            <button class="action-bar-btn" id="action-fullscreen" aria-label="Focus">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-                <span>Focus</span>
-            </button>
-            <button class="action-bar-btn" id="action-more" aria-label="More">
-                <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-                <span>More</span>
-            </button>
-        </div>
 
         <!-- More Options Sheet -->
         <div id="more-sheet" class="sheet hidden">
@@ -182,27 +200,9 @@
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
                         <span>Mute All</span>
                     </button>
-                    <button class="sheet-option" id="opt-global-fullscreen">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-                        <span>Global Fullscreen</span>
-                    </button>
-                    <div class="sheet-divider"></div>
-                    <button class="sheet-option" id="opt-random">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-                        <span>Random Seek</span>
-                    </button>
                     <button class="sheet-option" id="opt-random-all">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
                         <span>Random All</span>
-                    </button>
-                    <div class="sheet-divider"></div>
-                    <button class="sheet-option" id="opt-view-all">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 8h4V4H4v4zm6 12h4v-4h-4v4zm-6 0h4v-4H4v4zm0-6h4v-4H4v4zm6 0h4v-4h-4v4zm6-10v4h4V4h-4zm-6 4h4V4h-4v4zm6 6h4v-4h-4v4zm0 6h4v-4h-4v4z"/></svg>
-                        <span>View All Streams</span>
-                    </button>
-                    <button class="sheet-option" id="opt-view-favorites">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-                        <span>View Favorites Only</span>
                     </button>
                     <div class="sheet-divider"></div>
                     <button class="sheet-option" id="opt-tetris">

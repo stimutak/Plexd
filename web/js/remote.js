@@ -322,7 +322,7 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select, double-tap for fullscreen
+            // Tap to select, double-tap to toggle focus
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.stream-action')) return;
 
@@ -330,8 +330,12 @@ const PlexdRemote = (function() {
                 const lastTap = lastTapTimes[id] || 0;
 
                 if (now - lastTap < 400) {
-                    // Double-tap: toggle fullscreen
-                    send('enterFullscreen', { streamId: id });
+                    // Double-tap: toggle focus mode
+                    if (state?.fullscreenStreamId === id) {
+                        send('exitFullscreen');
+                    } else {
+                        send('enterFullscreen', { streamId: id });
+                    }
                     lastTapTimes[id] = 0;
                 } else {
                     // Single tap: select stream
@@ -446,14 +450,7 @@ const PlexdRemote = (function() {
             if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
         el.actionFullscreen?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                const stream = state?.streams?.find(s => s.id === selectedStreamId);
-                if (stream?.id === state?.fullscreenStreamId) {
-                    send('exitFullscreen');
-                } else {
-                    send('enterFullscreen', { streamId: selectedStreamId });
-                }
-            }
+            send('toggleGlobalFullscreen');
         });
         el.actionMore?.addEventListener('click', openSheet);
 

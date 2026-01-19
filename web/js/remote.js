@@ -480,25 +480,55 @@ const PlexdRemote = (function() {
 
         let startX = 0;
         let startY = 0;
+        let isSwiping = false;
 
+        // Prevent default to stop page scrolling - must be non-passive
         previewContainer.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
-        }, { passive: true });
+            isSwiping = true;
+        }, { passive: false });
+
+        previewContainer.addEventListener('touchmove', (e) => {
+            if (isSwiping) {
+                // Prevent page scroll while swiping on preview
+                e.preventDefault();
+            }
+        }, { passive: false });
 
         previewContainer.addEventListener('touchend', (e) => {
+            if (!isSwiping) return;
+            isSwiping = false;
+
             const endX = e.changedTouches[0].clientX;
             const endY = e.changedTouches[0].clientY;
             const deltaX = endX - startX;
             const deltaY = endY - startY;
+            const absX = Math.abs(deltaX);
+            const absY = Math.abs(deltaY);
 
-            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+            // Need at least 50px movement
+            if (absX < 50 && absY < 50) return;
+
+            if (absX > absY) {
+                // Horizontal swipe
                 if (deltaX > 0) {
                     send('selectNext', { direction: 'left' });
                 } else {
                     send('selectNext', { direction: 'right' });
                 }
+            } else {
+                // Vertical swipe
+                if (deltaY > 0) {
+                    send('selectNext', { direction: 'up' });
+                } else {
+                    send('selectNext', { direction: 'down' });
+                }
             }
+        }, { passive: false });
+
+        previewContainer.addEventListener('touchcancel', () => {
+            isSwiping = false;
         }, { passive: true });
     }
 

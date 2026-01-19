@@ -212,6 +212,11 @@ button {
     border-radius: var(--radius-lg);
     overflow: hidden;
     margin-bottom: 12px;
+    /* Capture all touch events - prevent scroll/zoom */
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .preview-thumbnail {

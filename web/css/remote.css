@@ -385,9 +385,84 @@ button {
 .preview-btn-play .icon-play,
 .preview-btn-play.paused .icon-pause { display: none; }
 
+/* Rating Bar */
+.rating-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+}
+
+.rating-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.rating-stars {
+    display: flex;
+    gap: 4px;
+}
+
+.rating-star {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    font-size: 18px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.rating-star:active {
+    transform: scale(0.95);
+}
+
+.rating-star.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+.rating-star[data-rating="0"] {
+    font-size: 14px;
+}
+
 /* ============================================
    Streams Section (Thumbnail List)
    ============================================ */
+
+/* Filter Chips */
+.filter-chips {
+    display: flex;
+    gap: 8px;
+    padding: 0 0 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.filter-chip {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border: none;
+    background: var(--bg-tertiary);
+    border-radius: 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.filter-chip:active {
+    transform: scale(0.95);
+}
+
+.filter-chip.active {
+    background: var(--accent);
+    color: #fff;
+}
 .streams-section {
     padding: 0 16px 16px;
 }
@@ -475,6 +550,14 @@ button {
     overflow: hidden;
     flex-shrink: 0;
     position: relative;
+    cursor: pointer;
+    transition: transform 0.1s, opacity 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.stream-thumb:active {
+    transform: scale(0.95);
+    opacity: 0.8;
 }
 
 .stream-thumb-img {
@@ -543,6 +626,67 @@ button {
 .stream-rating-badge {
     color: var(--warning);
     font-size: 11px;
+}
+
+/* Interactive Rating Strip */
+.stream-rating-strip {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: 8px;
+}
+
+.stream-rating-strip .rating-btn {
+    font-size: 14px;
+    padding: 2px 4px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.stream-rating-strip .rating-btn:first-child {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.stream-rating-strip .rating-btn.active {
+    color: var(--warning);
+}
+
+.stream-rating-strip .rating-btn:active {
+    transform: scale(1.2);
+}
+
+/* Interactive Play Strip */
+.stream-play-strip {
+    display: inline-flex;
+    gap: 4px;
+    margin-right: 12px;
+}
+
+.stream-play-strip .play-btn {
+    font-size: 12px;
+    padding: 4px 6px;
+    color: var(--text-tertiary);
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.stream-play-strip .play-btn.playing {
+    color: var(--success);
+}
+
+.stream-play-strip .play-btn.paused {
+    color: var(--accent);
+}
+
+.stream-play-strip .play-btn:active {
+    transform: scale(1.15);
+    background: var(--accent);
+    color: #fff;
 }
 
 /* Stream Quick Action */

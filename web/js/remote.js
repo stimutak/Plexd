@@ -16,6 +16,7 @@ const PlexdRemote = (function() {
     let selectedStreamId = null;
     let lastLocalSelectionTime = 0; // Track when we last made a local selection
     const lastTapTimes = {}; // Track double-tap per stream ID
+    let currentFilter = 'all'; // Rating filter: 'all' or 1-5
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
@@ -50,10 +51,15 @@ const PlexdRemote = (function() {
         el.previewNext = $('preview-next');
         el.previewForward = $('preview-forward');
 
+        // Rating bar
+        el.ratingBar = $('rating-bar');
+        el.ratingStars = $('rating-stars');
+
         // Streams section
         el.streamsSection = $('streams-section');
         el.streamsList = $('streams-list');
         el.streamsCount = $('streams-count');
+        el.filterChips = $('filter-chips');
 
         // Action bar
         el.actionBar = $('action-bar');
@@ -260,6 +266,14 @@ const PlexdRemote = (function() {
             el.previewProgressBar.style.width = `${progress}%`;
         }
 
+        // Update rating stars
+        if (el.ratingStars) {
+            el.ratingStars.querySelectorAll('.rating-star').forEach(star => {
+                const starRating = parseInt(star.dataset.rating, 10);
+                star.classList.toggle('active', starRating === rating);
+            });
+        }
+
         // Play button state
         if (el.previewPlay) {
             el.previewPlay.classList.toggle('paused', stream.paused);
@@ -269,9 +283,16 @@ const PlexdRemote = (function() {
     function renderStreamList() {
         if (!el.streamsList || !el.streamsCount) return;
 
-        el.streamsCount.textContent = state.streams.length;
+        // Filter streams by rating if a filter is active
+        let filteredStreams = state.streams;
+        if (currentFilter !== 'all') {
+            const minRating = parseInt(currentFilter, 10);
+            filteredStreams = state.streams.filter(s => (s.rating || 0) >= minRating);
+        }
 
-        el.streamsList.innerHTML = state.streams.map(stream => {
+        el.streamsCount.textContent = filteredStreams.length;
+
+        el.streamsList.innerHTML = filteredStreams.map(stream => {
             const isSelected = stream.id === selectedStreamId;
             const isFullscreen = stream.id === state.fullscreenStreamId;
             const name = stream.fileName || getDisplayName(stream.url);
@@ -296,15 +317,19 @@ const PlexdRemote = (function() {
                     <div class="stream-info">
                         <div class="stream-name">${escapeHtml(name)}</div>
                         <div class="stream-meta">
-                            <span class="stream-status ${stream.paused ? '' : 'playing'}">
-                                <svg viewBox="0 0 24 24" fill="currentColor">
-                                    ${stream.paused
-                                        ? '<path d="M6 19h4V5H6zm8-14v14h4V5z"/>'
-                                        : '<path d="M8 5v14l11-7z"/>'}
-                                </svg>
-                                ${stream.paused ? 'Paused' : 'Playing'}
+                            <span class="stream-play-strip" data-stream-id="${stream.id}">
+                                <span class="play-btn" data-action="back" title="-10s">◀◀</span>
+                                <span class="play-btn ${stream.paused ? 'paused' : 'playing'}" data-action="toggle" title="${stream.paused ? 'Play' : 'Pause'}">${stream.paused ? '▶' : '⏸'}</span>
+                                <span class="play-btn" data-action="forward" title="+10s">▶▶</span>
                             </span>
-                            ${ratingStars ? `<span class="stream-rating-badge">${ratingStars}</span>` : ''}
+                            <span class="stream-rating-strip" data-stream-id="${stream.id}">
+                                <span class="rating-btn" data-rating="0">✕</span>
+                                <span class="rating-btn ${rating >= 1 ? 'active' : ''}" data-rating="1">★</span>
+                                <span class="rating-btn ${rating >= 2 ? 'active' : ''}" data-rating="2">★</span>
+                                <span class="rating-btn ${rating >= 3 ? 'active' : ''}" data-rating="3">★</span>
+                                <span class="rating-btn ${rating >= 4 ? 'active' : ''}" data-rating="4">★</span>
+                                <span class="rating-btn ${rating >= 5 ? 'active' : ''}" data-rating="5">★</span>
+                            </span>
                         </div>
                     </div>
                     <button class="stream-action" data-action="play">
@@ -322,20 +347,22 @@ const PlexdRemote = (function() {
         el.streamsList.querySelectorAll('.stream-item').forEach(item => {
             const id = item.dataset.id;
 
-            // Tap to select, double-tap to toggle focus mode
+            // Tap to select, double-tap for browser fullscreen
             item.addEventListener('click', (e) => {
-                if (e.target.closest('.stream-action')) return;
+                // Ignore clicks on interactive elements
+                if (e.target.closest('.stream-action') ||
+                    e.target.closest('.stream-rating-strip') ||
+                    e.target.closest('.stream-play-strip') ||
+                    e.target.closest('.stream-thumb')) return;
 
                 const now = Date.now();
                 const lastTap = lastTapTimes[id] || 0;
+                console.log('[Remote] Tap detected, id:', id, 'timeSinceLastTap:', now - lastTap);
 
                 if (now - lastTap < 400) {
-                    // Double-tap: toggle focus mode
-                    if (state?.fullscreenStreamId === id) {
-                        send('exitFullscreen');
-                    } else {
-                        send('enterFullscreen', { streamId: id });
-                    }
+                    // Double-tap: toggle browser fullscreen
+                    console.log('[Remote] Double-tap detected - toggling browser fullscreen');
+                    send('toggleGlobalFullscreen');
                     lastTapTimes[id] = 0;
                 } else {
                     // Single tap: select stream
@@ -352,6 +379,39 @@ const PlexdRemote = (function() {
             actionBtn?.addEventListener('click', (e) => {
                 e.stopPropagation();
                 send('togglePause', { streamId: id });
+            });
+
+            // Rating strip buttons
+            const ratingStrip = item.querySelector('.stream-rating-strip');
+            ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const newRating = parseInt(btn.dataset.rating, 10);
+                    send('setRating', { streamId: id, rating: newRating });
+                });
+            });
+
+            // Play strip buttons
+            const playStrip = item.querySelector('.stream-play-strip');
+            playStrip?.querySelectorAll('.play-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const action = btn.dataset.action;
+                    if (action === 'back') {
+                        send('seekRelative', { streamId: id, offset: -10 });
+                    } else if (action === 'forward') {
+                        send('seekRelative', { streamId: id, offset: 10 });
+                    } else if (action === 'toggle') {
+                        send('togglePause', { streamId: id });
+                    }
+                });
+            });
+
+            // Thumbnail click - random seek
+            const thumb = item.querySelector('.stream-thumb');
+            thumb?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                send('randomSeek', { streamId: id });
             });
         });
     }
@@ -450,8 +510,15 @@ const PlexdRemote = (function() {
             if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
         el.actionFullscreen?.addEventListener('click', () => {
-            // Toggle browser fullscreen
-            send('toggleGlobalFullscreen');
+            // Toggle focus mode on selected stream
+            console.log('[Remote] Focus button clicked, selectedStreamId:', selectedStreamId);
+            if (selectedStreamId) {
+                if (state?.fullscreenStreamId === selectedStreamId) {
+                    send('exitFullscreen');
+                } else {
+                    send('enterFullscreen', { streamId: selectedStreamId });
+                }
+            }
         });
         el.actionMore?.addEventListener('click', openSheet);
 
@@ -474,6 +541,26 @@ const PlexdRemote = (function() {
 
         // Swipe gestures on preview
         setupSwipeGestures();
+
+        // Rating stars
+        el.ratingStars?.querySelectorAll('.rating-star').forEach(star => {
+            star.addEventListener('click', () => {
+                const rating = parseInt(star.dataset.rating, 10);
+                if (selectedStreamId) {
+                    send('setRating', { streamId: selectedStreamId, rating });
+                }
+            });
+        });
+
+        // Filter chips
+        el.filterChips?.querySelectorAll('.filter-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                currentFilter = chip.dataset.filter;
+                el.filterChips.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                render();
+            });
+        });
     }
 
     function setupSwipeGestures() {

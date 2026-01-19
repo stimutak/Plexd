@@ -5275,6 +5275,7 @@ const PlexdRemote = (function() {
                     if (res.ok) {
                         const cmd = await res.json();
                         if (cmd && cmd.action) {
+                            console.log('[Remote] Polled command:', cmd.action);
                             handleRemoteCommand(cmd.action, cmd.payload);
                         }
                     } else if (res.status === 404 || res.status === 501) {
@@ -5390,6 +5391,10 @@ const PlexdRemote = (function() {
             // Selection/Navigation
             case 'selectStream':
                 PlexdStream.selectStream(payload.streamId || null);
+                // If in focused mode, switch focus to the selected stream
+                if (payload.streamId && PlexdStream.getFullscreenMode() === 'true-focused') {
+                    PlexdStream.enterFocusedMode(payload.streamId);
+                }
                 sendState();
                 break;
             case 'selectNext':

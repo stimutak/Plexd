@@ -9,7 +9,7 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
-    <link rel="stylesheet" href="css/plexd.css?v=42">
+    <link rel="stylesheet" href="css/plexd.css?v=43">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -117,6 +117,7 @@
                     <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★Fav</button>
                     <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file">Exp</button>
                     <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Imp</button>
+                    <button onclick="PlexdApp.showManageStoredFilesModal()" class="plexd-button-small" title="Manage stored local files">Files</button>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
@@ -151,21 +152,15 @@
 
         <!-- Keyboard Shortcuts Hint -->
         <div class="plexd-shortcuts">
-            <kbd>Arrows</kbd> Navigate &nbsp;
-            <kbd>Z</kbd>/<kbd>Enter</kbd> Focus &nbsp;
-            <kbd>F</kbd> Fullscreen &nbsp;
-            <kbd>Esc</kbd> Back &nbsp;
-            <kbd>Space</kbd> Play/Pause &nbsp;
-            <kbd>M</kbd> Mute &nbsp;
-            <kbd>N</kbd> Solo &nbsp;
-            <kbd>,</kbd><kbd>.</kbd> Seek 10s &nbsp;
-            <kbd>&lt;</kbd><kbd>&gt;</kbd> Seek 60s &nbsp;
-            <kbd>/</kbd> Random &nbsp;
-            <kbd>L</kbd> Like &nbsp;
-            <kbd>`</kbd> Likes &nbsp;
-            <kbd>1-9</kbd> Slot &nbsp;
-            <kbd>0</kbd> All &nbsp;
-            <kbd>?</kbd> Hide
+            <span class="plexd-shortcuts-quick">
+                <kbd>Arrows</kbd> Navigate
+                <kbd>Z</kbd> Focus
+                <kbd>F</kbd> Fullscreen
+                <kbd>Space</kbd> Play
+                <kbd>1-9</kbd> Slot
+                <kbd>?</kbd> Hide
+            </span>
+            <button class="plexd-shortcuts-more" onclick="PlexdApp.showShortcutsModal()" title="Show all keyboard shortcuts">All Keys...</button>
         </div>
     </div>
 
@@ -173,8 +168,8 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=42"></script>
-    <script src="js/stream.js?v=42"></script>
-    <script src="js/app.js?v=42"></script>
+    <script src="js/grid.js?v=43"></script>
+    <script src="js/stream.js?v=43"></script>
+    <script src="js/app.js?v=43"></script>
 </body>
 </html>

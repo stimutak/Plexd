@@ -198,6 +198,60 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Get all stored files from IndexedDB
+     * @returns {Promise<Array<{id: string, setName: string, fileName: string, size: number, savedAt: number}>>}
+     */
+    async function getAllStoredFiles() {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readonly');
+            const store = tx.objectStore(STORE_NAME);
+
+            return new Promise((resolve, reject) => {
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const files = request.result.map(f => ({
+                        id: f.id,
+                        setName: f.setName,
+                        fileName: f.fileName,
+                        size: f.size || 0,
+                        savedAt: f.savedAt || 0
+                    }));
+                    resolve(files);
+                };
+                request.onerror = () => reject(request.error);
+            });
+        } catch (err) {
+            console.error('[Plexd] Failed to get all stored files:', err);
+            return [];
+        }
+    }
+
+    /**
+     * Delete a specific stored file by ID
+     * @param {string} fileId - The file ID (setName::fileName)
+     */
+    async function deleteStoredFile(fileId) {
+        try {
+            const db = await openDatabase();
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            const store = tx.objectStore(STORE_NAME);
+
+            await new Promise((resolve, reject) => {
+                const request = store.delete(fileId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+
+            console.log(`[Plexd] Deleted stored file: ${fileId}`);
+            return true;
+        } catch (err) {
+            console.error('[Plexd] Failed to delete stored file:', err);
+            return false;
+        }
+    }
+
+    /**
      * Format bytes to human readable string
      */
     function formatBytes(bytes) {
@@ -3947,6 +4001,239 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Show modal to manage all stored files in IndexedDB
+     */
+    async function showManageStoredFilesModal() {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('manage-files-modal');
+        if (existingModal) existingModal.remove();
+
+        const files = await getAllStoredFiles();
+        const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+
+        // Group files by set name
+        const filesBySet = {};
+        files.forEach(f => {
+            if (!filesBySet[f.setName]) filesBySet[f.setName] = [];
+            filesBySet[f.setName].push(f);
+        });
+
+        const modal = document.createElement('div');
+        modal.id = 'manage-files-modal';
+        modal.className = 'plexd-modal-overlay';
+
+        const renderFileList = () => {
+            if (files.length === 0) {
+                return '<div class="plexd-panel-empty">No stored files</div>';
+            }
+            return Object.entries(filesBySet).map(([setName, setFiles]) => `
+                <div class="plexd-stored-set">
+                    <div class="plexd-stored-set-header">
+                        <span class="plexd-stored-set-name">${escapeHtml(setName)}</span>
+                        <span class="plexd-stored-set-size">${setFiles.length} file${setFiles.length !== 1 ? 's' : ''}, ${formatBytes(setFiles.reduce((s, f) => s + f.size, 0))}</span>
+                        <button class="plexd-button-small plexd-btn-danger" onclick="PlexdApp._deleteStoredSet('${escapeAttr(setName)}')" title="Delete all files in this set">Del Set</button>
+                    </div>
+                    <div class="plexd-stored-files">
+                        ${setFiles.map(f => `
+                            <div class="plexd-stored-file" data-id="${escapeAttr(f.id)}">
+                                <span class="plexd-stored-file-name" title="${escapeAttr(f.fileName)}">${escapeHtml(f.fileName)}</span>
+                                <span class="plexd-stored-file-size">${formatBytes(f.size)}</span>
+                                <button class="plexd-btn-icon plexd-btn-danger" onclick="PlexdApp._deleteStoredFile('${escapeAttr(f.id)}')" title="Delete this file">x</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        modal.innerHTML = `
+            <div class="plexd-modal plexd-modal-wide">
+                <h3>Stored Files</h3>
+                <p class="plexd-modal-subtitle">${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(totalSize)} total</p>
+                <div id="stored-files-list" class="plexd-stored-files-container">
+                    ${renderFileList()}
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="manage-files-clear-all" class="plexd-button plexd-button-secondary plexd-btn-danger" ${files.length === 0 ? 'disabled' : ''}>Clear All</button>
+                    <button id="manage-files-close" class="plexd-button plexd-button-primary">Done</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        // Expose delete functions temporarily
+        PlexdApp._deleteStoredFile = async (fileId) => {
+            if (await deleteStoredFile(fileId)) {
+                // Remove from local arrays
+                const idx = files.findIndex(f => f.id === fileId);
+                if (idx >= 0) {
+                    const file = files[idx];
+                    files.splice(idx, 1);
+                    const setFiles = filesBySet[file.setName];
+                    const setIdx = setFiles.findIndex(f => f.id === fileId);
+                    if (setIdx >= 0) setFiles.splice(setIdx, 1);
+                    if (setFiles.length === 0) delete filesBySet[file.setName];
+                }
+                // Re-render
+                document.getElementById('stored-files-list').innerHTML = renderFileList();
+                const newTotal = files.reduce((sum, f) => sum + f.size, 0);
+                modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
+                document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+            }
+        };
+
+        PlexdApp._deleteStoredSet = async (setName) => {
+            await deleteLocalFilesForSet(setName);
+            // Remove from local arrays
+            const setFiles = filesBySet[setName] || [];
+            setFiles.forEach(f => {
+                const idx = files.findIndex(ff => ff.id === f.id);
+                if (idx >= 0) files.splice(idx, 1);
+            });
+            delete filesBySet[setName];
+            // Re-render
+            document.getElementById('stored-files-list').innerHTML = renderFileList();
+            const newTotal = files.reduce((sum, f) => sum + f.size, 0);
+            modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
+            document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+        };
+
+        document.getElementById('manage-files-close').addEventListener('click', () => {
+            delete PlexdApp._deleteStoredFile;
+            delete PlexdApp._deleteStoredSet;
+            modal.remove();
+        });
+
+        document.getElementById('manage-files-clear-all').addEventListener('click', async () => {
+            if (confirm('Delete all stored files? This cannot be undone.')) {
+                for (const f of files) {
+                    await deleteStoredFile(f.id);
+                }
+                files.length = 0;
+                Object.keys(filesBySet).forEach(k => delete filesBySet[k]);
+                document.getElementById('stored-files-list').innerHTML = renderFileList();
+                modal.querySelector('.plexd-modal-subtitle').textContent = '0 files stored, 0 B total';
+                document.getElementById('manage-files-clear-all').disabled = true;
+            }
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                delete PlexdApp._deleteStoredFile;
+                delete PlexdApp._deleteStoredSet;
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                delete PlexdApp._deleteStoredFile;
+                delete PlexdApp._deleteStoredSet;
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    /**
+     * Show modal with all keyboard shortcuts
+     */
+    function showShortcutsModal() {
+        // Remove existing modal if any
+        const existingModal = document.getElementById('shortcuts-modal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'shortcuts-modal';
+        modal.className = 'plexd-modal-overlay';
+        modal.innerHTML = `
+            <div class="plexd-modal plexd-modal-shortcuts">
+                <h3>Keyboard Shortcuts</h3>
+                <div class="plexd-shortcuts-grid">
+                    <div class="plexd-shortcuts-section">
+                        <h4>Navigation</h4>
+                        <div class="plexd-shortcut"><kbd>Arrows</kbd> Navigate streams</div>
+                        <div class="plexd-shortcut"><kbd>Z</kbd> / <kbd>Enter</kbd> Focus/zoom stream</div>
+                        <div class="plexd-shortcut"><kbd>Esc</kbd> Exit focus / back</div>
+                        <div class="plexd-shortcut"><kbd>F</kbd> Toggle fullscreen</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Playback</h4>
+                        <div class="plexd-shortcut"><kbd>Space</kbd> Play/Pause</div>
+                        <div class="plexd-shortcut"><kbd>M</kbd> Mute/unmute</div>
+                        <div class="plexd-shortcut"><kbd>N</kbd> Solo (mute others)</div>
+                        <div class="plexd-shortcut"><kbd>P</kbd> Pause all</div>
+                        <div class="plexd-shortcut"><kbd>,</kbd> <kbd>.</kbd> Seek 10s</div>
+                        <div class="plexd-shortcut"><kbd>&lt;</kbd> <kbd>&gt;</kbd> Seek 60s</div>
+                        <div class="plexd-shortcut"><kbd>/</kbd> Random seek</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Stream Management</h4>
+                        <div class="plexd-shortcut"><kbd>X</kbd> Close stream</div>
+                        <div class="plexd-shortcut"><kbd>R</kbd> Reload stream</div>
+                        <div class="plexd-shortcut"><kbd>D</kbd> Download stream</div>
+                        <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Likes & Slots</h4>
+                        <div class="plexd-shortcut"><kbd>L</kbd> Toggle like</div>
+                        <div class="plexd-shortcut"><kbd>\`</kbd> View likes only</div>
+                        <div class="plexd-shortcut"><kbd>1-9</kbd> Assign to slot (tap)</div>
+                        <div class="plexd-shortcut"><kbd>1-9</kbd> View slot (double-tap)</div>
+                        <div class="plexd-shortcut"><kbd>0</kbd> View all streams</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Layout Modes</h4>
+                        <div class="plexd-shortcut"><kbd>T</kbd> Cycle Tetris mode</div>
+                        <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
+                        <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
+                        <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>UI</h4>
+                        <div class="plexd-shortcut"><kbd>H</kbd> Toggle header</div>
+                        <div class="plexd-shortcut"><kbd>Shift+H</kbd> Clean mode</div>
+                        <div class="plexd-shortcut"><kbd>V</kbd> Cycle views</div>
+                        <div class="plexd-shortcut"><kbd>I</kbd> Stream info</div>
+                        <div class="plexd-shortcut"><kbd>S</kbd> Streams panel</div>
+                        <div class="plexd-shortcut"><kbd>C</kbd> Copy URL</div>
+                        <div class="plexd-shortcut"><kbd>?</kbd> Toggle hints</div>
+                    </div>
+                </div>
+                <div class="plexd-modal-actions">
+                    <button id="shortcuts-modal-close" class="plexd-button plexd-button-primary">Done</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(modal);
+
+        document.getElementById('shortcuts-modal-close').addEventListener('click', () => {
+            modal.remove();
+        });
+
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+
+        // Close on Escape
+        const handleEscape = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape);
+            }
+        };
+        document.addEventListener('keydown', handleEscape);
+    }
+
+    /**
      * Delete a saved combination
      */
     async function deleteStreamCombination(name) {
@@ -4909,7 +5196,11 @@ const PlexdApp = (function() {
         toggleCleanMode,
         toggleGlobalFullscreen,
         randomSeekAll,
-        randomSeekSelected
+        randomSeekSelected,
+        // File management
+        showManageStoredFilesModal,
+        // Help
+        showShortcutsModal
     };
 })();
 

@@ -14,6 +14,7 @@ const PlexdRemote = (function() {
     let connected = false;
     let lastStateTime = 0;
     let selectedStreamId = null;
+    const lastTapTimes = {}; // Track double-tap per stream ID
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
@@ -314,14 +315,16 @@ const PlexdRemote = (function() {
             });
 
             // Double tap for fullscreen
-            let lastTap = 0;
             item.addEventListener('touchend', (e) => {
                 if (e.target.closest('.stream-action')) return;
                 const now = Date.now();
-                if (now - lastTap < 300) {
+                const lastTap = lastTapTimes[id] || 0;
+                if (now - lastTap < 400) {
                     send('enterFullscreen', { streamId: id });
+                    lastTapTimes[id] = 0; // Reset to prevent triple-tap
+                } else {
+                    lastTapTimes[id] = now;
                 }
-                lastTap = now;
             });
 
             // Play/pause button

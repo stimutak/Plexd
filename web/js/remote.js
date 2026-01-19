@@ -450,13 +450,7 @@ const PlexdRemote = (function() {
             if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
         });
         el.actionFullscreen?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                if (state?.fullscreenStreamId === selectedStreamId) {
-                    send('exitFullscreen');
-                } else {
-                    send('enterFullscreen', { streamId: selectedStreamId });
-                }
-            }
+            send('toggleGlobalFullscreen');
         });
         el.actionMore?.addEventListener('click', openSheet);
 

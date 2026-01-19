@@ -116,12 +116,16 @@ const PlexdRemote = (function() {
             const res = await fetch('/api/remote/state');
             if (res.ok) {
                 const newState = await res.json();
-                if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                const age = Date.now() - (newState.timestamp || 0);
+                console.log('[Remote] State received, age:', age, 'ms, streams:', newState.streams?.length || 0);
+                if (newState.timestamp && age < 3000) {
                     handleStateUpdate(newState);
                     return;
                 }
             }
-        } catch (e) { /* API not available */ }
+        } catch (e) {
+            console.log('[Remote] API fetch failed:', e.message);
+        }
 
         // Fallback to localStorage
         const stored = localStorage.getItem(STATE_KEY);

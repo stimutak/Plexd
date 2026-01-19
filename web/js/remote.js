@@ -282,12 +282,24 @@ const PlexdRemote = (function() {
 
     function renderStreamList() {
         if (!el.streamsList || !el.streamsCount) return;
+        if (!state?.streams?.length) {
+            el.streamsCount.textContent = '0';
+            el.streamsList.innerHTML = '<div class="no-streams">No streams available</div>';
+            return;
+        }
 
         // Filter streams by rating if a filter is active
         let filteredStreams = state.streams;
         if (currentFilter !== 'all') {
             const minRating = parseInt(currentFilter, 10);
             filteredStreams = state.streams.filter(s => (s.rating || 0) >= minRating);
+        }
+
+        // If filter results in no streams, show message
+        if (!filteredStreams.length) {
+            el.streamsCount.textContent = '0';
+            el.streamsList.innerHTML = '<div class="no-streams">No streams match filter</div>';
+            return;
         }
 
         el.streamsCount.textContent = filteredStreams.length;

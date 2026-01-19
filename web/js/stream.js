@@ -1271,8 +1271,11 @@ const PlexdStream = (function() {
         streams.forEach((s, id) => {
             if (id === focusedStreamId) {
                 // Ensure the focused stream plays (unless globally paused)
-                if (!isPausedGlobally && s._plexdAutoPausedForFocus) {
-                    resumeStream(id);
+                if (!isPausedGlobally) {
+                    // Always try to play the focused stream
+                    if (s.video && s.video.paused) {
+                        resumeStream(id);
+                    }
                     s._plexdAutoPausedForFocus = false;
                 }
                 // If we previously downgraded HLS quality for this stream, restore it now.

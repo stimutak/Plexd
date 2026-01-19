@@ -12,6 +12,20 @@
 
     <link rel="apple-touch-icon" href="assets/icon-180.png">
     <link rel="stylesheet" href="css/remote.css">
+
+    <!-- Fallback inline styles in case CSS doesn't load -->
+    <style>
+        body { background: #000; color: #fff; font-family: -apple-system, sans-serif; margin: 0; padding: 0; }
+        .app { min-height: 100vh; }
+        .header-content { padding: 16px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+        .logo { font-size: 20px; font-weight: bold; }
+        .connection-dot { width: 10px; height: 10px; border-radius: 50%; background: #f00; display: inline-block; }
+        .connection.connected .connection-dot { background: #0f0; }
+        .empty-state { padding: 60px 20px; text-align: center; }
+        .empty-title { font-size: 18px; margin: 20px 0 8px; }
+        .empty-hint { color: #888; }
+        .hidden { display: none !important; }
+    </style>
 </head>
 <body>
     <div class="app">

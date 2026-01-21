@@ -5447,7 +5447,12 @@ const PlexdRemote = (function() {
                 break;
             case 'seek':
                 if (payload.streamId && typeof payload.time === 'number') {
-                    PlexdStream.seekTo(payload.streamId, payload.time);
+                    // Remote sends absolute time in seconds, seekTo expects 0-1 position
+                    const seekStream = PlexdStream.getStream(payload.streamId);
+                    if (seekStream?.video?.duration > 0) {
+                        const position = payload.time / seekStream.video.duration;
+                        PlexdStream.seekTo(payload.streamId, position);
+                    }
                 }
                 sendState();
                 break;

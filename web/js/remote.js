@@ -516,6 +516,10 @@ const PlexdRemote = (function() {
                 currentFilter = newFilter;
                 updateFilteredStreams();
 
+                // Sync view mode to main Plex app
+                const viewMode = newFilter === 'all' ? 'all' : parseInt(newFilter, 10);
+                send('setViewMode', { mode: viewMode });
+
                 // Try to keep current stream if it's in the filter
                 if (selectedStreamId) {
                     const inFilter = filteredStreams.some(s => s.id === selectedStreamId);
@@ -645,6 +649,11 @@ const PlexdRemote = (function() {
     function setupProgressBar() {
         if (!el.progressTrack) return;
 
+        // Store last seek time to avoid unreliable changedTouches on iOS
+        let lastSeekTime = null;
+        // Track when touch ended to ignore synthetic mouse/click events
+        let lastTouchEndTime = 0;
+
         const seekToPosition = (clientX) => {
             const stream = getCurrentStream();
             if (!stream?.duration || stream.duration <= 0) return;
@@ -657,6 +666,7 @@ const PlexdRemote = (function() {
             if (el.progressFill) el.progressFill.style.width = `${percent * 100}%`;
             if (el.progressThumb) el.progressThumb.style.left = `${percent * 100}%`;
 
+            lastSeekTime = seekTime;
             return seekTime;
         };
 
@@ -678,15 +688,24 @@ const PlexdRemote = (function() {
             if (!isDraggingProgress) return;
             isDraggingProgress = false;
             el.progressTrack.classList.remove('dragging');
+            lastTouchEndTime = Date.now();
 
-            const seekTime = seekToPosition(e.changedTouches[0].clientX);
-            if (seekTime !== undefined && selectedStreamId) {
-                send('seek', { streamId: selectedStreamId, time: seekTime });
+            // Use stored seek time instead of recalculating from changedTouches (unreliable on iOS)
+            if (lastSeekTime !== null && selectedStreamId) {
+                send('seek', { streamId: selectedStreamId, time: lastSeekTime });
             }
+            lastSeekTime = null;
         }, { passive: false });
 
-        // Mouse events (for testing on desktop)
+        el.progressTrack.addEventListener('touchcancel', () => {
+            isDraggingProgress = false;
+            el.progressTrack.classList.remove('dragging');
+            lastSeekTime = null;
+        }, { passive: true });
+
+        // Mouse events (for testing on desktop) - skip if recent touch
         el.progressTrack.addEventListener('mousedown', (e) => {
+            if (Date.now() - lastTouchEndTime < 500) return;
             isDraggingProgress = true;
             el.progressTrack.classList.add('dragging');
             seekToPosition(e.clientX);
@@ -714,9 +733,10 @@ const PlexdRemote = (function() {
             document.addEventListener('mouseup', onMouseUp);
         });
 
-        // Simple click
+        // Simple click - skip if recent touch (iOS fires synthetic clicks after touch)
         el.progressTrack.addEventListener('click', (e) => {
             if (isDraggingProgress) return;
+            if (Date.now() - lastTouchEndTime < 500) return;
             const seekTime = seekToPosition(e.clientX);
             if (seekTime !== undefined && selectedStreamId) {
                 send('seek', { streamId: selectedStreamId, time: seekTime });

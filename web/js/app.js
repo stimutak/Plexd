@@ -1185,9 +1185,14 @@ const PlexdApp = (function() {
     /**
      * Cycle to next view mode (V key)
      */
-    function cycleViewMode() {
+    function cycleViewMode(backward = false) {
         const currentIndex = viewModes.indexOf(viewMode);
-        const nextIndex = (currentIndex + 1) % viewModes.length;
+        let nextIndex;
+        if (backward) {
+            nextIndex = (currentIndex - 1 + viewModes.length) % viewModes.length;
+        } else {
+            nextIndex = (currentIndex + 1) % viewModes.length;
+        }
         setViewMode(viewModes[nextIndex]);
     }
 
@@ -2690,12 +2695,13 @@ const PlexdApp = (function() {
                 break;
             case 'v':
             case 'V':
-                // Cycle view mode (all -> 1★ -> 2★ -> 3★ -> 4★ -> 5★ -> all)
+                // Cycle view mode (all -> 1★ -> 2★ -> ... -> all)
+                // Shift+V cycles backward
                 // If in focus mode, exit first to show filtered grid
                 if (PlexdStream.getFullscreenMode() !== 'none') {
                     PlexdStream.exitFocusedMode();
                 }
-                cycleViewMode();
+                cycleViewMode(e.shiftKey);
                 break;
             case 'g':
             case 'G':
@@ -4311,7 +4317,7 @@ const PlexdApp = (function() {
                         <h4>UI</h4>
                         <div class="plexd-shortcut"><kbd>H</kbd> Toggle header</div>
                         <div class="plexd-shortcut"><kbd>Shift+H</kbd> Clean mode</div>
-                        <div class="plexd-shortcut"><kbd>V</kbd> Cycle views</div>
+                        <div class="plexd-shortcut"><kbd>V</kbd> / <kbd>Shift+V</kbd> Cycle views</div>
                         <div class="plexd-shortcut"><kbd>I</kbd> Stream info</div>
                         <div class="plexd-shortcut"><kbd>S</kbd> Streams panel</div>
                         <div class="plexd-shortcut"><kbd>C</kbd> Copy URL</div>

@@ -2665,8 +2665,13 @@ const PlexdApp = (function() {
                 break;
             case 't':
             case 'T':
-                // Cycle Tetris mode (off -> mode 1 -> mode 2 -> mode 3 -> off)
-                cycleTetrisMode();
+                // T = Cycle Tetris mode, Shift+T = Reset all pan positions to center
+                if (e.shiftKey) {
+                    PlexdStream.resetAllPanPositions();
+                    showMessage('Pan positions reset to center', 'info');
+                } else {
+                    cycleTetrisMode();
+                }
                 break;
             case 'o':
             case 'O':
@@ -4309,6 +4314,7 @@ const PlexdApp = (function() {
                     <div class="plexd-shortcuts-section">
                         <h4>Layout Modes</h4>
                         <div class="plexd-shortcut"><kbd>T</kbd> Cycle Tetris mode</div>
+                        <div class="plexd-shortcut"><kbd>Shift+T</kbd> Reset pan positions</div>
                         <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
                         <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
                         <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>

@@ -249,8 +249,14 @@ const PlexdGrid = (function() {
                     if (cell.objectFit === 'cover') {
                         video.style.objectFit = 'cover';
                         videoWrapper.classList.add('plexd-tetris-cell');
+                        // Apply stored pan position for this stream
+                        if (typeof PlexdStream !== 'undefined' && PlexdStream.getPanPosition) {
+                            const pan = PlexdStream.getPanPosition(cell.streamId);
+                            video.style.objectPosition = `${pan.x}% ${pan.y}%`;
+                        }
                     } else {
                         video.style.objectFit = 'contain';
+                        video.style.objectPosition = ''; // Reset when not in cover mode
                         videoWrapper.classList.remove('plexd-tetris-cell');
                     }
                 }

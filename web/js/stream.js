@@ -223,7 +223,9 @@ const PlexdStream = (function() {
                 stallStartTime: null,
                 bufferEmptyStartTime: null,
                 consecutiveStalls: 0
-            }
+            },
+            // Pan position for Tetris mode (object-position as percentages, 50/50 = center)
+            panPosition: { x: 50, y: 50 }
         };
 
         // Set up event listeners
@@ -2086,6 +2088,96 @@ const PlexdStream = (function() {
                 e.stopPropagation(); // Prevent app-level file drop handler from interfering
                 reorderStreams(draggedId, stream.id);
             }
+        });
+
+        // Pan-to-position in Tetris mode (drag to reposition video within cropped view)
+        // Only active when object-fit: cover is applied (video is cropped)
+        let isPanning = false;
+        let panStartX = 0;
+        let panStartY = 0;
+        let panStartPosX = 50;
+        let panStartPosY = 50;
+
+        const startPan = (clientX, clientY) => {
+            // Only allow panning in Tetris mode (when cell has cover fit)
+            if (!wrapper.classList.contains('plexd-tetris-cell')) return false;
+
+            isPanning = true;
+            panStartX = clientX;
+            panStartY = clientY;
+            panStartPosX = stream.panPosition.x;
+            panStartPosY = stream.panPosition.y;
+            wrapper.classList.add('plexd-panning');
+            wrapper.draggable = false; // Disable drag-to-reorder while panning
+            return true;
+        };
+
+        const updatePan = (clientX, clientY) => {
+            if (!isPanning) return;
+
+            // Calculate delta as percentage of video dimensions
+            // Moving mouse right should show more of the left side (decrease x%)
+            // Moving mouse down should show more of the top (decrease y%)
+            const rect = wrapper.getBoundingClientRect();
+            const deltaX = (clientX - panStartX) / rect.width * 100;
+            const deltaY = (clientY - panStartY) / rect.height * 100;
+
+            // Invert: dragging right reveals left side (lower x%), dragging down reveals top (lower y%)
+            const newX = Math.max(0, Math.min(100, panStartPosX - deltaX));
+            const newY = Math.max(0, Math.min(100, panStartPosY - deltaY));
+
+            stream.panPosition.x = newX;
+            stream.panPosition.y = newY;
+            video.style.objectPosition = `${newX}% ${newY}%`;
+        };
+
+        const endPan = () => {
+            if (!isPanning) return;
+            isPanning = false;
+            wrapper.classList.remove('plexd-panning');
+            wrapper.draggable = true; // Re-enable drag-to-reorder
+        };
+
+        // Mouse events for panning
+        video.addEventListener('mousedown', (e) => {
+            if (startPan(e.clientX, e.clientY)) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                updatePan(e.clientX, e.clientY);
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            endPan();
+        });
+
+        // Touch events for panning
+        video.addEventListener('touchstart', (e) => {
+            // Only pan with single touch
+            if (e.touches.length !== 1) return;
+            if (startPan(e.touches[0].clientX, e.touches[0].clientY)) {
+                // Don't prevent default - allow scrolling if not in Tetris mode
+            }
+        }, { passive: true });
+
+        video.addEventListener('touchmove', (e) => {
+            if (isPanning && e.touches.length === 1) {
+                e.preventDefault(); // Prevent scrolling while panning
+                updatePan(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: false });
+
+        video.addEventListener('touchend', () => {
+            endPan();
+        });
+
+        video.addEventListener('touchcancel', () => {
+            endPan();
         });
 
         // Get aspect ratio when metadata loads
@@ -4010,6 +4102,46 @@ const PlexdStream = (function() {
         thumbnailCache.clear();
     }
 
+    /**
+     * Get pan position for a stream (used in Tetris mode for object-position)
+     * @param {string} streamId - Stream ID
+     * @returns {Object} Pan position {x, y} as percentages (0-100), or {x: 50, y: 50} if not found
+     */
+    function getPanPosition(streamId) {
+        const stream = streams.get(streamId);
+        if (stream && stream.panPosition) {
+            return { ...stream.panPosition };
+        }
+        return { x: 50, y: 50 }; // Default: center
+    }
+
+    /**
+     * Reset pan position to center for a stream
+     * @param {string} streamId - Stream ID
+     */
+    function resetPanPosition(streamId) {
+        const stream = streams.get(streamId);
+        if (stream) {
+            stream.panPosition = { x: 50, y: 50 };
+            const video = stream.video;
+            if (video) {
+                video.style.objectPosition = '50% 50%';
+            }
+        }
+    }
+
+    /**
+     * Reset pan position for all streams
+     */
+    function resetAllPanPositions() {
+        streams.forEach((stream) => {
+            stream.panPosition = { x: 50, y: 50 };
+            if (stream.video) {
+                stream.video.style.objectPosition = '50% 50%';
+            }
+        });
+    }
+
     // Public API
     return {
         createStream,
@@ -4114,7 +4246,11 @@ const PlexdStream = (function() {
         captureStreamFrame,
         captureAllFrames,
         getAllThumbnails,
-        clearThumbnailCache
+        clearThumbnailCache,
+        // Pan position for Tetris mode
+        getPanPosition,
+        resetPanPosition,
+        resetAllPanPositions
     };
 })();
 

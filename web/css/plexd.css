@@ -44,7 +44,7 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 50px 6px 12px; /* extra right padding for hamburger menu */
+    padding: 6px 56px 6px 12px; /* extra right padding for hamburger menu */
     background: #161616;
     border-bottom: 1px solid #2a2a2a;
     flex-shrink: 0;
@@ -1588,38 +1588,38 @@ body {
 
 .plexd-header-toggle {
     position: fixed;
-    top: 4px;
-    right: 8px;
-    width: 32px;
-    height: 32px;
-    border-radius: 4px;
-    background: #333;
-    border: 1px solid #444;
-    color: #aaa;
-    font-size: 16px;
+    top: 8px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.85);
+    border: none;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 18px;
     cursor: pointer;
     z-index: 10002;
     transition: all 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 .plexd-header-toggle:hover {
-    background: #444;
+    background: rgba(0, 0, 0, 0.95);
     color: #fff;
-    border-color: #555;
 }
 
 .plexd-header-toggle.header-visible {
-    background: #444;
+    background: rgba(50, 50, 50, 0.9);
     color: #fff;
-    border-color: #555;
 }
 
 .plexd-header-toggle.header-visible:hover {
-    background: #555;
-    border-color: #666;
+    background: rgba(70, 70, 70, 0.95);
 }
 
 /* Header hidden state */
@@ -1641,9 +1641,19 @@ body {
 /* Clean mode - hide all per-stream controls/overlays (except errors) */
 .plexd-app.clean-mode .plexd-controls,
 .plexd-app.clean-mode .plexd-info-overlay,
-.plexd-app.clean-mode .plexd-rating-indicator,
 .plexd-app.clean-mode .plexd-status {
     display: none !important;
+}
+
+/* Clean mode hides rating on non-fullscreen streams */
+.plexd-app.clean-mode .plexd-stream:not(.plexd-fullscreen) .plexd-rating-indicator {
+    display: none !important;
+}
+
+/* But keep rating visible on fullscreen stream in clean mode for filtering */
+.plexd-app.clean-mode .plexd-stream.plexd-fullscreen .plexd-rating-indicator {
+    display: flex !important;
+    opacity: 0.9;
 }
 
 /* Clean mode: hide selection indicator and header toggle */
@@ -1754,13 +1764,27 @@ body {
 }
 
 /* In focused/fullscreen view we always show rating (even unrated) */
+/* Positioned below hamburger menu area for visibility */
 .plexd-stream.plexd-fullscreen .plexd-rating-indicator {
     opacity: 1;
     z-index: 40;
-    min-width: 44px;
-    height: 44px;
-    font-size: 18px;
+    top: 52px;
+    right: 12px;
+    min-width: 48px;
+    height: 48px;
+    font-size: 20px;
     padding: 0 14px;
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 8px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.plexd-stream.plexd-fullscreen .plexd-rating-indicator:hover {
+    background: rgba(30, 30, 30, 0.95);
+    transform: scale(1.05);
 }
 
 /* Touch devices - always show rating indicator (tappable) */
@@ -1834,13 +1858,27 @@ body {
 }
 
 /* In focused/fullscreen view we always show favorite indicator */
+/* Positioned to match rating indicator style */
 .plexd-stream.plexd-fullscreen .plexd-favorite-indicator {
     opacity: 1;
     z-index: 40;
-    min-width: 44px;
-    height: 44px;
-    font-size: 22px;
+    top: 52px;
+    left: 12px;
+    min-width: 48px;
+    height: 48px;
+    font-size: 24px;
     padding: 0 14px;
+    background: rgba(0, 0, 0, 0.85);
+    border-radius: 8px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.plexd-stream.plexd-fullscreen .plexd-favorite-indicator:hover {
+    background: rgba(30, 30, 30, 0.95);
+    transform: scale(1.05);
 }
 
 /* Touch devices - always show favorite indicator (tappable) */
@@ -1857,9 +1895,15 @@ body {
     }
 }
 
-/* Clean mode - hide favorite indicator too */
-.plexd-app.clean-mode .plexd-favorite-indicator {
+/* Clean mode - hide favorite indicator on non-fullscreen streams */
+.plexd-app.clean-mode .plexd-stream:not(.plexd-fullscreen) .plexd-favorite-indicator {
     display: none !important;
+}
+
+/* But keep favorite visible on fullscreen stream in clean mode */
+.plexd-app.clean-mode .plexd-stream.plexd-fullscreen .plexd-favorite-indicator {
+    display: flex !important;
+    opacity: 0.9;
 }
 
 /* Focused mode - hide favorite indicator on non-fullscreen streams */

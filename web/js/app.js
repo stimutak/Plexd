@@ -2516,6 +2516,30 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case ';':
+                // Frame back (pauses video, steps back ~1 frame)
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream?.video) {
+                        targetStream.video.pause();
+                        targetStream.video.currentTime = Math.max(0, targetStream.video.currentTime - (1/30));
+                        syncOverlayClones();
+                    }
+                }
+                break;
+            case "'":
+                // Frame forward (pauses video, steps forward ~1 frame)
+                e.preventDefault();
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream?.video) {
+                        targetStream.video.pause();
+                        targetStream.video.currentTime += (1/30);
+                        syncOverlayClones();
+                    }
+                }
+                break;
             case 'Enter':
             case 'z':
             case 'Z':
@@ -2829,6 +2853,22 @@ const PlexdApp = (function() {
                 // / : Random seek selected stream (near arrow keys for easy access)
                 e.preventDefault();
                 randomSeekSelected();
+                break;
+            case '\\':
+                // \ : Random seek ALL streams (backslash, near /)
+                e.preventDefault();
+                randomSeekAll();
+                showMessage('Random seek all', 'info');
+                break;
+            case '[':
+                // [ : Rewind selected stream to beginning
+                e.preventDefault();
+                rewindSelected();
+                break;
+            case '{':
+                // { (Shift+[) : Rewind all streams to beginning
+                e.preventDefault();
+                rewindAll();
                 break;
             case '?':
                 // ? : Toggle shortcuts overlay (standard help key)
@@ -3335,6 +3375,19 @@ const PlexdApp = (function() {
             }
         });
 
+        // Collect playback positions for all streams
+        const positions = {};
+        streams.forEach(s => {
+            const currentTime = s.video?.currentTime;
+            if (currentTime && currentTime > 1) { // Only save if >1 second in
+                if (isBlobUrl(s.url) && s.fileName) {
+                    positions[`file:${s.fileName}`] = currentTime;
+                } else {
+                    positions[s.url] = currentTime;
+                }
+            }
+        });
+
         combinations[name] = {
             urls: urls,
             localFiles: localFiles,
@@ -3343,6 +3396,7 @@ const PlexdApp = (function() {
             loginDomains: loginDomains,
             favoriteUrls: favoriteUrls.length > 0 ? favoriteUrls : undefined,
             favoriteFileNames: favoriteFileNames.length > 0 ? favoriteFileNames : undefined,
+            positions: Object.keys(positions).length > 0 ? positions : undefined,
             savedAt: Date.now()
         };
 
@@ -3943,6 +3997,34 @@ const PlexdApp = (function() {
         const validUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
         localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
 
+        // Restore playback positions (wait for videos to be ready)
+        const positions = combo.positions || {};
+        if (Object.keys(positions).length > 0) {
+            setTimeout(() => {
+                let positionsRestored = 0;
+                const streams = PlexdStream.getAllStreams();
+                streams.forEach(stream => {
+                    // Check both URL and file-based position keys
+                    const posKey = stream.fileName ? `file:${stream.fileName}` : stream.url;
+                    const savedPosition = positions[posKey] || positions[stream.url];
+                    if (savedPosition && savedPosition > 0 && stream.video) {
+                        // Wait for video to be ready enough to seek
+                        const trySeek = () => {
+                            if (stream.video.readyState >= 1) {
+                                stream.video.currentTime = savedPosition;
+                                positionsRestored++;
+                                console.log(`[Plexd] Restored position ${Math.round(savedPosition)}s for ${stream.fileName || truncateUrl(stream.url, 50)}`);
+                            } else {
+                                // Video not ready, try again shortly
+                                setTimeout(trySeek, 200);
+                            }
+                        };
+                        trySeek();
+                    }
+                });
+            }, 500);
+        }
+
         // Build message
         const total = loadedCount + localLoaded;
         const favCount = favoriteUrls.length + favoriteFileNames.length;
@@ -4197,7 +4279,11 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>P</kbd> Pause all</div>
                         <div class="plexd-shortcut"><kbd>,</kbd> <kbd>.</kbd> Seek 10s</div>
                         <div class="plexd-shortcut"><kbd>&lt;</kbd> <kbd>&gt;</kbd> Seek 60s</div>
+                        <div class="plexd-shortcut"><kbd>;</kbd> <kbd>'</kbd> Frame step</div>
+                        <div class="plexd-shortcut"><kbd>[</kbd> Rewind to start</div>
+                        <div class="plexd-shortcut"><kbd>{</kbd> Rewind all</div>
                         <div class="plexd-shortcut"><kbd>/</kbd> Random seek</div>
+                        <div class="plexd-shortcut"><kbd>\\</kbd> Random seek all</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>Stream Management</h4>
@@ -5221,6 +5307,44 @@ const PlexdApp = (function() {
         }
     }
 
+    /**
+     * Rewind selected or focused stream to beginning
+     */
+    function rewindSelected() {
+        const selected = PlexdStream.getSelectedStream();
+        const fullscreen = PlexdStream.getFullscreenStream();
+        const target = fullscreen || selected;
+
+        if (!target) {
+            showMessage('Select a stream first', 'info');
+            return;
+        }
+
+        if (target.video) {
+            target.video.currentTime = 0;
+            syncOverlayClones();
+            showMessage('Rewound to start', 'success');
+        }
+    }
+
+    /**
+     * Rewind all streams to beginning
+     */
+    function rewindAll() {
+        const streams = PlexdStream.getAllStreams();
+        let count = 0;
+
+        streams.forEach(stream => {
+            if (stream.video) {
+                stream.video.currentTime = 0;
+                count++;
+            }
+        });
+
+        syncOverlayClones();
+        showMessage(`Rewound ${count} stream${count !== 1 ? 's' : ''} to start`, 'success');
+    }
+
     // Public API
     return {
         init,
@@ -5277,6 +5401,8 @@ const PlexdApp = (function() {
         toggleGlobalFullscreen,
         randomSeekAll,
         randomSeekSelected,
+        rewindSelected,
+        rewindAll,
         // File management
         showManageStoredFilesModal,
         // Help

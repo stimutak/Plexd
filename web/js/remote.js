@@ -28,6 +28,8 @@ const PlexdRemote = (function() {
     let currentIndex = 0; // Index within filteredStreams
     let swipeHintShown = false;
     let isDraggingProgress = false;
+    let lastThumbTapTime = 0;
+    let lastThumbTapId = null;
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
@@ -427,10 +429,22 @@ const PlexdRemote = (function() {
             `;
         }).join('');
 
-        // Event listeners
+        // Event listeners - single tap selects, double tap focuses
         el.thumbsStrip.querySelectorAll('.thumb-item').forEach(item => {
             item.addEventListener('click', () => {
-                selectStreamById(item.dataset.id);
+                const now = Date.now();
+                const streamId = item.dataset.id;
+
+                if (now - lastThumbTapTime < 300 && lastThumbTapId === streamId) {
+                    // Double tap = focus this stream
+                    send('enterFullscreen', { streamId });
+                } else {
+                    // Single tap = select
+                    selectStreamById(streamId);
+                }
+
+                lastThumbTapTime = now;
+                lastThumbTapId = streamId;
             });
         });
 
@@ -569,6 +583,8 @@ const PlexdRemote = (function() {
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
+        let lastTapTime = 0;
+        let tapTimeout = null;
 
         el.heroPreview.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
@@ -610,10 +626,26 @@ const PlexdRemote = (function() {
 
             // Tap detection (minimal movement)
             if (absX < 10 && absY < 10) {
-                // Tap = toggle play/pause
-                if (selectedStreamId) {
-                    send('togglePause', { streamId: selectedStreamId });
+                const now = Date.now();
+                if (now - lastTapTime < 300) {
+                    // Double tap = toggle focus
+                    clearTimeout(tapTimeout);
+                    if (selectedStreamId) {
+                        if (state?.fullscreenStreamId === selectedStreamId) {
+                            send('exitFullscreen');
+                        } else {
+                            send('enterFullscreen', { streamId: selectedStreamId });
+                        }
+                    }
+                } else {
+                    // Single tap = toggle play/pause (delayed to detect double tap)
+                    tapTimeout = setTimeout(() => {
+                        if (selectedStreamId) {
+                            send('togglePause', { streamId: selectedStreamId });
+                        }
+                    }, 300);
                 }
+                lastTapTime = now;
                 return;
             }
 
@@ -627,15 +659,29 @@ const PlexdRemote = (function() {
                 el.swipeHintUD?.classList.add('faded');
             }
 
-            if (absY > absX && deltaY < -SWIPE_THRESHOLD) {
-                // Swipe UP = random seek
-                if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
+            if (absY > absX) {
+                const inFocusMode = !!state?.fullscreenStreamId;
+                if (deltaY < -SWIPE_THRESHOLD) {
+                    // Swipe UP: random seek (focus mode) or navigate UP (grid mode) - follow model
+                    if (inFocusMode) {
+                        if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
+                    } else {
+                        send('selectNext', { direction: 'up' });
+                    }
+                } else if (deltaY > SWIPE_THRESHOLD) {
+                    // Swipe DOWN: toggle mute (focus mode) or navigate DOWN (grid mode) - follow model
+                    if (inFocusMode) {
+                        if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
+                    } else {
+                        send('selectNext', { direction: 'down' });
+                    }
+                }
             } else if (absX > absY) {
-                // Horizontal swipe = navigate
+                // Horizontal swipe = navigate in swipe direction - follow model
                 if (deltaX > SWIPE_THRESHOLD) {
-                    navigateStream('prev');
-                } else if (deltaX < -SWIPE_THRESHOLD) {
                     navigateStream('next');
+                } else if (deltaX < -SWIPE_THRESHOLD) {
+                    navigateStream('prev');
                 }
             }
         }, { passive: false });

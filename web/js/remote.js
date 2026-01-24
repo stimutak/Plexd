@@ -999,9 +999,11 @@ const PlexdRemote = (function() {
         let startY = 0;
         let isSwiping = false;
 
+        let lastTapTime = 0;
+
         const onTouchStart = (e) => {
             // Ignore touches on control buttons
-            if (e.target.closest('.viewer-btn, .viewer-close')) return;
+            if (e.target.closest('.viewer-btn, .viewer-close, .viewer-progress')) return;
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
             isSwiping = true;
@@ -1020,6 +1022,16 @@ const PlexdRemote = (function() {
 
             // Tap detection - zone-based actions on actual video area
             if (absX < 15 && absY < 15) {
+                const now = Date.now();
+
+                // Double-tap = exit viewer
+                if (now - lastTapTime < 300) {
+                    exitViewer();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+
                 if (!selectedStreamId) return;
 
                 // Calculate actual video bounds (accounting for object-fit: contain)
@@ -1162,6 +1174,17 @@ const PlexdRemote = (function() {
 
             // Tap detection (minimal movement) - zone-based actions
             if (absX < 10 && absY < 10) {
+                const now = Date.now();
+
+                // Double-tap = enter fullscreen viewer
+                if (now - lastTapTime < 300) {
+                    haptic.heavy();
+                    enterViewer();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+
                 if (!selectedStreamId) return;
 
                 const rect = el.heroPreview.getBoundingClientRect();

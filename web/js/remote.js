@@ -1,14 +1,13 @@
 /**
- * Plexd Remote - Triage Mode
- * Ergonomic, one-thumb operation for rapid clip review
+ * Plexd Remote Viewer
+ * Remote control AND viewer for Plexd - watch and control from your phone
  *
- * Core workflow:
- * 1. Swipe left/right to switch streams (within current filter)
- * 2. Swipe up to random seek
- * 3. Tap progress bar to seek
- * 4. Tap 1-9 to rate
- * 5. Tap filter tabs to show only clips with that exact rating
- * 6. Audio toggle for current stream
+ * Features:
+ * 1. Live video playback synced with main app
+ * 2. Fullscreen viewer mode with gesture controls
+ * 3. Haptic feedback for tactile response
+ * 4. PWA support - add to home screen
+ * 5. Swipe gestures for navigation
  */
 
 const PlexdRemote = (function() {
@@ -31,12 +30,42 @@ const PlexdRemote = (function() {
     let lastThumbTapTime = 0;
     let lastThumbTapId = null;
 
+    // Video player state
+    let heroHls = null;
+    let viewerHls = null;
+    let currentVideoUrl = null;
+    let viewerMode = false;
+    let controlsTimeout = null;
+    let lastSyncTime = 0;
+
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
     const POLL_INTERVAL = 300;
     const CONNECTION_TIMEOUT = 2000;
     const SELECTION_GRACE_PERIOD = 1000;
     const SWIPE_THRESHOLD = 50;
+    const SYNC_INTERVAL = 2000; // Sync playback position every 2s
+
+    // ============================================
+    // Haptic Feedback
+    // ============================================
+    const haptic = {
+        light() {
+            if (navigator.vibrate) navigator.vibrate(10);
+        },
+        medium() {
+            if (navigator.vibrate) navigator.vibrate(20);
+        },
+        heavy() {
+            if (navigator.vibrate) navigator.vibrate([30, 10, 30]);
+        },
+        success() {
+            if (navigator.vibrate) navigator.vibrate([10, 50, 20]);
+        },
+        error() {
+            if (navigator.vibrate) navigator.vibrate([50, 30, 50, 30, 50]);
+        }
+    };
 
     // ============================================
     // DOM Elements
@@ -97,6 +126,25 @@ const PlexdRemote = (function() {
         el.optRandomAll = $('opt-random-all');
         el.optTetris = $('opt-tetris');
         el.optClean = $('opt-clean');
+
+        // Video player
+        el.heroVideo = $('hero-video');
+        el.heroFullscreenBtn = $('hero-fullscreen-btn');
+
+        // Fullscreen viewer
+        el.viewerOverlay = $('viewer-overlay');
+        el.viewerVideo = $('viewer-video');
+        el.viewerControls = $('viewer-controls');
+        el.viewerClose = $('viewer-close');
+        el.viewerTitle = $('viewer-title');
+        el.viewerCounter = $('viewer-counter');
+        el.viewerTime = $('viewer-time');
+        el.viewerProgress = $('viewer-progress');
+        el.viewerProgressFill = $('viewer-progress-fill');
+        el.viewerPrev = $('viewer-prev');
+        el.viewerPlay = $('viewer-play');
+        el.viewerNext = $('viewer-next');
+        el.viewerGestureHint = $('viewer-gesture-hint');
     }
 
     // ============================================
@@ -278,7 +326,208 @@ const PlexdRemote = (function() {
         lastLocalSelectionTime = Date.now();
         updateCurrentIndex();
         send('selectStream', { streamId });
+        haptic.medium();
+        showStreamChangeIndicator();
         render();
+    }
+
+    // ============================================
+    // Video Player Management
+    // ============================================
+    function loadVideo(videoEl, url, hlsInstance) {
+        if (!videoEl || !url) return null;
+
+        // Clean up existing HLS instance
+        if (hlsInstance) {
+            hlsInstance.destroy();
+        }
+
+        const isHls = url.includes('.m3u8') || url.includes('/stream');
+
+        if (isHls && typeof Hls !== 'undefined' && Hls.isSupported()) {
+            const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: false,
+                backBufferLength: 30
+            });
+            hls.loadSource(url);
+            hls.attachMedia(videoEl);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                videoEl.play().catch(() => {});
+            });
+            return hls;
+        } else if (isHls && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            // Native HLS (Safari)
+            videoEl.src = url;
+            videoEl.play().catch(() => {});
+            return null;
+        } else {
+            // Regular video
+            videoEl.src = url;
+            videoEl.play().catch(() => {});
+            return null;
+        }
+    }
+
+    function updateHeroVideo() {
+        const stream = getCurrentStream();
+        if (!stream || !el.heroVideo) return;
+
+        // Only reload if URL changed
+        if (currentVideoUrl !== stream.url) {
+            currentVideoUrl = stream.url;
+            heroHls = loadVideo(el.heroVideo, stream.url, heroHls);
+            el.heroVideo.classList.add('active');
+        }
+
+        // Sync playback position periodically
+        if (Date.now() - lastSyncTime > SYNC_INTERVAL && stream.currentTime) {
+            const drift = Math.abs(el.heroVideo.currentTime - stream.currentTime);
+            if (drift > 3) {
+                el.heroVideo.currentTime = stream.currentTime;
+            }
+            lastSyncTime = Date.now();
+        }
+
+        // Sync paused state
+        if (stream.paused && !el.heroVideo.paused) {
+            el.heroVideo.pause();
+        } else if (!stream.paused && el.heroVideo.paused) {
+            el.heroVideo.play().catch(() => {});
+        }
+    }
+
+    function updateViewerVideo() {
+        const stream = getCurrentStream();
+        if (!stream || !el.viewerVideo || !viewerMode) return;
+
+        // Load video if not loaded
+        if (el.viewerVideo.src !== stream.url) {
+            viewerHls = loadVideo(el.viewerVideo, stream.url, viewerHls);
+        }
+
+        // Sync position
+        if (stream.currentTime) {
+            const drift = Math.abs(el.viewerVideo.currentTime - stream.currentTime);
+            if (drift > 2) {
+                el.viewerVideo.currentTime = stream.currentTime;
+            }
+        }
+
+        // Sync paused state
+        if (stream.paused && !el.viewerVideo.paused) {
+            el.viewerVideo.pause();
+        } else if (!stream.paused && el.viewerVideo.paused) {
+            el.viewerVideo.play().catch(() => {});
+        }
+
+        // Update viewer UI
+        const name = stream.fileName || getDisplayName(stream.url);
+        if (el.viewerTitle) el.viewerTitle.textContent = name;
+        if (el.viewerCounter) el.viewerCounter.textContent = `${currentIndex + 1}/${filteredStreams.length}`;
+        if (el.viewerTime) {
+            el.viewerTime.textContent = `${formatTime(stream.currentTime)} / ${formatTime(stream.duration)}`;
+        }
+        if (el.viewerProgressFill && stream.duration > 0) {
+            const pct = (stream.currentTime / stream.duration) * 100;
+            el.viewerProgressFill.style.width = `${pct}%`;
+        }
+        if (el.viewerPlay) {
+            el.viewerPlay.classList.toggle('playing', !stream.paused);
+        }
+    }
+
+    // ============================================
+    // Fullscreen Viewer Mode
+    // ============================================
+    function enterViewer() {
+        if (!el.viewerOverlay) return;
+
+        viewerMode = true;
+        el.viewerOverlay.classList.remove('hidden');
+        haptic.heavy();
+
+        // Load video
+        const stream = getCurrentStream();
+        if (stream && el.viewerVideo) {
+            viewerHls = loadVideo(el.viewerVideo, stream.url, viewerHls);
+            if (stream.currentTime) {
+                el.viewerVideo.currentTime = stream.currentTime;
+            }
+        }
+
+        // Show controls initially, then auto-hide
+        showViewerControls();
+
+        // Show gesture hint briefly
+        if (el.viewerGestureHint) {
+            el.viewerGestureHint.classList.add('visible');
+            setTimeout(() => el.viewerGestureHint.classList.remove('visible'), 2000);
+        }
+
+        // Setup viewer gestures
+        setupViewerGestures();
+    }
+
+    function exitViewer() {
+        if (!el.viewerOverlay) return;
+
+        viewerMode = false;
+        el.viewerOverlay.classList.add('hidden');
+        haptic.medium();
+
+        // Cleanup video
+        if (viewerHls) {
+            viewerHls.destroy();
+            viewerHls = null;
+        }
+        if (el.viewerVideo) {
+            el.viewerVideo.src = '';
+        }
+
+        clearTimeout(controlsTimeout);
+    }
+
+    function showViewerControls() {
+        if (!el.viewerControls) return;
+        el.viewerControls.classList.remove('hidden');
+
+        clearTimeout(controlsTimeout);
+        controlsTimeout = setTimeout(() => {
+            if (viewerMode) {
+                el.viewerControls.classList.add('hidden');
+            }
+        }, 3000);
+    }
+
+    function toggleViewerControls() {
+        if (!el.viewerControls) return;
+        if (el.viewerControls.classList.contains('hidden')) {
+            showViewerControls();
+        } else {
+            el.viewerControls.classList.add('hidden');
+        }
+    }
+
+    // ============================================
+    // Stream Change Indicator
+    // ============================================
+    function showStreamChangeIndicator() {
+        let indicator = document.querySelector('.stream-change-indicator');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'stream-change-indicator';
+            document.body.appendChild(indicator);
+        }
+
+        const stream = getCurrentStream();
+        if (stream) {
+            const name = stream.fileName || getDisplayName(stream.url);
+            indicator.textContent = name;
+            indicator.classList.add('visible');
+
+            setTimeout(() => indicator.classList.remove('visible'), 1000);
+        }
     }
 
     // ============================================
@@ -300,6 +549,10 @@ const PlexdRemote = (function() {
             renderFilters();
             renderThumbnails();
             renderAudioButton();
+            updateHeroVideo();
+            if (viewerMode) {
+                updateViewerVideo();
+            }
         }
     }
 
@@ -568,6 +821,7 @@ const PlexdRemote = (function() {
         let longPressTimer = null;
         el.btnRandom?.addEventListener('touchstart', () => {
             longPressTimer = setTimeout(() => {
+                haptic.heavy();
                 openSheet();
             }, 500);
         }, { passive: true });
@@ -575,6 +829,112 @@ const PlexdRemote = (function() {
         el.btnRandom?.addEventListener('touchend', () => {
             if (longPressTimer) clearTimeout(longPressTimer);
         }, { passive: true });
+
+        // Fullscreen button
+        el.heroFullscreenBtn?.addEventListener('click', () => {
+            haptic.medium();
+            enterViewer();
+        });
+
+        // Viewer controls
+        el.viewerClose?.addEventListener('click', () => {
+            exitViewer();
+        });
+
+        el.viewerPlay?.addEventListener('click', () => {
+            haptic.light();
+            if (selectedStreamId) send('togglePause', { streamId: selectedStreamId });
+        });
+
+        el.viewerPrev?.addEventListener('click', () => {
+            haptic.medium();
+            navigateStream('prev');
+        });
+
+        el.viewerNext?.addEventListener('click', () => {
+            haptic.medium();
+            navigateStream('next');
+        });
+
+        // Viewer progress bar tap
+        el.viewerProgress?.addEventListener('click', (e) => {
+            const stream = getCurrentStream();
+            if (!stream?.duration) return;
+            const rect = el.viewerProgress.getBoundingClientRect();
+            const pct = (e.clientX - rect.left) / rect.width;
+            const time = pct * stream.duration;
+            send('seek', { streamId: selectedStreamId, time });
+            haptic.light();
+        });
+
+        // Add haptic feedback to existing buttons
+        [el.btnBack, el.btnForward, el.btnRandom, el.btnPlay, el.btnFocus].forEach(btn => {
+            btn?.addEventListener('click', () => haptic.light(), { capture: true });
+        });
+
+        // Add haptic to rating buttons
+        el.ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+            btn.addEventListener('click', () => haptic.success(), { capture: true });
+        });
+    }
+
+    function setupViewerGestures() {
+        if (!el.viewerOverlay) return;
+
+        let startX = 0;
+        let startY = 0;
+        let isSwiping = false;
+
+        const onTouchStart = (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isSwiping = true;
+        };
+
+        const onTouchEnd = (e) => {
+            if (!isSwiping) return;
+            isSwiping = false;
+
+            const endX = e.changedTouches[0].clientX;
+            const endY = e.changedTouches[0].clientY;
+            const deltaX = endX - startX;
+            const deltaY = endY - startY;
+            const absX = Math.abs(deltaX);
+            const absY = Math.abs(deltaY);
+
+            // Tap = toggle controls
+            if (absX < 15 && absY < 15) {
+                toggleViewerControls();
+                return;
+            }
+
+            // Swipe detection
+            if (absX < SWIPE_THRESHOLD && absY < SWIPE_THRESHOLD) return;
+
+            if (absX > absY) {
+                // Horizontal swipe
+                if (deltaX > SWIPE_THRESHOLD) {
+                    navigateStream('next');
+                } else if (deltaX < -SWIPE_THRESHOLD) {
+                    navigateStream('prev');
+                }
+            } else {
+                // Vertical swipe
+                if (deltaY > SWIPE_THRESHOLD) {
+                    // Swipe down = exit viewer
+                    exitViewer();
+                } else if (deltaY < -SWIPE_THRESHOLD) {
+                    // Swipe up = random seek
+                    if (selectedStreamId) {
+                        send('randomSeek', { streamId: selectedStreamId });
+                        haptic.medium();
+                    }
+                }
+            }
+        };
+
+        el.viewerVideo?.addEventListener('touchstart', onTouchStart, { passive: true });
+        el.viewerVideo?.addEventListener('touchend', onTouchEnd, { passive: true });
     }
 
     function setupHeroGestures() {
@@ -628,19 +988,15 @@ const PlexdRemote = (function() {
             if (absX < 10 && absY < 10) {
                 const now = Date.now();
                 if (now - lastTapTime < 300) {
-                    // Double tap = toggle focus
+                    // Double tap = enter viewer mode
                     clearTimeout(tapTimeout);
-                    if (selectedStreamId) {
-                        if (state?.fullscreenStreamId === selectedStreamId) {
-                            send('exitFullscreen');
-                        } else {
-                            send('enterFullscreen', { streamId: selectedStreamId });
-                        }
-                    }
+                    haptic.heavy();
+                    enterViewer();
                 } else {
                     // Single tap = toggle play/pause (delayed to detect double tap)
                     tapTimeout = setTimeout(() => {
                         if (selectedStreamId) {
+                            haptic.light();
                             send('togglePause', { streamId: selectedStreamId });
                         }
                     }, 300);
@@ -662,14 +1018,16 @@ const PlexdRemote = (function() {
             if (absY > absX) {
                 const inFocusMode = !!state?.fullscreenStreamId;
                 if (deltaY < -SWIPE_THRESHOLD) {
-                    // Swipe UP: random seek (focus mode) or navigate UP (grid mode) - follow model
+                    // Swipe UP: random seek (focus mode) or navigate UP (grid mode)
+                    haptic.medium();
                     if (inFocusMode) {
                         if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
                     } else {
                         send('selectNext', { direction: 'up' });
                     }
                 } else if (deltaY > SWIPE_THRESHOLD) {
-                    // Swipe DOWN: toggle mute (focus mode) or navigate DOWN (grid mode) - follow model
+                    // Swipe DOWN: toggle mute (focus mode) or navigate DOWN (grid mode)
+                    haptic.light();
                     if (inFocusMode) {
                         if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
                     } else {
@@ -677,7 +1035,7 @@ const PlexdRemote = (function() {
                     }
                 }
             } else if (absX > absY) {
-                // Horizontal swipe = navigate in swipe direction - follow model
+                // Horizontal swipe = navigate streams
                 if (deltaX > SWIPE_THRESHOLD) {
                     navigateStream('next');
                 } else if (deltaX < -SWIPE_THRESHOLD) {

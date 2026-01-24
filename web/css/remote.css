@@ -986,3 +986,298 @@ button {
     transform: translateY(-10px);
     transition: transform 0.1s ease;
 }
+
+/* ============================================
+   Video Player in Hero
+   ============================================ */
+.hero-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.hero-video.active {
+    opacity: 1;
+}
+
+.hero-video.active + .hero-placeholder,
+.hero-video.active ~ .hero-image {
+    opacity: 0;
+}
+
+.hero-fullscreen-btn {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    width: 40px;
+    height: 40px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.hero-fullscreen-btn svg {
+    width: 22px;
+    height: 22px;
+    fill: white;
+}
+
+.hero-fullscreen-btn:active {
+    transform: scale(0.9);
+    background: rgba(0, 0, 0, 0.8);
+}
+
+/* ============================================
+   Fullscreen Viewer Overlay
+   ============================================ */
+.viewer-overlay {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    transition: opacity 0.3s ease;
+}
+
+.viewer-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.viewer-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+}
+
+.viewer-controls {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+    z-index: 10;
+}
+
+.viewer-controls.hidden {
+    opacity: 0;
+}
+
+.viewer-controls > * {
+    pointer-events: auto;
+}
+
+.viewer-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    padding-top: calc(16px + var(--safe-top));
+    background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, transparent 100%);
+}
+
+.viewer-close {
+    width: 44px;
+    height: 44px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.viewer-close svg {
+    width: 24px;
+    height: 24px;
+    fill: white;
+}
+
+.viewer-close:active {
+    background: rgba(255,255,255,0.2);
+}
+
+.viewer-title {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 600;
+    color: white;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.viewer-counter {
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: var(--radius-full);
+}
+
+.viewer-bottom {
+    padding: 16px;
+    padding-bottom: calc(24px + var(--safe-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);
+}
+
+.viewer-time {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.viewer-progress {
+    height: 6px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 3px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.viewer-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.1s ease;
+}
+
+.viewer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+}
+
+.viewer-btn {
+    width: 56px;
+    height: 56px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.viewer-btn svg {
+    width: 28px;
+    height: 28px;
+    fill: white;
+}
+
+.viewer-btn:active {
+    transform: scale(0.9);
+    background: rgba(255,255,255,0.2);
+}
+
+.viewer-btn-play {
+    width: 72px;
+    height: 72px;
+    background: var(--accent);
+}
+
+.viewer-btn-play:active {
+    background: #0070e0;
+}
+
+.viewer-btn-play .icon-pause {
+    display: none;
+}
+
+.viewer-btn-play.playing .icon-play {
+    display: none;
+}
+
+.viewer-btn-play.playing .icon-pause {
+    display: block;
+}
+
+.viewer-gesture-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding: 12px 24px;
+    border-radius: var(--radius-lg);
+    font-size: 14px;
+    color: white;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    z-index: 20;
+}
+
+.viewer-gesture-hint.visible {
+    opacity: 1;
+}
+
+/* ============================================
+   Haptic Feedback Animations
+   ============================================ */
+@keyframes haptic-tap {
+    0% { transform: scale(1); }
+    50% { transform: scale(0.95); }
+    100% { transform: scale(1); }
+}
+
+@keyframes haptic-success {
+    0% { transform: scale(1); }
+    25% { transform: scale(1.05); }
+    50% { transform: scale(0.98); }
+    100% { transform: scale(1); }
+}
+
+.haptic-tap {
+    animation: haptic-tap 0.15s ease;
+}
+
+.haptic-success {
+    animation: haptic-success 0.3s ease;
+}
+
+/* Stream change indicator */
+.stream-change-indicator {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    padding: 20px 32px;
+    border-radius: var(--radius-xl);
+    font-size: 18px;
+    font-weight: 600;
+    color: white;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    z-index: 10000;
+}
+
+.stream-change-indicator.visible {
+    opacity: 1;
+}

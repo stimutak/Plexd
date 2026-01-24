@@ -649,15 +649,16 @@ const PlexdRemote = (function() {
             `;
         }).join('');
 
-        // Event listeners - single tap selects, double tap focuses
+        // Event listeners - single tap selects, double tap random seek
         el.thumbsStrip.querySelectorAll('.thumb-item').forEach(item => {
             item.addEventListener('click', () => {
                 const now = Date.now();
                 const streamId = item.dataset.id;
 
                 if (now - lastThumbTapTime < 300 && lastThumbTapId === streamId) {
-                    // Double tap = focus this stream
-                    send('enterFullscreen', { streamId });
+                    // Double tap = random seek
+                    send('randomSeek', { streamId });
+                    haptic.medium();
                 } else {
                     // Single tap = select
                     selectStreamById(streamId);

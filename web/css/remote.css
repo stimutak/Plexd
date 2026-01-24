@@ -408,13 +408,13 @@ button {
     flex-shrink: 0;
 }
 
-/* BIG Progress Bar - Easy to tap/drag */
+/* Progress Bar */
 .progress-track {
     position: relative;
     width: 100%;
-    height: 36px;
-    background: var(--bg-elevated);
-    border-radius: var(--radius-md);
+    height: 28px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
     cursor: pointer;
     touch-action: none;
     overflow: hidden;
@@ -429,8 +429,8 @@ button {
     top: 0;
     left: 0;
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-soft));
-    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
     pointer-events: none;
     transition: width 0.1s linear;
 }
@@ -454,86 +454,55 @@ button {
 }
 
 /* ============================================
-   Actions Row - Quick Controls
+   Transport Row - Cursor Style
    ============================================ */
-.actions-row {
+.transport-row {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     padding: 4px 0;
 }
 
-.action-btn {
+.transport-btn {
+    width: 42px;
+    height: 38px;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-width: 56px;
-    height: 56px;
-    background: var(--bg-card);
-    border-radius: var(--radius-lg);
-    color: var(--text-secondary);
-    transition: all var(--transition-fast);
+    background: transparent;
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.5);
+    transition: all 0.15s ease;
 }
 
-.action-btn:active {
-    transform: scale(0.92);
-    background: var(--bg-elevated);
+.transport-btn:hover,
+.transport-btn:active {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
 }
 
-.action-btn svg {
-    width: 24px;
-    height: 24px;
-    margin-bottom: 2px;
+.transport-btn svg {
+    width: 18px;
+    height: 18px;
 }
 
-.action-btn span {
-    font-size: 10px;
-    font-weight: 500;
+.transport-btn.active {
+    color: rgba(255, 255, 255, 0.9);
 }
 
-/* Play button - larger and prominent */
-.action-btn-play {
-    width: 64px;
-    height: 64px;
-    background: var(--text-primary);
-    color: var(--bg-primary);
-    border-radius: var(--radius-full);
+/* Play button */
+.transport-btn-play {
+    color: rgba(255, 255, 255, 0.7);
 }
 
-.action-btn-play:active {
-    background: rgba(255, 255, 255, 0.85);
-}
+.transport-btn-play .icon-pause { display: none; }
+.transport-btn-play.playing .icon-play { display: none; }
+.transport-btn-play.playing .icon-pause { display: block; }
 
-.action-btn-play svg {
-    width: 28px;
-    height: 28px;
-    margin-bottom: 0;
-}
-
-.action-btn-play span { display: none; }
-
-/* Play/Pause icon toggle */
-.action-btn-play .icon-pause { display: none; }
-.action-btn-play.playing .icon-play { display: none; }
-.action-btn-play.playing .icon-pause { display: block; }
-
-/* Random button - accent color */
-.action-btn-accent {
-    background: var(--accent-soft);
-    color: var(--accent);
-}
-
-.action-btn-accent:active {
-    background: var(--accent);
-    color: var(--text-primary);
-}
-
-/* Focus button active state */
-.action-btn.active {
-    background: var(--success-soft);
-    color: var(--success);
+/* Random - subtle highlight */
+.transport-btn-accent {
+    color: rgba(255, 255, 255, 0.6);
 }
 
 /* ============================================
@@ -1063,6 +1032,7 @@ button {
     height: 100%;
     object-fit: contain;
     background: #000;
+    pointer-events: none; /* Let touches pass through to overlay */
 }
 
 .viewer-controls {
@@ -1088,16 +1058,16 @@ button {
 .viewer-top {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 16px;
-    padding-top: calc(16px + var(--safe-top));
-    background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, transparent 100%);
+    gap: 10px;
+    padding: 10px 12px;
+    padding-top: calc(10px + var(--safe-top));
+    background: linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%);
 }
 
 .viewer-close {
-    width: 44px;
-    height: 44px;
-    background: rgba(255,255,255,0.1);
+    width: 36px;
+    height: 36px;
+    background: rgba(255,255,255,0.08);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1105,58 +1075,58 @@ button {
 }
 
 .viewer-close svg {
-    width: 24px;
-    height: 24px;
-    fill: white;
+    width: 18px;
+    height: 18px;
+    fill: rgba(255,255,255,0.8);
 }
 
 .viewer-close:active {
-    background: rgba(255,255,255,0.2);
+    background: rgba(255,255,255,0.15);
 }
 
 .viewer-title {
     flex: 1;
-    font-size: 16px;
-    font-weight: 600;
-    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.9);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .viewer-counter {
-    font-size: 14px;
-    color: var(--text-secondary);
-    padding: 4px 10px;
-    background: rgba(255,255,255,0.1);
+    font-size: 12px;
+    color: rgba(255,255,255,0.5);
+    padding: 3px 8px;
+    background: rgba(255,255,255,0.08);
     border-radius: var(--radius-full);
 }
 
 .viewer-bottom {
-    padding: 16px;
-    padding-bottom: calc(24px + var(--safe-bottom));
-    background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);
+    padding: 12px 16px;
+    padding-bottom: calc(12px + var(--safe-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);
 }
 
 .viewer-time {
     display: block;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-bottom: 8px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.6);
+    margin-bottom: 6px;
 }
 
 .viewer-progress {
-    height: 6px;
+    height: 3px;
     background: rgba(255,255,255,0.2);
-    border-radius: 3px;
-    margin-bottom: 16px;
+    border-radius: 2px;
+    margin-bottom: 12px;
     overflow: hidden;
 }
 
 .viewer-progress-fill {
     height: 100%;
-    background: var(--accent);
-    border-radius: 3px;
+    background: rgba(255,255,255,0.8);
+    border-radius: 2px;
     width: 0%;
     transition: width 0.1s ease;
 }
@@ -1165,33 +1135,35 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 24px;
+    gap: 16px;
 }
 
 .viewer-btn {
-    width: 56px;
-    height: 56px;
-    background: rgba(255,255,255,0.1);
+    width: 44px;
+    height: 44px;
+    background: rgba(255,255,255,0.08);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: transform 0.2s ease, background 0.2s ease;
+    transition: transform 0.15s ease, background 0.15s ease;
 }
 
 .viewer-btn svg {
-    width: 28px;
-    height: 28px;
-    fill: white;
+    width: 20px;
+    height: 20px;
+    fill: rgba(255,255,255,0.8);
 }
 
 .viewer-btn:active {
-    transform: scale(0.9);
-    background: rgba(255,255,255,0.2);
+    transform: scale(0.92);
+    background: rgba(255,255,255,0.15);
 }
 
 .viewer-btn-play {
-    width: 72px;
+    width: 52px;
+    height: 52px;
+    background: rgba(255,255,255,0.12);
     height: 72px;
     background: var(--accent);
 }
@@ -1281,3 +1253,131 @@ button {
 .stream-change-indicator.visible {
     opacity: 1;
 }
+
+/* ============================================
+   Mode Tabs - Cursor Style Segmented Control
+   ============================================ */
+.mode-tabs {
+    display: flex;
+    gap: 0;
+    padding: 2px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+
+.mode-tab {
+    flex: 1;
+    padding: 8px 12px;
+    background: transparent;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.4);
+    transition: all 0.15s ease;
+}
+
+.mode-tab:active {
+    opacity: 0.8;
+}
+
+.mode-tab.active {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* Mode content visibility */
+.mode-content.hidden {
+    display: none;
+}
+
+/* ============================================
+   Controller Panel - Cursor Style
+   ============================================ */
+.ctrl-panel {
+    display: flex;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.ctrl-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 14px;
+    background: transparent;
+    border: none;
+    transition: background 0.15s ease;
+}
+
+.ctrl-item:active {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.ctrl-item-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ctrl-item-left svg {
+    width: 16px;
+    height: 16px;
+    fill: rgba(255, 255, 255, 0.45);
+}
+
+.ctrl-item-left span {
+    font-size: 13px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.ctrl-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 4px 16px;
+}
+
+/* Toggle switch */
+.ctrl-toggle {
+    width: 32px;
+    height: 18px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 9px;
+    padding: 2px;
+    transition: background 0.2s ease;
+}
+
+.ctrl-toggle-knob {
+    width: 14px;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 7px;
+    transition: all 0.2s ease;
+}
+
+/* Active/On states */
+.ctrl-item.active .ctrl-toggle {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.ctrl-item.active .ctrl-toggle-knob {
+    transform: translateX(14px);
+    background: rgba(255, 255, 255, 0.85);
+}
+
+/* Muted state for audio toggle */
+.ctrl-item.muted .ctrl-item-left svg {
+    fill: rgba(255, 255, 255, 0.3);
+}
+
+.ctrl-item.muted .ctrl-item-left span {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.ctrl-item .icon-muted { display: none; }
+.ctrl-item.muted .icon-unmuted { display: none; }
+.ctrl-item.muted .icon-muted { display: block; }

@@ -93,6 +93,14 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 - **Video sync**: Phone video syncs position/play state with Mac (within 2s tolerance)
 - **Server file storage**: Local files auto-upload to server for cross-device playback
 
+### Three Modes
+
+1. **Viewer Mode** - Fullscreen video overlay (tap expand button in hero)
+2. **Controller Mode** - Playback controls without triage (default tab)
+3. **Triage Mode** - Rating assignment and filtering (second tab)
+
+Shared elements (hero, progress bar, transport) appear in both Controller and Triage modes.
+
 ### Hero Tap Zones
 ```
 +------------------+
@@ -105,10 +113,15 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 +------------------+
 ```
 
+### Viewer Tap Zones
+Same as hero, but zones calculated on actual video area (not letterbox). Tapping outside video toggles controls.
+
 ### Gestures
 - **Swipe up/down/left/right**: Spatial navigation in grid
 - **Double-tap thumbnail**: Random seek that stream
 - **Long-press random button**: Opens action sheet (Pause All, Mute All, etc.)
+- **Viewer swipe left/right**: Navigate streams
+- **Viewer swipe down**: Exit viewer
 
 ### Server File Storage
 - Files upload to `uploads/` when dropped (checked by name+size to avoid duplicates)

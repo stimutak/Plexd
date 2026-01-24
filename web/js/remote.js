@@ -24,6 +24,7 @@ const PlexdRemote = (function() {
     let lastLocalSelectionTime = 0;
     let currentFilter = 'all'; // 'all', '0', '1', '2', ... '9' (exact rating)
     let filteredStreams = []; // Streams matching current filter
+    let currentMode = localStorage.getItem('plexd-remote-mode') || 'controller'; // 'controller' | 'triage'
     let currentIndex = 0; // Index within filteredStreams
     let swipeHintShown = false;
     let isDraggingProgress = false;
@@ -130,6 +131,19 @@ const PlexdRemote = (function() {
         // Video player
         el.heroVideo = $('hero-video');
         el.heroFullscreenBtn = $('hero-fullscreen-btn');
+
+        // Mode tabs and content
+        el.modeTabs = $('mode-tabs');
+        el.controllerContent = $('controller-content');
+        el.triageContent = $('triage-content');
+
+        // Controller elements
+        el.ctrlMute = $('ctrl-mute');
+        el.ctrlPauseAll = $('ctrl-pause-all');
+        el.ctrlRandomAll = $('ctrl-random-all');
+        el.ctrlMuteAll = $('ctrl-mute-all');
+        el.ctrlClean = $('ctrl-clean');
+        el.ctrlTetris = $('ctrl-tetris');
 
         // Fullscreen viewer
         el.viewerOverlay = $('viewer-overlay');
@@ -298,6 +312,36 @@ const PlexdRemote = (function() {
             counts[rating] = (counts[rating] || 0) + 1;
         });
         return counts;
+    }
+
+    // ============================================
+    // Mode Switching
+    // ============================================
+    function setMode(mode) {
+        if (mode !== 'controller' && mode !== 'triage') return;
+
+        currentMode = mode;
+        localStorage.setItem('plexd-remote-mode', mode);
+
+        // Update tab bar active state
+        el.modeTabs?.querySelectorAll('.mode-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.mode === mode);
+        });
+
+        // Show/hide content sections
+        if (el.controllerContent) {
+            el.controllerContent.classList.toggle('hidden', mode !== 'controller');
+        }
+        if (el.triageContent) {
+            el.triageContent.classList.toggle('hidden', mode !== 'triage');
+        }
+
+        // Render appropriate content
+        if (mode === 'controller') {
+            renderController();
+        }
+
+        haptic.light();
     }
 
     // ============================================
@@ -540,10 +584,17 @@ const PlexdRemote = (function() {
             renderHero();
             renderInfo();
             renderActions();
-            renderRating();
-            renderFilters();
-            renderThumbnails();
             renderAudioButton();
+
+            // Mode-specific rendering
+            if (currentMode === 'controller') {
+                renderController();
+            } else {
+                renderRating();
+                renderFilters();
+                renderThumbnails();
+            }
+
             updateHeroVideo();
             if (viewerMode) {
                 updateViewerVideo();
@@ -617,9 +668,9 @@ const PlexdRemote = (function() {
             el.btnPlay.classList.toggle('playing', !stream.paused);
         }
 
-        // Focus button state
+        // Focus button state (uses transport-btn.active now)
         if (el.btnFocus) {
-            const isFocused = stream.id === state.fullscreenStreamId;
+            const isFocused = stream.id === state?.fullscreenStreamId;
             el.btnFocus.classList.toggle('active', isFocused);
         }
     }
@@ -713,6 +764,27 @@ const PlexdRemote = (function() {
         el.audioToggle.classList.toggle('unmuted', !isMuted);
     }
 
+    function renderController() {
+        const stream = getCurrentStream();
+
+        // Stream audio toggle - active = unmuted (sound on)
+        if (el.ctrlMute) {
+            const isMuted = stream?.muted || false;
+            el.ctrlMute.classList.toggle('active', !isMuted);
+            el.ctrlMute.classList.toggle('muted', isMuted);
+        }
+
+        // Clean mode toggle
+        if (el.ctrlClean) {
+            el.ctrlClean.classList.toggle('active', state?.cleanMode || false);
+        }
+
+        // Tetris mode toggle
+        if (el.ctrlTetris) {
+            el.ctrlTetris.classList.toggle('active', state?.tetrisMode || false);
+        }
+    }
+
     function getCurrentStream() {
         if (!state?.streams || !selectedStreamId) {
             return filteredStreams[0] || state?.streams?.[0];
@@ -755,6 +827,46 @@ const PlexdRemote = (function() {
             } else {
                 send('enterFullscreen', { streamId: selectedStreamId });
             }
+        });
+
+        // Mode tabs
+        el.modeTabs?.querySelectorAll('.mode-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                setMode(tab.dataset.mode);
+            });
+        });
+
+        // Controller tiles
+        el.ctrlMute?.addEventListener('click', () => {
+            if (selectedStreamId) {
+                send('toggleMute', { streamId: selectedStreamId });
+                haptic.medium();
+            }
+        });
+
+        el.ctrlRandomAll?.addEventListener('click', () => {
+            send('randomSeekAll');
+            haptic.medium();
+        });
+
+        el.ctrlPauseAll?.addEventListener('click', () => {
+            send('togglePauseAll');
+            haptic.medium();
+        });
+
+        el.ctrlClean?.addEventListener('click', () => {
+            send('toggleCleanMode');
+            haptic.medium();
+        });
+
+        el.ctrlTetris?.addEventListener('click', () => {
+            send('toggleTetrisMode');
+            haptic.medium();
+        });
+
+        el.ctrlMuteAll?.addEventListener('click', () => {
+            send('toggleMuteAll');
+            haptic.medium();
         });
 
         // Rating buttons
@@ -877,14 +989,19 @@ const PlexdRemote = (function() {
         });
     }
 
+    let viewerGesturesSetup = false;
+
     function setupViewerGestures() {
-        if (!el.viewerOverlay) return;
+        if (!el.viewerOverlay || viewerGesturesSetup) return;
+        viewerGesturesSetup = true;
 
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
 
         const onTouchStart = (e) => {
+            // Ignore touches on control buttons
+            if (e.target.closest('.viewer-btn, .viewer-close')) return;
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
             isSwiping = true;
@@ -901,9 +1018,68 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Tap = toggle controls
+            // Tap detection - zone-based actions on actual video area
             if (absX < 15 && absY < 15) {
-                toggleViewerControls();
+                if (!selectedStreamId) return;
+
+                // Calculate actual video bounds (accounting for object-fit: contain)
+                const container = el.viewerOverlay.getBoundingClientRect();
+                const video = el.viewerVideo;
+                let videoRect = { left: 0, top: 0, width: container.width, height: container.height };
+
+                if (video && video.videoWidth && video.videoHeight) {
+                    const videoAspect = video.videoWidth / video.videoHeight;
+                    const containerAspect = container.width / container.height;
+
+                    if (videoAspect > containerAspect) {
+                        // Video is wider - black bars top/bottom
+                        videoRect.width = container.width;
+                        videoRect.height = container.width / videoAspect;
+                        videoRect.top = (container.height - videoRect.height) / 2;
+                        videoRect.left = 0;
+                    } else {
+                        // Video is taller - black bars left/right
+                        videoRect.height = container.height;
+                        videoRect.width = container.height * videoAspect;
+                        videoRect.left = (container.width - videoRect.width) / 2;
+                        videoRect.top = 0;
+                    }
+                }
+
+                // Check if tap is within video area
+                const inVideoX = startX >= videoRect.left && startX <= videoRect.left + videoRect.width;
+                const inVideoY = startY >= videoRect.top && startY <= videoRect.top + videoRect.height;
+
+                if (!inVideoX || !inVideoY) {
+                    // Tap outside video = toggle controls
+                    toggleViewerControls();
+                    return;
+                }
+
+                // Calculate relative position within video
+                const relX = (startX - videoRect.left) / videoRect.width;
+                const relY = (startY - videoRect.top) / videoRect.height;
+
+                if (relY < 0.25) {
+                    // Top quarter = random seek
+                    send('randomSeek', { streamId: selectedStreamId });
+                    haptic.medium();
+                } else if (relY > 0.75) {
+                    // Bottom quarter = toggle controls
+                    toggleViewerControls();
+                } else if (relX < 0.3) {
+                    // Left edge = back 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: -30 });
+                    haptic.light();
+                } else if (relX > 0.7) {
+                    // Right edge = forward 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: 30 });
+                    haptic.light();
+                } else {
+                    // Center = play/pause
+                    send('togglePause', { streamId: selectedStreamId });
+                    haptic.light();
+                }
                 return;
             }
 
@@ -932,8 +1108,9 @@ const PlexdRemote = (function() {
             }
         };
 
-        el.viewerVideo?.addEventListener('touchstart', onTouchStart, { passive: true });
-        el.viewerVideo?.addEventListener('touchend', onTouchEnd, { passive: true });
+        // Attach to overlay (not just video) so taps work even without video loaded
+        el.viewerOverlay.addEventListener('touchstart', onTouchStart, { passive: true });
+        el.viewerOverlay.addEventListener('touchend', onTouchEnd, { passive: true });
     }
 
     function setupHeroGestures() {
@@ -1253,7 +1430,11 @@ const PlexdRemote = (function() {
         cacheElements();
         setupEventListeners();
         setupCommunication();
-        console.log('Plexd Remote (Triage Mode) initialized');
+
+        // Initialize mode from localStorage
+        setMode(currentMode);
+
+        console.log('Plexd Remote initialized');
     }
 
     if (document.readyState === 'loading') {

@@ -955,30 +955,40 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Tap detection (minimal movement)
+            // Tap detection (minimal movement) - zone-based actions
             if (absX < 10 && absY < 10) {
-                const now = Date.now();
-                if (now - lastTapTime < 300) {
-                    // Double tap = toggle focus on Mac
-                    clearTimeout(tapTimeout);
+                if (!selectedStreamId) return;
+
+                const rect = el.heroPreview.getBoundingClientRect();
+                const relX = (startX - rect.left) / rect.width;  // 0-1 horizontal
+                const relY = (startY - rect.top) / rect.height;  // 0-1 vertical
+
+                // Determine zone and action
+                if (relY < 0.33) {
+                    // Top third = random seek
+                    send('randomSeek', { streamId: selectedStreamId });
+                    haptic.medium();
+                } else if (relY > 0.67) {
+                    // Bottom third = toggle focus
                     haptic.heavy();
-                    if (selectedStreamId) {
-                        if (state?.fullscreenStreamId === selectedStreamId) {
-                            send('exitFullscreen');
-                        } else {
-                            send('enterFullscreen', { streamId: selectedStreamId });
-                        }
+                    if (state?.fullscreenStreamId === selectedStreamId) {
+                        send('exitFullscreen');
+                    } else {
+                        send('enterFullscreen', { streamId: selectedStreamId });
                     }
+                } else if (relX < 0.33) {
+                    // Left third (middle row) = back 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: -30 });
+                    haptic.light();
+                } else if (relX > 0.67) {
+                    // Right third (middle row) = forward 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: 30 });
+                    haptic.light();
                 } else {
-                    // Single tap = toggle play/pause (delayed to detect double tap)
-                    tapTimeout = setTimeout(() => {
-                        if (selectedStreamId) {
-                            haptic.light();
-                            send('togglePause', { streamId: selectedStreamId });
-                        }
-                    }, 300);
+                    // Center = toggle play/pause
+                    send('togglePause', { streamId: selectedStreamId });
+                    haptic.light();
                 }
-                lastTapTime = now;
                 return;
             }
 

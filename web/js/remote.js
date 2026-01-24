@@ -993,18 +993,22 @@ const PlexdRemote = (function() {
             }
 
             if (absY > absX) {
-                // Vertical swipe = also navigate streams (up=prev, down=next)
+                // Vertical swipe = spatial navigation (up/down in grid)
                 if (deltaY < -SWIPE_THRESHOLD) {
-                    navigateStream('prev');
+                    send('selectNext', { direction: 'up' });
+                    haptic.medium();
                 } else if (deltaY > SWIPE_THRESHOLD) {
-                    navigateStream('next');
+                    send('selectNext', { direction: 'down' });
+                    haptic.medium();
                 }
             } else if (absX > absY) {
-                // Horizontal swipe = navigate streams
+                // Horizontal swipe = spatial navigation (left/right in grid)
                 if (deltaX > SWIPE_THRESHOLD) {
-                    navigateStream('next');
+                    send('selectNext', { direction: 'right' });
+                    haptic.medium();
                 } else if (deltaX < -SWIPE_THRESHOLD) {
-                    navigateStream('prev');
+                    send('selectNext', { direction: 'left' });
+                    haptic.medium();
                 }
             }
         }, { passive: false });
@@ -1043,18 +1047,22 @@ const PlexdRemote = (function() {
             if (absX < SWIPE_THRESHOLD && absY < SWIPE_THRESHOLD) return;
 
             if (absY > absX) {
-                // Vertical swipe = navigate streams (up=prev, down=next)
+                // Vertical swipe = spatial navigation (up/down in grid)
                 if (deltaY < -SWIPE_THRESHOLD) {
-                    navigateStream('prev');
+                    send('selectNext', { direction: 'up' });
+                    haptic.medium();
                 } else if (deltaY > SWIPE_THRESHOLD) {
-                    navigateStream('next');
+                    send('selectNext', { direction: 'down' });
+                    haptic.medium();
                 }
             } else {
-                // Horizontal swipe = navigate streams
+                // Horizontal swipe = spatial navigation (left/right in grid)
                 if (deltaX > SWIPE_THRESHOLD) {
-                    navigateStream('next');
+                    send('selectNext', { direction: 'right' });
+                    haptic.medium();
                 } else if (deltaX < -SWIPE_THRESHOLD) {
-                    navigateStream('prev');
+                    send('selectNext', { direction: 'left' });
+                    haptic.medium();
                 }
             }
         }, { passive: true });

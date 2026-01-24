@@ -6,8 +6,126 @@ Plexd is a multiplex video stream display system. This document provides technic
 
 ## Current State
 
-**Version**: Initial development complete
-**Status**: Functional with core features implemented
+**Branch**: `feature/server-file-storage` (PR #87 open)
+**Status**: Remote viewer functional, ready for interface redesign
+
+---
+
+## Latest Session Summary (Jan 2026)
+
+### Completed This Session
+
+1. **Server-Side File Storage** (`server.js`)
+   - `/api/files/upload` - Upload with name+size duplicate check
+   - `/api/files/:id` - Serve files with range request support
+   - `/api/files/list` - List all uploaded files
+   - `/api/files/purge` - Delete all or by set name
+   - `/api/files/associate` - Link files to saved sets (prevents 24h auto-delete)
+
+2. **Remote Video Sync** (`web/js/remote.js`)
+   - Phone video syncs position with Mac (within 2s tolerance)
+   - Play/pause state synced from Mac
+   - Uses `serverUrl` for cross-device playback
+
+3. **Remote Tap Zones** (hero area)
+   ```
+   +------------------+
+   |   TOP: Random    |
+   +------+----+------+
+   | LEFT |PLAY| RIGHT|
+   | -30s |    | +30s |
+   +------+----+------+
+   | BTM: Focus Toggle|
+   +------------------+
+   ```
+
+4. **Remote Swipe Gestures**
+   - Swipe up/down/left/right = spatial grid navigation via `selectNext` command
+   - Double-tap thumbnail = random seek
+   - Long-press random button = action sheet
+
+5. **Mac Changes**
+   - Double-click stream = toggle focus mode
+   - Files upload to server when loading saved sets
+
+### Key Files Modified
+- `server.js` - File storage API
+- `web/js/app.js` - Upload logic, purge UI in Manage Files modal
+- `web/js/remote.js` - Tap zones, video sync, spatial swipes
+- `web/js/stream.js` - Double-click focus
+- `web/sw.js` - Cache version v8
+- `CLAUDE.md` - Remote documentation
+
+---
+
+## NEXT: Remote Interface Redesign
+
+### Goal
+Three-mode interface instead of triage-only:
+
+### Mode 1: Viewer
+- Fullscreen synced video (already partially works)
+- Minimal overlay UI (title, time, auto-hide)
+- Gesture-only controls (tap zones already done)
+- Landscape orientation support
+
+### Mode 2: Controller (NEW)
+- Prominent transport bar (play, prev, next, random)
+- Large seek slider with time display
+- Stream info (title, thumbnail, rating)
+- Quick actions (focus, mute)
+
+### Mode 3: Triage (EXISTS)
+- Rating assignment strip
+- Filter tabs
+- Thumbnail grid
+- Keep current functionality
+
+### Mode Switching Options
+- **Option A**: Swipe vertical between modes
+- **Option B**: Tab bar at bottom
+
+### Implementation Plan
+1. Add mode state variable (`viewerMode`, `controllerMode`, `triageMode`)
+2. Create mode switching logic
+3. Build Controller mode layout
+4. Polish Viewer mode (add auto-hide, landscape)
+5. Add transitions
+
+---
+
+## Development Quick Reference
+
+### Start Server
+```bash
+cd /Users/oliver/Projects/Plexd
+node server.js  # Port 8080 - MUST use this, not npx serve
+```
+
+### Remote URL
+```
+http://<mac-ip>:8080/remote.html?v=8
+# Bump ?v=N to bust service worker cache
+```
+
+### Git
+```bash
+git config user.email  # oed@mac.com
+```
+
+### Key remote.js Functions
+- `setupHeroGestures()` - Tap zones and swipes
+- `updateHeroVideo()` - Video loading and sync
+- `send(action, payload)` - Commands to Mac via relay
+- `navigateStream(dir)` - By index (use `send('selectNext', {direction})` for spatial)
+
+### Commands (remote -> Mac)
+- `selectNext` + `{direction: 'up'|'down'|'left'|'right'}` - Spatial nav
+- `seekRelative` + `{streamId, offset}` - Relative seek
+- `randomSeek` + `{streamId}` - Random position
+- `togglePause`, `toggleMute`, `enterFullscreen`, `exitFullscreen`
+
+---
 
 ## Architecture Summary
 

@@ -306,9 +306,9 @@ const PlexdRemote = (function() {
     function navigateStream(direction) {
         if (filteredStreams.length === 0) return;
 
-        if (direction === 'next' || direction === 'right') {
+        if (direction === 'next' || direction === 'right' || direction === 'down') {
             currentIndex = (currentIndex + 1) % filteredStreams.length;
-        } else if (direction === 'prev' || direction === 'left') {
+        } else if (direction === 'prev' || direction === 'left' || direction === 'up') {
             currentIndex = (currentIndex - 1 + filteredStreams.length) % filteredStreams.length;
         }
 
@@ -317,6 +317,8 @@ const PlexdRemote = (function() {
             selectedStreamId = stream.id;
             lastLocalSelectionTime = Date.now();
             send('selectStream', { streamId: stream.id });
+            haptic.medium();
+            showStreamChangeIndicator();
             render();
         }
     }
@@ -373,8 +375,16 @@ const PlexdRemote = (function() {
         const stream = getCurrentStream();
         if (!stream || !el.heroVideo) return;
 
+        // Skip blob URLs (local files can't be played on remote device)
+        if (stream.url && stream.url.startsWith('blob:')) {
+            el.heroVideo.classList.remove('active');
+            currentVideoUrl = null;
+            return;
+        }
+
         // Only reload if URL changed
-        if (currentVideoUrl !== stream.url) {
+        if (currentVideoUrl !== stream.url && stream.url) {
+            console.log('[Remote] Loading video:', stream.url);
             currentVideoUrl = stream.url;
             heroHls = loadVideo(el.heroVideo, stream.url, heroHls);
             el.heroVideo.classList.add('active');
@@ -401,8 +411,13 @@ const PlexdRemote = (function() {
         const stream = getCurrentStream();
         if (!stream || !el.viewerVideo || !viewerMode) return;
 
+        // Skip blob URLs (local files can't be played on remote device)
+        if (stream.url && stream.url.startsWith('blob:')) {
+            return;
+        }
+
         // Load video if not loaded
-        if (el.viewerVideo.src !== stream.url) {
+        if (el.viewerVideo.src !== stream.url && stream.url) {
             viewerHls = loadVideo(el.viewerVideo, stream.url, viewerHls);
         }
 
@@ -1016,23 +1031,11 @@ const PlexdRemote = (function() {
             }
 
             if (absY > absX) {
-                const inFocusMode = !!state?.fullscreenStreamId;
+                // Vertical swipe = also navigate streams (up=prev, down=next)
                 if (deltaY < -SWIPE_THRESHOLD) {
-                    // Swipe UP: random seek (focus mode) or navigate UP (grid mode)
-                    haptic.medium();
-                    if (inFocusMode) {
-                        if (selectedStreamId) send('randomSeek', { streamId: selectedStreamId });
-                    } else {
-                        send('selectNext', { direction: 'up' });
-                    }
+                    navigateStream('prev');
                 } else if (deltaY > SWIPE_THRESHOLD) {
-                    // Swipe DOWN: toggle mute (focus mode) or navigate DOWN (grid mode)
-                    haptic.light();
-                    if (inFocusMode) {
-                        if (selectedStreamId) send('toggleMute', { streamId: selectedStreamId });
-                    } else {
-                        send('selectNext', { direction: 'down' });
-                    }
+                    navigateStream('next');
                 }
             } else if (absX > absY) {
                 // Horizontal swipe = navigate streams

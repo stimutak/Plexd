@@ -2998,6 +2998,12 @@ const PlexdStream = (function() {
 
         const navigableIds = new Set(navigable.map(s => s.id));
 
+        // In Tetris mode, always use spatial navigation (not row-based)
+        // Tetris layouts don't follow row/column structure
+        if (window._plexdTetrisMode > 0) {
+            return getSpatialNeighborFromDOM(navigable, currentStreamId, direction);
+        }
+
         // Use cached layout if available and contains the current stream
         const useCache = cachedLayoutOrder.length > 0 &&
                          cachedLayoutRows.length > 0 &&
@@ -3055,14 +3061,52 @@ const PlexdStream = (function() {
 
     /**
      * Fallback: Get spatial neighbor using DOM positions
+     * For Tetris mode, uses true spatial navigation (nearest in direction)
+     * For regular grid, uses row-based navigation
      */
     function getSpatialNeighborFromDOM(navigable, currentStreamId, direction) {
+        // Check if we're in Tetris mode (complex non-grid layouts)
+        const inTetrisMode = window._plexdTetrisMode > 0;
+
+        const items = navigable.map(s => {
+            const styleLeft = parseFloat(s.wrapper.style.left);
+            const styleTop = parseFloat(s.wrapper.style.top);
+            const styleWidth = parseFloat(s.wrapper.style.width);
+            const styleHeight = parseFloat(s.wrapper.style.height);
+
+            const hasStyleRect =
+                Number.isFinite(styleLeft) &&
+                Number.isFinite(styleTop) &&
+                Number.isFinite(styleWidth) &&
+                Number.isFinite(styleHeight) &&
+                styleWidth > 0 &&
+                styleHeight > 0;
+
+            const r = hasStyleRect
+                ? { left: styleLeft, top: styleTop, width: styleWidth, height: styleHeight }
+                : s.wrapper.getBoundingClientRect();
+
+            return {
+                id: s.id,
+                cx: r.left + r.width / 2,
+                cy: r.top + r.height / 2
+            };
+        });
+
+        const current = items.find(it => it.id === currentStreamId) || items[0];
+        if (!current) return null;
+
+        // In Tetris mode, use true spatial navigation
+        if (inTetrisMode) {
+            return getTrueSpatialNeighbor(items, current, direction);
+        }
+
+        // Regular grid: use row-based navigation
         const rows = buildSpatialRows(navigable);
         const flat = rows.flatMap(r => r.items);
 
         const currentIdx = flat.findIndex(it => it.id === currentStreamId);
         const idx = currentIdx === -1 ? 0 : currentIdx;
-        const current = flat[idx];
 
         if (direction === 'right' || direction === 'left') {
             const delta = direction === 'right' ? 1 : -1;
@@ -3091,6 +3135,85 @@ const PlexdStream = (function() {
             if (d < bestDist) {
                 best = it;
                 bestDist = d;
+            }
+        }
+        return best.id;
+    }
+
+    /**
+     * True spatial navigation for Tetris mode
+     * Left/Right: sequential through reading order (top-left to bottom-right)
+     * Up/Down: nearest item above/below
+     */
+    function getTrueSpatialNeighbor(items, current, direction) {
+        if (items.length <= 1) return current.id;
+
+        // Sort items in reading order (top-to-bottom, left-to-right)
+        // Use a tolerance for "same row" grouping
+        const sorted = [...items].sort((a, b) => {
+            const rowTolerance = 50;
+            if (Math.abs(a.cy - b.cy) <= rowTolerance) {
+                return a.cx - b.cx; // Same row: sort by X
+            }
+            return a.cy - b.cy; // Different rows: sort by Y
+        });
+
+        const currentIdx = sorted.findIndex(it => it.id === current.id);
+        if (currentIdx === -1) return sorted[0].id;
+
+        if (direction === 'right') {
+            // Next in reading order
+            const nextIdx = (currentIdx + 1) % sorted.length;
+            return sorted[nextIdx].id;
+        }
+
+        if (direction === 'left') {
+            // Previous in reading order
+            const prevIdx = (currentIdx - 1 + sorted.length) % sorted.length;
+            return sorted[prevIdx].id;
+        }
+
+        // Up/Down: find nearest item above/below
+        const others = items.filter(it => it.id !== current.id);
+        const threshold = 20;
+
+        let candidates;
+        if (direction === 'down') {
+            candidates = others.filter(it => it.cy > current.cy + threshold);
+        } else {
+            candidates = others.filter(it => it.cy < current.cy - threshold);
+        }
+
+        if (candidates.length === 0) {
+            // Wrap: down from bottom goes to top, up from top goes to bottom
+            if (direction === 'down') {
+                candidates = others.sort((a, b) => a.cy - b.cy);
+            } else {
+                candidates = others.sort((a, b) => b.cy - a.cy);
+            }
+            // Pick the one closest horizontally
+            let best = candidates[0];
+            let bestDx = Math.abs(best.cx - current.cx);
+            for (const it of candidates.slice(0, 3)) { // Check top 3
+                const dx = Math.abs(it.cx - current.cx);
+                if (dx < bestDx) {
+                    best = it;
+                    bestDx = dx;
+                }
+            }
+            return best.id;
+        }
+
+        // Find nearest in direction, preferring similar X position
+        let best = candidates[0];
+        let bestScore = Infinity;
+        for (const it of candidates) {
+            const dy = Math.abs(it.cy - current.cy);
+            const dx = Math.abs(it.cx - current.cx);
+            const score = dy + dx * 0.5; // Slight preference for horizontal alignment
+            if (score < bestScore) {
+                bestScore = score;
+                best = it;
             }
         }
         return best.id;

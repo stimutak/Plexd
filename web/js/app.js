@@ -111,7 +111,7 @@ const PlexdApp = (function() {
      * Load a local file from IndexedDB
      * @param {string} setName - The combination/set name
      * @param {string} fileName - Original file name
-     * @returns {Promise<{url: string, fileName: string}|null>}
+     * @returns {Promise<{url: string, fileName: string, blob: Blob}|null>}
      */
     async function loadLocalFileFromDisc(setName, fileName) {
         try {
@@ -129,7 +129,8 @@ const PlexdApp = (function() {
             if (data && data.blob) {
                 const url = URL.createObjectURL(data.blob);
                 console.log(`[Plexd] Loaded local file from disc: ${fileName}`);
-                return { url, fileName: data.fileName };
+                // Return blob for server upload (remote playback)
+                return { url, fileName: data.fileName, blob: data.blob };
             }
             return null;
         } catch (err) {
@@ -4067,8 +4068,8 @@ const PlexdApp = (function() {
             if (file && file.url) {
                 const originalFileName = localFiles[index];
                 console.log(`[Plexd] Loading local file ${index + 1}: ${file.fileName}`);
-                // Pass fileObj if available for efficient saving later
-                addStreamFromFile(file.url, file.fileName, file.fileObj || null);
+                // Pass blob for server upload (enables remote playback)
+                addStreamFromFile(file.url, file.fileName, file.blob || file.fileObj || null);
                 localLoaded++;
 
                 // Restore rating if saved (ratings are now automatically loaded via syncRatingStatus)

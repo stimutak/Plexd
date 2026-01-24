@@ -390,6 +390,20 @@ const PlexdRemote = (function() {
             heroHls = loadVideo(el.heroVideo, videoUrl, heroHls);
             el.heroVideo.classList.add('active');
         }
+
+        // Sync playback position and state with Mac (within tolerance)
+        if (el.heroVideo.readyState >= 2) {
+            const drift = Math.abs(el.heroVideo.currentTime - stream.currentTime);
+            if (drift > 2 && stream.currentTime > 0) {
+                el.heroVideo.currentTime = stream.currentTime;
+            }
+            // Sync play/pause
+            if (stream.paused && !el.heroVideo.paused) {
+                el.heroVideo.pause();
+            } else if (!stream.paused && el.heroVideo.paused) {
+                el.heroVideo.play().catch(() => {});
+            }
+        }
     }
 
     function updateViewerVideo() {
@@ -418,6 +432,20 @@ const PlexdRemote = (function() {
             if (viewerCurrentUrl !== videoUrl) {
                 el.viewerVideo.setAttribute('data-url', videoUrl);
                 viewerHls = loadVideo(el.viewerVideo, videoUrl, viewerHls);
+            }
+
+            // Sync playback position and state with Mac
+            if (el.viewerVideo.readyState >= 2) {
+                const drift = Math.abs(el.viewerVideo.currentTime - stream.currentTime);
+                if (drift > 2 && stream.currentTime > 0) {
+                    el.viewerVideo.currentTime = stream.currentTime;
+                }
+                // Sync play/pause
+                if (stream.paused && !el.viewerVideo.paused) {
+                    el.viewerVideo.pause();
+                } else if (!stream.paused && el.viewerVideo.paused) {
+                    el.viewerVideo.play().catch(() => {});
+                }
             }
         }
     }

@@ -1,5 +1,5 @@
 // Plexd Service Worker - Caches UI for offline use
-const CACHE_NAME = 'plexd-remote-v3';
+const CACHE_NAME = 'plexd-remote-v4';
 const ASSETS = [
     '/remote.html',
     '/css/remote.css',

@@ -375,66 +375,26 @@ const PlexdRemote = (function() {
         const stream = getCurrentStream();
         if (!stream || !el.heroVideo) return;
 
-        // Skip blob URLs (local files can't be played on remote device)
-        if (stream.url && stream.url.startsWith('blob:')) {
+        // Use serverUrl for local files (blob: URLs don't work cross-device)
+        const videoUrl = stream.serverUrl || (stream.url && !stream.url.startsWith('blob:') ? stream.url : null);
+
+        if (!videoUrl) {
+            // No playable URL available
             el.heroVideo.classList.remove('active');
-            currentVideoUrl = null;
             return;
         }
 
         // Only reload if URL changed
-        if (currentVideoUrl !== stream.url && stream.url) {
-            console.log('[Remote] Loading video:', stream.url);
-            currentVideoUrl = stream.url;
-            heroHls = loadVideo(el.heroVideo, stream.url, heroHls);
+        if (currentVideoUrl !== videoUrl) {
+            currentVideoUrl = videoUrl;
+            heroHls = loadVideo(el.heroVideo, videoUrl, heroHls);
             el.heroVideo.classList.add('active');
-        }
-
-        // Sync playback position periodically
-        if (Date.now() - lastSyncTime > SYNC_INTERVAL && stream.currentTime) {
-            const drift = Math.abs(el.heroVideo.currentTime - stream.currentTime);
-            if (drift > 3) {
-                el.heroVideo.currentTime = stream.currentTime;
-            }
-            lastSyncTime = Date.now();
-        }
-
-        // Sync paused state
-        if (stream.paused && !el.heroVideo.paused) {
-            el.heroVideo.pause();
-        } else if (!stream.paused && el.heroVideo.paused) {
-            el.heroVideo.play().catch(() => {});
         }
     }
 
     function updateViewerVideo() {
         const stream = getCurrentStream();
-        if (!stream || !el.viewerVideo || !viewerMode) return;
-
-        // Skip blob URLs (local files can't be played on remote device)
-        if (stream.url && stream.url.startsWith('blob:')) {
-            return;
-        }
-
-        // Load video if not loaded
-        if (el.viewerVideo.src !== stream.url && stream.url) {
-            viewerHls = loadVideo(el.viewerVideo, stream.url, viewerHls);
-        }
-
-        // Sync position
-        if (stream.currentTime) {
-            const drift = Math.abs(el.viewerVideo.currentTime - stream.currentTime);
-            if (drift > 2) {
-                el.viewerVideo.currentTime = stream.currentTime;
-            }
-        }
-
-        // Sync paused state
-        if (stream.paused && !el.viewerVideo.paused) {
-            el.viewerVideo.pause();
-        } else if (!stream.paused && el.viewerVideo.paused) {
-            el.viewerVideo.play().catch(() => {});
-        }
+        if (!stream || !viewerMode) return;
 
         // Update viewer UI
         const name = stream.fileName || getDisplayName(stream.url);
@@ -450,6 +410,16 @@ const PlexdRemote = (function() {
         if (el.viewerPlay) {
             el.viewerPlay.classList.toggle('playing', !stream.paused);
         }
+
+        // Load video if serverUrl available
+        const videoUrl = stream.serverUrl || (stream.url && !stream.url.startsWith('blob:') ? stream.url : null);
+        if (videoUrl && el.viewerVideo) {
+            const viewerCurrentUrl = el.viewerVideo.getAttribute('data-url');
+            if (viewerCurrentUrl !== videoUrl) {
+                el.viewerVideo.setAttribute('data-url', videoUrl);
+                viewerHls = loadVideo(el.viewerVideo, videoUrl, viewerHls);
+            }
+        }
     }
 
     // ============================================
@@ -462,17 +432,9 @@ const PlexdRemote = (function() {
         el.viewerOverlay.classList.remove('hidden');
         haptic.heavy();
 
-        // Load video
-        const stream = getCurrentStream();
-        if (stream && el.viewerVideo) {
-            viewerHls = loadVideo(el.viewerVideo, stream.url, viewerHls);
-            if (stream.currentTime) {
-                el.viewerVideo.currentTime = stream.currentTime;
-            }
-        }
-
         // Show controls initially, then auto-hide
         showViewerControls();
+        updateViewerVideo();
 
         // Show gesture hint briefly
         if (el.viewerGestureHint) {
@@ -490,16 +452,6 @@ const PlexdRemote = (function() {
         viewerMode = false;
         el.viewerOverlay.classList.add('hidden');
         haptic.medium();
-
-        // Cleanup video
-        if (viewerHls) {
-            viewerHls.destroy();
-            viewerHls = null;
-        }
-        if (el.viewerVideo) {
-            el.viewerVideo.src = '';
-        }
-
         clearTimeout(controlsTimeout);
     }
 

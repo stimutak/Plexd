@@ -251,6 +251,92 @@ const PlexdApp = (function() {
         }
     }
 
+    // ========================================
+    // Server File Upload for Remote Playback
+    // ========================================
+
+    /**
+     * Upload a file to the server for cross-device playback
+     * @param {File} fileObj - The file to upload
+     * @param {string} fileName - Original filename
+     * @returns {Promise<{fileId: string, url: string}|null>}
+     */
+    async function uploadFileToServer(fileObj, fileName) {
+        try {
+            const response = await fetch('/api/files/upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': fileObj.type || 'application/octet-stream',
+                    'X-File-Name': encodeURIComponent(fileName)
+                },
+                body: fileObj
+            });
+
+            if (!response.ok) {
+                console.error('[Plexd] File upload failed:', response.status);
+                return null;
+            }
+
+            const result = await response.json();
+            console.log(`[Plexd] Uploaded ${fileName} -> ${result.url}`);
+            return { fileId: result.fileId, url: result.url };
+        } catch (err) {
+            console.error('[Plexd] File upload error:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Associate uploaded files with a saved set (prevents auto-delete)
+     * @param {string[]} fileIds - Array of file IDs
+     * @param {string} setName - Name of the saved set
+     */
+    async function associateFilesWithSet(fileIds, setName) {
+        if (!fileIds || fileIds.length === 0) return;
+        try {
+            await fetch('/api/files/associate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileIds, setName })
+            });
+        } catch (err) {
+            console.error('[Plexd] Failed to associate files:', err);
+        }
+    }
+
+    /**
+     * Purge all uploaded files from the server
+     * @param {string} [setName] - Optional set name to purge only that set's files
+     */
+    async function purgeServerFiles(setName = null) {
+        try {
+            const response = await fetch('/api/files/purge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(setName ? { setName } : {})
+            });
+            const result = await response.json();
+            console.log(`[Plexd] Purged ${result.deleted} files from server`);
+            return result.deleted;
+        } catch (err) {
+            console.error('[Plexd] Failed to purge files:', err);
+            return 0;
+        }
+    }
+
+    /**
+     * Get list of all uploaded files on server
+     */
+    async function getServerFileList() {
+        try {
+            const response = await fetch('/api/files/list');
+            return await response.json();
+        } catch (err) {
+            console.error('[Plexd] Failed to get file list:', err);
+            return [];
+        }
+    }
+
     /**
      * Format bytes to human readable string
      */
@@ -579,6 +665,17 @@ const PlexdApp = (function() {
         // Auto-assign rating only if no saved rating exists
         // distributeRatingsEvenly() now only assigns to streams without saved ratings
         PlexdStream.distributeRatingsEvenly();
+
+        // Upload file to server in background for remote playback
+        if (fileObj) {
+            uploadFileToServer(fileObj, fileName).then(result => {
+                if (result) {
+                    stream.serverUrl = result.url;
+                    stream.serverFileId = result.fileId;
+                    console.log(`[Plexd] Server URL ready for ${fileName}: ${result.url}`);
+                }
+            });
+        }
 
         // Note: We don't add file streams to history since object URLs are temporary
         showMessage(`Added: ${fileName}`, 'success');
@@ -3421,6 +3518,14 @@ const PlexdApp = (function() {
             return;
         }
 
+        // Associate server-uploaded files with this saved set (prevents 24h auto-delete)
+        const serverFileIds = localFileStreams
+            .filter(s => s.serverFileId)
+            .map(s => s.serverFileId);
+        if (serverFileIds.length > 0) {
+            associateFilesWithSet(serverFileIds, name);
+        }
+
         // Build informative message
         const totalCount = urls.length + localFiles.length;
         const favCount = favoriteUrls.length + favoriteFileNames.length;
@@ -4129,14 +4234,33 @@ const PlexdApp = (function() {
         const existingModal = document.getElementById('manage-files-modal');
         if (existingModal) existingModal.remove();
 
+        // Get browser-stored files (IndexedDB)
         const files = await getAllStoredFiles();
         const totalSize = files.reduce((sum, f) => sum + f.size, 0);
 
-        // Group files by set name
+        // Get server-uploaded files
+        let serverFiles = [];
+        let serverTotalSize = 0;
+        try {
+            serverFiles = await getServerFileList();
+            serverTotalSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+        } catch (e) {
+            console.log('[Plexd] Server files not available');
+        }
+
+        // Group browser files by set name
         const filesBySet = {};
         files.forEach(f => {
             if (!filesBySet[f.setName]) filesBySet[f.setName] = [];
             filesBySet[f.setName].push(f);
+        });
+
+        // Group server files by set name
+        const serverFilesBySet = {};
+        serverFiles.forEach(f => {
+            const setName = f.setName || '(Unsaved)';
+            if (!serverFilesBySet[setName]) serverFilesBySet[setName] = [];
+            serverFilesBySet[setName].push(f);
         });
 
         const modal = document.createElement('div');
@@ -4167,15 +4291,46 @@ const PlexdApp = (function() {
             `).join('');
         };
 
+        const renderServerFileList = () => {
+            if (serverFiles.length === 0) {
+                return '<div class="plexd-panel-empty">No server files (for remote playback)</div>';
+            }
+            return Object.entries(serverFilesBySet).map(([setName, setFiles]) => `
+                <div class="plexd-stored-set">
+                    <div class="plexd-stored-set-header">
+                        <span class="plexd-stored-set-name">${escapeHtml(setName)}</span>
+                        <span class="plexd-stored-set-size">${setFiles.length} file${setFiles.length !== 1 ? 's' : ''}, ${formatBytes(setFiles.reduce((s, f) => s + (f.size || 0), 0))}</span>
+                    </div>
+                    <div class="plexd-stored-files">
+                        ${setFiles.map(f => `
+                            <div class="plexd-stored-file">
+                                <span class="plexd-stored-file-name" title="${escapeAttr(f.fileName)}">${escapeHtml(f.fileName)}</span>
+                                <span class="plexd-stored-file-size">${formatBytes(f.size || 0)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+        };
+
         modal.innerHTML = `
             <div class="plexd-modal plexd-modal-wide">
                 <h3>Stored Files</h3>
-                <p class="plexd-modal-subtitle">${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(totalSize)} total</p>
+                <p class="plexd-modal-subtitle">Browser: ${files.length} file${files.length !== 1 ? 's' : ''}, ${formatBytes(totalSize)} | Server: ${serverFiles.length} file${serverFiles.length !== 1 ? 's' : ''}, ${formatBytes(serverTotalSize)}</p>
+
+                <h4 style="margin: 15px 0 10px; font-size: 14px; color: #888;">Browser Storage (for offline use)</h4>
                 <div id="stored-files-list" class="plexd-stored-files-container">
                     ${renderFileList()}
                 </div>
+
+                <h4 style="margin: 15px 0 10px; font-size: 14px; color: #888;">Server Storage (for remote playback)</h4>
+                <div id="server-files-list" class="plexd-stored-files-container">
+                    ${renderServerFileList()}
+                </div>
+
                 <div class="plexd-modal-actions">
-                    <button id="manage-files-clear-all" class="plexd-button plexd-button-secondary plexd-btn-danger" ${files.length === 0 ? 'disabled' : ''}>Clear All</button>
+                    <button id="manage-files-clear-all" class="plexd-button plexd-button-secondary plexd-btn-danger" ${files.length === 0 ? 'disabled' : ''}>Clear Browser</button>
+                    <button id="manage-files-purge-server" class="plexd-button plexd-button-secondary plexd-btn-danger" ${serverFiles.length === 0 ? 'disabled' : ''}>Purge Server</button>
                     <button id="manage-files-close" class="plexd-button plexd-button-primary">Done</button>
                 </div>
             </div>
@@ -4227,15 +4382,31 @@ const PlexdApp = (function() {
         });
 
         document.getElementById('manage-files-clear-all').addEventListener('click', async () => {
-            if (confirm('Delete all stored files? This cannot be undone.')) {
+            if (confirm('Delete all browser-stored files? This cannot be undone.')) {
                 for (const f of files) {
                     await deleteStoredFile(f.id);
                 }
                 files.length = 0;
                 Object.keys(filesBySet).forEach(k => delete filesBySet[k]);
                 document.getElementById('stored-files-list').innerHTML = renderFileList();
-                modal.querySelector('.plexd-modal-subtitle').textContent = '0 files stored, 0 B total';
+                const serverSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+                modal.querySelector('.plexd-modal-subtitle').textContent =
+                    `Browser: 0 files, 0 B | Server: ${serverFiles.length} file${serverFiles.length !== 1 ? 's' : ''}, ${formatBytes(serverSize)}`;
                 document.getElementById('manage-files-clear-all').disabled = true;
+            }
+        });
+
+        document.getElementById('manage-files-purge-server').addEventListener('click', async () => {
+            if (confirm('Purge all server-uploaded files? This will disable remote video playback until files are re-uploaded.')) {
+                const deleted = await purgeServerFiles();
+                serverFiles.length = 0;
+                Object.keys(serverFilesBySet).forEach(k => delete serverFilesBySet[k]);
+                document.getElementById('server-files-list').innerHTML = renderServerFileList();
+                const browserSize = files.reduce((sum, f) => sum + f.size, 0);
+                modal.querySelector('.plexd-modal-subtitle').textContent =
+                    `Browser: ${files.length} file${files.length !== 1 ? 's' : ''}, ${formatBytes(browserSize)} | Server: 0 files, 0 B`;
+                document.getElementById('manage-files-purge-server').disabled = true;
+                showMessage(`Purged ${deleted} file${deleted !== 1 ? 's' : ''} from server`, 'info');
             }
         });
 
@@ -5745,6 +5916,8 @@ const PlexdRemote = (function() {
         const streams = PlexdStream.getAllStreams().map(s => ({
             id: s.id,
             url: s.url,
+            // Include server URL for remote playback (local files use blob: URLs which don't work remotely)
+            serverUrl: s.serverUrl || null,
             state: s.state,
             paused: s.video ? s.video.paused : true,
             muted: s.video ? s.video.muted : true,

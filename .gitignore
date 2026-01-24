@@ -1,0 +1,8 @@
+# Uploaded video files for remote playback
+uploads/
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/

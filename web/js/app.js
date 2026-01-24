@@ -258,12 +258,24 @@ const PlexdApp = (function() {
 
     /**
      * Upload a file to the server for cross-device playback
-     * @param {File} fileObj - The file to upload
+     * Checks if file already exists (by name and size) before uploading
+     * @param {File|Blob} fileObj - The file to upload
      * @param {string} fileName - Original filename
      * @returns {Promise<{fileId: string, url: string}|null>}
      */
     async function uploadFileToServer(fileObj, fileName) {
         try {
+            // Check if file already exists on server
+            const existingFiles = await getServerFileList();
+            const fileSize = fileObj.size;
+            const existing = existingFiles.find(f => f.fileName === fileName && f.size === fileSize);
+
+            if (existing) {
+                console.log(`[Plexd] File already on server: ${fileName} -> ${existing.url}`);
+                return { fileId: existing.fileId, url: existing.url };
+            }
+
+            // Upload new file
             const response = await fetch('/api/files/upload', {
                 method: 'POST',
                 headers: {

@@ -771,6 +771,9 @@ const PlexdRemote = (function() {
         // Swipe gestures on hero
         setupHeroGestures();
 
+        // Swipe gestures on thumbnail grid
+        setupThumbsGestures();
+
         // Progress bar interactions
         setupProgressBar();
 
@@ -1008,6 +1011,55 @@ const PlexdRemote = (function() {
         el.heroPreview.addEventListener('touchcancel', () => {
             isSwiping = false;
             el.heroPreview.classList.remove('swiping-left', 'swiping-right', 'swiping-up');
+        }, { passive: true });
+    }
+
+    function setupThumbsGestures() {
+        if (!el.thumbsSection) return;
+
+        let startX = 0;
+        let startY = 0;
+        let isSwiping = false;
+
+        el.thumbsSection.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isSwiping = true;
+        }, { passive: true });
+
+        el.thumbsSection.addEventListener('touchend', (e) => {
+            if (!isSwiping) return;
+            isSwiping = false;
+
+            const endX = e.changedTouches[0].clientX;
+            const endY = e.changedTouches[0].clientY;
+            const deltaX = endX - startX;
+            const deltaY = endY - startY;
+            const absX = Math.abs(deltaX);
+            const absY = Math.abs(deltaY);
+
+            // Need significant movement for swipe
+            if (absX < SWIPE_THRESHOLD && absY < SWIPE_THRESHOLD) return;
+
+            if (absY > absX) {
+                // Vertical swipe = navigate streams (up=prev, down=next)
+                if (deltaY < -SWIPE_THRESHOLD) {
+                    navigateStream('prev');
+                } else if (deltaY > SWIPE_THRESHOLD) {
+                    navigateStream('next');
+                }
+            } else {
+                // Horizontal swipe = navigate streams
+                if (deltaX > SWIPE_THRESHOLD) {
+                    navigateStream('next');
+                } else if (deltaX < -SWIPE_THRESHOLD) {
+                    navigateStream('prev');
+                }
+            }
+        }, { passive: true });
+
+        el.thumbsSection.addEventListener('touchcancel', () => {
+            isSwiping = false;
         }, { passive: true });
     }
 

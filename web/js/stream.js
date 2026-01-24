@@ -1926,9 +1926,13 @@ const PlexdStream = (function() {
             wrapper.focus();
         });
 
-        // Double-click to random seek
+        // Double-click to toggle focus mode
         wrapper.addEventListener('dblclick', () => {
-            seekToRandomPosition(stream.id);
+            if (fullscreenMode === 'browser-fill' && fullscreenStreamId === stream.id) {
+                toggleFullscreen(stream.id); // Exit focus
+            } else {
+                enterFocusedMode(stream.id); // Enter focus
+            }
         });
 
         // Keyboard handling on wrapper (for fullscreen mode)

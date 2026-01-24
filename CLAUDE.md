@@ -63,18 +63,57 @@
 Plexd/
 ├── CLAUDE.md           # This file - AI guidelines
 ├── README.md           # Project documentation
+├── server.js           # Node server with remote relay + file storage
+├── uploads/            # Server-side video storage (gitignored)
 ├── web/                # Web application
 │   ├── index.html      # Main entry point
+│   ├── remote.html     # iPhone remote PWA
+│   ├── manifest.json   # PWA manifest
+│   ├── sw.js           # Service worker for offline
 │   ├── css/
-│   │   └── plexd.css   # All styles (single file)
+│   │   ├── plexd.css   # Main app styles
+│   │   └── remote.css  # Remote styles
 │   ├── js/
 │   │   ├── grid.js     # Smart grid layout algorithm
 │   │   ├── stream.js   # Stream management
-│   │   └── app.js      # Main application logic
-│   └── assets/         # Static assets if needed
+│   │   ├── app.js      # Main application logic
+│   │   └── remote.js   # Remote control logic
+│   └── assets/         # Icons, images
 ├── ios/                # iOS application (future)
 └── docs/               # Additional documentation
 ```
+
+## iPhone Remote (PWA)
+
+The remote (`/remote.html`) is a Progressive Web App for controlling and viewing Plexd from iPhone.
+
+### Architecture
+- **PWA**: manifest.json + service worker for "Add to Home Screen"
+- **Server relay**: Commands/state sent via `/api/remote/*` endpoints
+- **Video sync**: Phone video syncs position/play state with Mac (within 2s tolerance)
+- **Server file storage**: Local files auto-upload to server for cross-device playback
+
+### Hero Tap Zones
+```
++------------------+
+|   TOP: Random    |
++------+----+------+
+| LEFT |PLAY| RIGHT|
+| -30s |    | +30s |
++------+----+------+
+| BTM: Focus Toggle|
++------------------+
+```
+
+### Gestures
+- **Swipe up/down/left/right**: Spatial navigation in grid
+- **Double-tap thumbnail**: Random seek that stream
+- **Long-press random button**: Opens action sheet (Pause All, Mute All, etc.)
+
+### Server File Storage
+- Files upload to `uploads/` when dropped (checked by name+size to avoid duplicates)
+- Files tied to saved sets persist; unsaved auto-delete after 24h
+- Purge via "Files" button in Sets panel or `/api/files/purge`
 
 ## Prohibited Practices
 

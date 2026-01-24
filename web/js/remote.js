@@ -955,10 +955,16 @@ const PlexdRemote = (function() {
             if (absX < 10 && absY < 10) {
                 const now = Date.now();
                 if (now - lastTapTime < 300) {
-                    // Double tap = enter viewer mode
+                    // Double tap = toggle focus on Mac
                     clearTimeout(tapTimeout);
                     haptic.heavy();
-                    enterViewer();
+                    if (selectedStreamId) {
+                        if (state?.fullscreenStreamId === selectedStreamId) {
+                            send('exitFullscreen');
+                        } else {
+                            send('enterFullscreen', { streamId: selectedStreamId });
+                        }
+                    }
                 } else {
                     // Single tap = toggle play/pause (delayed to detect double tap)
                     tapTimeout = setTimeout(() => {

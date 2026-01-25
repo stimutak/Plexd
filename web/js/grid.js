@@ -1122,68 +1122,6 @@ const PlexdGrid = (function() {
     }
 
     // =========================================================================
-    // Helper Functions for Video Content Region Detection
-    // =========================================================================
-
-    /**
-     * Get the actual video content region within a cell (excluding letterbox)
-     * Used for overlap detection in Content Visible mode
-     *
-     * @param {number} x - Cell x position
-     * @param {number} y - Cell y position
-     * @param {number} width - Cell width
-     * @param {number} height - Cell height
-     * @param {number} aspectRatio - Video aspect ratio
-     * @returns {Object} Content region {x, y, width, height}
-     */
-    function getVideoContentRegion(x, y, width, height, aspectRatio) {
-        const cellAR = width / height;
-
-        if (aspectRatio > cellAR) {
-            // Video is wider - has top/bottom letterbox
-            const contentHeight = width / aspectRatio;
-            const letterboxHeight = (height - contentHeight) / 2;
-            return {
-                x: x,
-                y: y + letterboxHeight,
-                width: width,
-                height: contentHeight
-            };
-        } else {
-            // Video is taller - has left/right letterbox
-            const contentWidth = height * aspectRatio;
-            const letterboxWidth = (width - contentWidth) / 2;
-            return {
-                x: x + letterboxWidth,
-                y: y,
-                width: contentWidth,
-                height: height
-            };
-        }
-    }
-
-    /**
-     * Calculate the overlap region between two rectangles
-     *
-     * @param {Object} r1 - First region {x, y, width, height}
-     * @param {Object} r2 - Second region {x, y, width, height}
-     * @returns {Object} Overlap region {x, y, width, height}
-     */
-    function getRegionOverlap(r1, r2) {
-        const overlapX = Math.max(r1.x, r2.x);
-        const overlapY = Math.max(r1.y, r2.y);
-        const overlapRight = Math.min(r1.x + r1.width, r2.x + r2.width);
-        const overlapBottom = Math.min(r1.y + r1.height, r2.y + r2.height);
-
-        return {
-            x: overlapX,
-            y: overlapY,
-            width: Math.max(0, overlapRight - overlapX),
-            height: Math.max(0, overlapBottom - overlapY)
-        };
-    }
-
-    // =========================================================================
     // Tetris Layout - Intelligent bin-packing to eliminate black bars
     // =========================================================================
 

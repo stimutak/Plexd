@@ -2153,6 +2153,10 @@ const PlexdStream = (function() {
 
         // Clean up video
         stream.video.pause();
+        // Revoke blob URL if this was a local file to prevent memory leak
+        if (stream.video.src && stream.video.src.startsWith('blob:')) {
+            URL.revokeObjectURL(stream.video.src);
+        }
         stream.video.src = '';
         stream.video.load();
 

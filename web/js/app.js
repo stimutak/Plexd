@@ -637,7 +637,13 @@ const PlexdApp = (function() {
      */
     function loadStreamsFromUrl() {
         // Load existing streams from localStorage first
-        const savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
+        let savedStreams;
+        try {
+            savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
+        } catch (e) {
+            console.warn('[Plexd] Failed to parse saved streams, starting fresh:', e);
+            savedStreams = [];
+        }
         console.log('[Plexd] Saved streams:', savedStreams.length);
 
         // Load saved streams (deduped by normalized equality key)
@@ -1489,7 +1495,7 @@ const PlexdApp = (function() {
                     s.video.pause();
                 }
                 // Add grey overlay to background stream
-                if (s.element) {
+                if (s.wrapper) {
                     const overlay = document.createElement('div');
                     overlay.className = 'plexd-mosaic-dimmer';
                     overlay.style.cssText = `
@@ -1499,7 +1505,7 @@ const PlexdApp = (function() {
                         z-index: 40;
                         pointer-events: none;
                     `;
-                    s.element.appendChild(overlay);
+                    s.wrapper.appendChild(overlay);
                 }
             }
         });
@@ -1650,8 +1656,8 @@ const PlexdApp = (function() {
         // Remove grey overlays from all streams
         const allStreams = PlexdStream.getAllStreams();
         allStreams.forEach(s => {
-            if (s.element) {
-                const dimmer = s.element.querySelector('.plexd-mosaic-dimmer');
+            if (s.wrapper) {
+                const dimmer = s.wrapper.querySelector('.plexd-mosaic-dimmer');
                 if (dimmer) dimmer.remove();
             }
         });

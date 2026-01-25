@@ -6,3 +6,7 @@ uploads/
 
 # Node
 node_modules/
+package-lock.json
+
+# Autostart script temp files
+/tmp/plexd-*.log

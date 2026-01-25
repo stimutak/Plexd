@@ -1,0 +1,17 @@
+{
+  "name": "plexd",
+  "version": "1.0.0",
+  "description": "Multiplex video stream display system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "autostart": "./scripts/autostart.sh",
+    "test-chrome": "node scripts/chrome-test.js"
+  },
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

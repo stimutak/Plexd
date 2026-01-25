@@ -476,7 +476,70 @@ const PlexdApp = (function() {
         // Set up focus handling
         setupFocusHandling();
 
+        // Check for autoload parameter (used by autostart script)
+        handleAutoload();
+
         console.log('Plexd initialized');
+    }
+
+    /**
+     * Handle autoload URL parameter for automated startup
+     * Supports: ?autoload=last (load last set in list) or ?autoload=<setname>
+     */
+    function handleAutoload() {
+        const params = new URLSearchParams(window.location.search);
+        const autoload = params.get('autoload');
+
+        if (!autoload) return;
+
+        const combinations = getSavedCombinations();
+        const names = Object.keys(combinations);
+
+        if (names.length === 0) {
+            console.log('[Plexd] Autoload: No saved sets available');
+            window.plexdAutoloadResult = { success: false, error: 'No saved sets' };
+            return;
+        }
+
+        let targetName;
+        if (autoload === 'last') {
+            // Load the last set in the list (last added)
+            targetName = names[names.length - 1];
+            console.log(`[Plexd] Autoload: Loading last set "${targetName}"`);
+        } else {
+            // Load by name
+            targetName = autoload;
+            if (!combinations[targetName]) {
+                console.error(`[Plexd] Autoload: Set "${targetName}" not found`);
+                window.plexdAutoloadResult = { success: false, error: `Set not found: ${targetName}` };
+                return;
+            }
+            console.log(`[Plexd] Autoload: Loading set "${targetName}"`);
+        }
+
+        // Mark autoload in progress for external monitoring
+        window.plexdAutoloadResult = { success: false, loading: true, setName: targetName };
+
+        // Delay load slightly to ensure everything is initialized
+        setTimeout(async () => {
+            try {
+                await loadStreamCombination(targetName);
+                window.plexdAutoloadResult = {
+                    success: true,
+                    setName: targetName,
+                    streamCount: PlexdStream.getAllStreams().length,
+                    timestamp: Date.now()
+                };
+                console.log(`[Plexd] Autoload: Successfully loaded "${targetName}"`);
+            } catch (err) {
+                window.plexdAutoloadResult = {
+                    success: false,
+                    error: err.message,
+                    setName: targetName
+                };
+                console.error('[Plexd] Autoload failed:', err);
+            }
+        }, 500);
     }
 
     /**

@@ -162,10 +162,10 @@ launch_chrome() {
     log "Launching Chrome with remote debugging on port $DEBUG_PORT..."
 
     local url="http://localhost:$PORT/?autoload=last"
-    local user_data_dir="/tmp/plexd-chrome-profile"
 
-    # Create a clean profile directory
-    rm -rf "$user_data_dir"
+    # Use persistent profile in project directory (Chrome requires separate profile for debugging)
+    # Saved sets will persist between runs in this profile
+    local user_data_dir="$SCRIPT_DIR/../.chrome-profile"
     mkdir -p "$user_data_dir"
 
     # Launch Chrome

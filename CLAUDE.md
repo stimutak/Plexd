@@ -63,11 +63,16 @@
 Plexd/
 ├── CLAUDE.md           # This file - AI guidelines
 ├── README.md           # Project documentation
-├── server.js           # Node server with remote relay + file storage
+├── server.js           # Node server with remote relay + file storage + HLS transcoding
 ├── uploads/            # Server-side video storage (gitignored)
+│   ├── hls/            # HLS transcoded segments
+│   └── metadata.json   # File metadata
+├── scripts/
+│   └── autostart.sh    # MBP autostart with Chrome debugging
 ├── web/                # Web application
 │   ├── index.html      # Main entry point
 │   ├── remote.html     # iPhone remote PWA
+│   ├── hls-manager.html # HLS transcode management UI
 │   ├── manifest.json   # PWA manifest
 │   ├── sw.js           # Service worker for offline
 │   ├── css/
@@ -154,6 +159,14 @@ All zones are single-tap. No double-tap required.
 - Files upload to `uploads/` when dropped (checked by name+size to avoid duplicates)
 - Files tied to saved sets persist; unsaved auto-delete after 24h
 - Purge via "Files" button in Sets panel or `/api/files/purge`
+
+### HLS Transcoding
+- Videos auto-transcode to HLS in background after upload
+- Uses h264_videotoolbox (Apple Silicon hardware) with libx264 fallback
+- Queue system limits to 4 concurrent transcodes (configurable: `MAX_CONCURRENT_TRANSCODES`)
+- Original files preserved - delete manually via HLS Manager (`/hls-manager.html`)
+- Client polls `/api/files/transcode-status` and swaps to HLS URL when ready
+- Disk space checked before transcoding (min 500MB required)
 
 ## Prohibited Practices
 
@@ -325,3 +338,30 @@ For panels with selectable items:
 3. Handle Enter to activate selection
 4. Reset index when panel opens/closes
 5. Call navigation handler early in main `handleKeyboard()`
+
+### HLS Transcoding System
+
+**Architecture:**
+- Queue-based system prevents CPU overload (`transcodeQueue`, `activeTranscodes`)
+- `MAX_CONCURRENT_TRANSCODES = 4` for M4 Max (adjust per machine)
+- Jobs tracked in `transcodingJobs` object with status/progress
+
+**Encoder Fallback:**
+```javascript
+// Hardware first, software fallback
+runTranscode(fileId, useSoftwareEncoder = false)
+// If h264_videotoolbox fails, auto-retries with libx264
+```
+
+**Key APIs:**
+- `POST /api/files/upload` - Upload, returns fileId, starts transcode
+- `GET /api/files/transcode-status?fileId=X` - Poll for progress
+- `GET /api/hls/list` - List all files with transcode status
+- `DELETE /api/hls/delete/:id` - Delete HLS only (keep original)
+- `DELETE /api/hls/delete-original/:id` - Delete original only (keep HLS)
+
+**Helper Function:**
+```javascript
+deleteFileAndHLS(fileId, { deleteOriginal, deleteHLS, cancelTranscode })
+```
+Use this instead of inline deletion code (DRY pattern).

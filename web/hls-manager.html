@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plexd HLS Manager</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        h1 { margin-bottom: 10px; color: #fff; }
+        .stats {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .stat {
+            background: #1a1a1a;
+            padding: 12px 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .stat-value { font-size: 24px; font-weight: 600; color: #4ade80; }
+        .stat-label { font-size: 12px; color: #888; }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background: #333;
+            color: #fff;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #444; }
+        button.danger { background: #7f1d1d; }
+        button.danger:hover { background: #991b1b; }
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .file-card {
+            background: #1a1a1a;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #333;
+        }
+        .file-card.transcoding { border-color: #f59e0b; }
+        .file-card.complete { border-color: #4ade80; }
+        .file-card.queued { border-color: #6b7280; }
+        .file-card.failed { border-color: #ef4444; }
+        .file-preview {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+            position: relative;
+        }
+        .file-preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .file-preview .status-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-badge.complete { background: #166534; color: #4ade80; }
+        .status-badge.transcoding { background: #78350f; color: #fbbf24; }
+        .status-badge.queued { background: #374151; color: #9ca3af; }
+        .status-badge.failed { background: #7f1d1d; color: #fca5a5; }
+        .progress-bar {
+            height: 3px;
+            background: #333;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #f59e0b;
+            transition: width 0.3s;
+        }
+        .file-info {
+            padding: 12px;
+        }
+        .file-name {
+            font-weight: 500;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .file-meta {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 8px;
+        }
+        .file-meta div {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+        .file-paths {
+            font-size: 10px;
+            color: #555;
+            margin-bottom: 10px;
+            word-break: break-all;
+        }
+        .file-paths div {
+            margin-bottom: 2px;
+        }
+        .file-paths span {
+            color: #888;
+        }
+        .file-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .file-actions button {
+            flex: 1;
+            padding: 8px;
+            font-size: 12px;
+        }
+        .no-files {
+            text-align: center;
+            padding: 60px;
+            color: #666;
+        }
+        .refresh-note {
+            font-size: 12px;
+            color: #666;
+            margin-left: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>HLS Transcode Manager</h1>
+
+    <div class="stats" id="stats">
+        <div class="stat">
+            <div class="stat-value" id="stat-complete">-</div>
+            <div class="stat-label">Complete</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="stat-transcoding">-</div>
+            <div class="stat-label">Transcoding</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="stat-queued">-</div>
+            <div class="stat-label">Queued</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value" id="stat-size">-</div>
+            <div class="stat-label">Total Size</div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button onclick="refresh()">Refresh</button>
+        <button class="danger" onclick="deleteAllComplete()">Delete All Complete</button>
+        <span class="refresh-note">Auto-refreshes every 5s during transcoding</span>
+    </div>
+
+    <div class="file-grid" id="file-grid">
+        <div class="no-files">Loading...</div>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+
+        async function fetchFiles() {
+            const res = await fetch('/api/hls/list');
+            return await res.json();
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+            return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        async function deleteHLS(fileId, fileName) {
+            if (!confirm(`Delete HLS transcode for "${fileName}"?\n\nOriginal file will be kept.`)) return;
+            await fetch(`/api/hls/delete/${fileId}`, { method: 'DELETE' });
+            refresh();
+        }
+
+        async function deleteOriginal(fileId, fileName) {
+            if (!confirm(`Delete ORIGINAL file for "${fileName}"?\n\nHLS transcode will be kept.`)) return;
+            await fetch(`/api/hls/delete-original/${fileId}`, { method: 'DELETE' });
+            refresh();
+        }
+
+        async function deleteBoth(fileId, fileName) {
+            if (!confirm(`Delete BOTH original and HLS for "${fileName}"?\n\nThis cannot be undone.`)) return;
+            await fetch(`/api/hls/delete/${fileId}`, { method: 'DELETE' });
+            await fetch(`/api/files/${fileId}`, { method: 'DELETE' });
+            refresh();
+        }
+
+        async function deleteAllComplete() {
+            if (!confirm('Delete all completed HLS transcodes?')) return;
+            const data = await fetchFiles();
+            const complete = data.files.filter(f => f.hlsReady);
+            for (const f of complete) {
+                await fetch(`/api/hls/delete/${f.fileId}`, { method: 'DELETE' });
+            }
+            refresh();
+        }
+
+        async function refresh() {
+            const data = await fetchFiles();
+
+            // Update stats
+            const complete = data.files.filter(f => f.hlsReady).length;
+            const transcoding = data.activeTranscodes;
+            const queued = data.queueLength;
+
+            document.getElementById('stat-complete').textContent = complete;
+            document.getElementById('stat-transcoding').textContent = transcoding;
+            document.getElementById('stat-queued').textContent = queued;
+            document.getElementById('stat-size').textContent = formatSize(data.totalSize);
+
+            // Auto-refresh during transcoding
+            if (transcoding > 0 && !autoRefreshInterval) {
+                autoRefreshInterval = setInterval(refresh, 5000);
+            } else if (transcoding === 0 && autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+
+            // Render files
+            const grid = document.getElementById('file-grid');
+
+            if (data.files.length === 0) {
+                grid.innerHTML = '<div class="no-files">No video files found</div>';
+                return;
+            }
+
+            // Sort: transcoding first, then complete, then queued
+            const sorted = data.files.sort((a, b) => {
+                const order = { transcoding: 0, complete: 1, queued: 2, pending: 3, failed: 4 };
+                return (order[a.status] || 5) - (order[b.status] || 5);
+            });
+
+            grid.innerHTML = sorted.map(f => {
+                const safeName = escapeHtml(f.fileName);
+                const safePath = escapeHtml(f.originalPath);
+                const safeHlsPath = escapeHtml(f.hlsPath);
+                // For onclick, use data attributes instead of inline strings
+                return `
+                <div class="file-card ${f.status}" data-file-id="${f.fileId}" data-file-name="${safeName}">
+                    <div class="file-preview">
+                        ${f.hlsReady ? `
+                            <video src="${f.hlsUrl}" controls preload="metadata"></video>
+                        ` : `
+                            <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;">
+                                ${f.status === 'transcoding' ? `${f.progress}%` : f.status}
+                            </div>
+                        `}
+                        <span class="status-badge ${f.status}">${f.status}</span>
+                    </div>
+                    ${f.status === 'transcoding' ? `
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width:${f.progress}%"></div>
+                        </div>
+                    ` : ''}
+                    <div class="file-info">
+                        <div class="file-name" title="${safeName}">${safeName}</div>
+                        <div class="file-meta">
+                            <div><span>Original:</span> <span>${formatSize(f.originalSize)} ${f.hasOriginal ? '(exists)' : '(deleted)'}</span></div>
+                            <div><span>HLS:</span> <span>${formatSize(f.hlsSize)}</span></div>
+                        </div>
+                        <div class="file-paths">
+                            <div><span>Original:</span> ${safePath}</div>
+                            <div><span>HLS:</span> ${safeHlsPath}/</div>
+                        </div>
+                        <div class="file-actions">
+                            ${f.hlsReady ? `
+                                ${f.hasOriginal ? `<button class="btn-del-orig">Del Orig</button>` : ''}
+                                <button class="btn-del-hls">Del HLS</button>
+                                ${f.hasOriginal ? `<button class="danger btn-del-both">Del Both</button>` : ''}
+                            ` : f.status === 'queued' || f.status === 'pending' ? `
+                                <button disabled>Waiting...</button>
+                            ` : f.status === 'transcoding' ? `
+                                <button disabled>${f.progress}% complete</button>
+                            ` : `
+                                <button class="danger btn-del-both">Remove</button>
+                            `}
+                        </div>
+                    </div>
+                </div>
+            `}).join('');
+
+            // Attach event handlers using delegation
+            grid.querySelectorAll('.btn-del-orig').forEach(btn => {
+                btn.onclick = () => {
+                    const card = btn.closest('.file-card');
+                    deleteOriginal(card.dataset.fileId, card.dataset.fileName);
+                };
+            });
+            grid.querySelectorAll('.btn-del-hls').forEach(btn => {
+                btn.onclick = () => {
+                    const card = btn.closest('.file-card');
+                    deleteHLS(card.dataset.fileId, card.dataset.fileName);
+                };
+            });
+            grid.querySelectorAll('.btn-del-both').forEach(btn => {
+                btn.onclick = () => {
+                    const card = btn.closest('.file-card');
+                    deleteBoth(card.dataset.fileId, card.dataset.fileName);
+                };
+            });
+        }
+
+        refresh();
+    </script>
+</body>
+</html>

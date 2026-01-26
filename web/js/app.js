@@ -256,23 +256,80 @@ const PlexdApp = (function() {
     // Server File Upload for Remote Playback
     // ========================================
 
+    // Track active transcoding polls: { fileId: { stream, intervalId } }
+    const transcodingPolls = {};
+    const TRANSCODE_POLL_INTERVAL_MS = 5000; // Poll server for transcode status
+    const COMMAND_FRESHNESS_MS = 5000; // Max age for remote commands
+
+    /**
+     * Poll for HLS transcoding completion and update stream URL when ready
+     * @param {string} fileId - Server file ID
+     * @param {object} stream - Stream object to update
+     * @param {string} fileName - File name for logging
+     */
+    function pollTranscodeStatus(fileId, stream, fileName) {
+        if (transcodingPolls[fileId]) return; // Already polling
+
+        const intervalId = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/files/transcode-status?fileId=${fileId}`);
+                if (!res.ok) return;
+
+                const status = await res.json();
+
+                if (status.status === 'complete' && status.hlsUrl) {
+                    // Transcoding done - update stream URL to HLS
+                    stream.serverUrl = status.hlsUrl;
+                    console.log(`[Plexd] HLS ready for ${fileName}: ${status.hlsUrl}`);
+                    showMessage(`HLS ready: ${fileName}`, 'success');
+
+                    // Stop polling
+                    clearInterval(intervalId);
+                    delete transcodingPolls[fileId];
+                } else if (status.status === 'failed') {
+                    console.error(`[Plexd] HLS transcode failed: ${fileName}`);
+                    clearInterval(intervalId);
+                    delete transcodingPolls[fileId];
+                } else if (status.progress > 0) {
+                    console.log(`[Plexd] Transcoding ${fileName}: ${status.progress}%`);
+                }
+            } catch (err) {
+                // Silently retry
+            }
+        }, TRANSCODE_POLL_INTERVAL_MS);
+
+        transcodingPolls[fileId] = { stream, intervalId };
+    }
+
     /**
      * Upload a file to the server for cross-device playback
      * Checks if file already exists (by name and size) before uploading
+     * Server returns HLS URL if already transcoded, or starts transcoding in background
      * @param {File|Blob} fileObj - The file to upload
      * @param {string} fileName - Original filename
-     * @returns {Promise<{fileId: string, url: string}|null>}
+     * @returns {Promise<{fileId: string, url: string, transcoding?: boolean}|null>}
      */
     async function uploadFileToServer(fileObj, fileName) {
         try {
-            // Check if file already exists on server
+            // Check if file already exists on server (may have HLS version)
             const existingFiles = await getServerFileList();
             const fileSize = fileObj.size;
-            const existing = existingFiles.find(f => f.fileName === fileName && f.size === fileSize);
+            const existing = existingFiles.find(f =>
+                (f.fileName === fileName || f.originalFileName === fileName) &&
+                (f.size === fileSize || f.originalSize === fileSize)
+            );
 
             if (existing) {
-                console.log(`[Plexd] File already on server: ${fileName} -> ${existing.url}`);
-                return { fileId: existing.fileId, url: existing.url };
+                // Prefer HLS URL if available
+                const url = existing.hlsReady ? existing.hlsUrl : existing.url;
+                const status = existing.hlsReady ? ' (HLS)' : (existing.transcoding ? ' (transcoding)' : '');
+                console.log(`[Plexd] File already on server: ${fileName} -> ${url}${status}`);
+                return {
+                    fileId: existing.fileId,
+                    url,
+                    hlsReady: existing.hlsReady || false,
+                    transcoding: existing.transcoding || false
+                };
             }
 
             // Upload new file
@@ -291,8 +348,19 @@ const PlexdApp = (function() {
             }
 
             const result = await response.json();
-            console.log(`[Plexd] Uploaded ${fileName} -> ${result.url}`);
-            return { fileId: result.fileId, url: result.url };
+
+            // Server may return existing HLS if it matched by name+size
+            if (result.existing && result.hlsReady) {
+                console.log(`[Plexd] Server has HLS: ${fileName} -> ${result.hlsUrl}`);
+                return { fileId: result.fileId, url: result.hlsUrl, hlsReady: true };
+            }
+
+            console.log(`[Plexd] Uploaded ${fileName} -> ${result.url}${result.transcoding ? ' (transcoding)' : ''}`);
+            return {
+                fileId: result.fileId,
+                url: result.url,
+                transcoding: result.transcoding || false
+            };
         } catch (err) {
             console.error('[Plexd] File upload error:', err);
             return null;
@@ -749,6 +817,11 @@ const PlexdApp = (function() {
                     stream.serverUrl = result.url;
                     stream.serverFileId = result.fileId;
                     console.log(`[Plexd] Server URL ready for ${fileName}: ${result.url}`);
+
+                    // If transcoding started, poll for HLS completion
+                    if (result.transcoding && !result.hlsReady) {
+                        pollTranscodeStatus(result.fileId, stream, fileName);
+                    }
                 }
             });
         }
@@ -5771,7 +5844,7 @@ const PlexdRemote = (function() {
             if (cmdData) {
                 try {
                     const cmd = JSON.parse(cmdData);
-                    if (Date.now() - cmd.timestamp < 5000) {
+                    if (Date.now() - cmd.timestamp < COMMAND_FRESHNESS_MS) {
                         localStorage.removeItem(COMMAND_KEY);
                         handleRemoteCommand(cmd.action, cmd.payload);
                     } else {

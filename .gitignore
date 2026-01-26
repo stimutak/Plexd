@@ -11,3 +11,4 @@ package-lock.json
 # Autostart script temp files
 /tmp/plexd-*.log
 .chrome-profile/
+.DS_Store

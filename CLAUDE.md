@@ -88,9 +88,10 @@ Plexd/
 The remote (`/remote.html`) is a Progressive Web App for controlling and viewing Plexd from iPhone.
 
 ### Design Principles
-1. **Always-visible rating** - No mode switching required
-2. **Progressive disclosure** - Advanced features in "More" sheet
-3. **Fast triage workflow** - Tap zones for quick random/seek/play
+1. **Hero always visible** - Remote controls the Mac, doesn't replace it
+2. **Always-visible rating** - No mode switching required
+3. **Fast triage workflow** - Single-tap zones for quick random/seek/play
+4. **Progressive disclosure** - Advanced features in "More" sheet
 
 ### Architecture
 - **PWA**: manifest.json + service worker for "Add to Home Screen"
@@ -103,7 +104,7 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 ┌─────────────────────────────────────┐
 │  [Audio]     Plexd     [●]          │  Header
 ├─────────────────────────────────────┤
-│         Video Preview               │  Hero (tap=viewer, swipe=navigate)
+│         Video Preview               │  Hero (tap zones, swipe=navigate)
 │           ← 3 / 12 →                │  Position indicator
 ├─────────────────────────────────────┤
 │  Title                    1:23/4:56 │  Info
@@ -119,19 +120,18 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 └─────────────────────────────────────┘
 ```
 
-### Hero/Viewer Tap Zones
+### Hero Tap Zones (Single Tap)
 ```
 +------------------+
-|   TOP: Random    |
+|   TOP: Random    |  ← top third
 +------+----+------+
-| LEFT |PLAY| RIGHT|
+| LEFT |PLAY| RIGHT|  ← middle third (left/center/right)
 | -30s |    | +30s |
 +------+----+------+
-| BTM: Focus Toggle|
+| BTM: Focus Toggle|  ← bottom third
 +------------------+
 ```
-- **Double-tap hero**: Enter fullscreen viewer
-- **Double-tap viewer**: Exit viewer
+All zones are single-tap. No double-tap required.
 
 ### Gestures
 - **Swipe left/right**: Navigate to next/previous stream

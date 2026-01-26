@@ -759,7 +759,6 @@ const PlexdRemote = (function() {
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
-        let lastTapTime = 0;
 
         el.heroPreview.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
@@ -794,55 +793,52 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Tap detection - zone-based actions for fast triage
+            // Tap detection - zone-based actions (single tap, no double-tap)
             if (absX < 15 && absY < 15) {
-                const now = Date.now();
-
-                // Double-tap = enter fullscreen viewer
-                if (now - lastTapTime < 300) {
-                    enterViewer();
-                    lastTapTime = 0;
-                    return;
-                }
-                lastTapTime = now;
-
                 if (!selectedStreamId) return;
 
-                // Calculate tap zone
+                // Calculate tap zone using thirds
                 const rect = el.heroPreview.getBoundingClientRect();
                 const relX = (startX - rect.left) / rect.width;
                 const relY = (startY - rect.top) / rect.height;
 
-                // Zone actions:
-                // Top third = random seek (most used during triage)
-                // Left edge = back 30s
-                // Right edge = forward 30s
-                // Center = play/pause
-                // Bottom third = focus toggle
+                // Zone layout:
+                // +------------------+
+                // |   TOP: Random    |  (top third)
+                // +------+----+------+
+                // | LEFT |PLAY| RIGHT|  (middle third)
+                // | -30s |    | +30s |
+                // +------+----+------+
+                // | BTM: Focus       |  (bottom third)
+                // +------------------+
+
                 if (relY < 0.33) {
-                    // Top = random seek
+                    // Top third = random seek
                     send('randomSeek', { streamId: selectedStreamId });
                     haptic.medium();
                 } else if (relY > 0.67) {
-                    // Bottom = toggle focus/fullscreen on Mac
+                    // Bottom third = toggle focus/fullscreen on Mac
                     if (state?.fullscreenStreamId === selectedStreamId) {
                         send('exitFullscreen');
                     } else {
                         send('enterFullscreen', { streamId: selectedStreamId });
                     }
                     haptic.heavy();
-                } else if (relX < 0.25) {
-                    // Left edge = back 30s
-                    send('seekRelative', { streamId: selectedStreamId, offset: -30 });
-                    haptic.light();
-                } else if (relX > 0.75) {
-                    // Right edge = forward 30s
-                    send('seekRelative', { streamId: selectedStreamId, offset: 30 });
-                    haptic.light();
                 } else {
-                    // Center = play/pause
-                    send('togglePause', { streamId: selectedStreamId });
-                    haptic.light();
+                    // Middle third - divided into left/center/right
+                    if (relX < 0.33) {
+                        // Left third = back 30s
+                        send('seekRelative', { streamId: selectedStreamId, offset: -30 });
+                        haptic.light();
+                    } else if (relX > 0.67) {
+                        // Right third = forward 30s
+                        send('seekRelative', { streamId: selectedStreamId, offset: 30 });
+                        haptic.light();
+                    } else {
+                        // Center = play/pause
+                        send('togglePause', { streamId: selectedStreamId });
+                        haptic.light();
+                    }
                 }
                 return;
             }

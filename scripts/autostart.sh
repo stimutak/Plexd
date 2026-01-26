@@ -7,14 +7,20 @@
 # 2. Starts the Plexd server
 # 3. Launches Chrome with remote debugging enabled
 # 4. Opens Plexd with the last saved set auto-loaded
-# 5. Runs the test/reporter script to monitor for issues
+# 5. Optionally runs test/reporter (puppeteer or claude observation)
 #
 # Usage: ./autostart.sh [options]
 #   --port PORT       Server port (default: 8080)
 #   --debug-port PORT Chrome debugging port (default: 9222)
-#   --no-test         Skip the test reporter
-#   --report FILE     Write test report to file (default: stdout)
+#   --test-mode MODE  Test mode: puppeteer, claude, or none (default: puppeteer)
+#   --report FILE     Write test report to file (puppeteer mode only)
 #   --last-fix DESC   Description of last fix to test for
+#   --watch           Keep monitoring after initial test (puppeteer mode)
+#
+# Test Modes:
+#   puppeteer - Run automated chrome-test.js script (requires npm install)
+#   claude    - Launch for Claude Code browser observation (no automated test)
+#   none      - Just start server and Chrome, no testing
 #
 
 set -e
@@ -24,9 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PORT="${PLEXD_PORT:-8080}"
 DEBUG_PORT="${PLEXD_DEBUG_PORT:-9222}"
-RUN_TEST=true
+TEST_MODE="puppeteer"
 REPORT_FILE=""
 LAST_FIX=""
+WATCH_MODE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -39,8 +46,12 @@ while [[ $# -gt 0 ]]; do
             DEBUG_PORT="$2"
             shift 2
             ;;
+        --test-mode)
+            TEST_MODE="$2"
+            shift 2
+            ;;
         --no-test)
-            RUN_TEST=false
+            TEST_MODE="none"
             shift
             ;;
         --report)
@@ -51,12 +62,28 @@ while [[ $# -gt 0 ]]; do
             LAST_FIX="$2"
             shift 2
             ;;
+        --watch)
+            WATCH_MODE=true
+            shift
+            ;;
+        -h|--help)
+            head -27 "$0" | tail -25
+            exit 0
+            ;;
         *)
             echo "Unknown option: $1"
+            echo "Use --help for usage"
             exit 1
             ;;
     esac
 done
+
+# Validate test mode
+if [[ ! "$TEST_MODE" =~ ^(puppeteer|claude|none)$ ]]; then
+    echo "Invalid test mode: $TEST_MODE"
+    echo "Valid modes: puppeteer, claude, none"
+    exit 1
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -206,20 +233,53 @@ launch_chrome() {
     success "Chrome launched (PID: $CHROME_PID)"
 }
 
-# Run the test/reporter script
+# Run the test/reporter based on mode
 run_test() {
-    if [ "$RUN_TEST" = false ]; then
-        log "Skipping test (--no-test specified)"
-        return
-    fi
+    case "$TEST_MODE" in
+        none)
+            log "Test mode: none (skipping tests)"
+            ;;
+        claude)
+            run_claude_mode
+            ;;
+        puppeteer)
+            run_puppeteer_test
+            ;;
+    esac
+}
 
-    log "Running Chrome test/reporter..."
+# Claude mode - just provide info for Claude Code observation
+run_claude_mode() {
+    log "Test mode: claude (browser observation)"
+    success ""
+    success "Ready for Claude Code browser observation!"
+    success ""
+    success "Claude can now use browser tools to:"
+    success "  - Check console for errors: look for red messages"
+    success "  - Verify autoload: window.plexdAutoloadResult"
+    success "  - Check streams: PlexdStream.getAllStreams()"
+    success "  - Monitor memory: performance.memory"
+    success ""
+    if [ -n "$LAST_FIX" ]; then
+        success "Last fix to verify: \"$LAST_FIX\""
+        success ""
+    fi
+    success "Useful console commands for Claude to run:"
+    success "  window.plexdAutoloadResult"
+    success "  PlexdStream.getAllStreams().map(s => ({id: s.id, playing: !s.video?.paused, error: s.video?.error}))"
+    success "  console.log([...document.querySelectorAll('.plexd-stream')].length + ' streams loaded')"
+    success ""
+}
+
+# Puppeteer mode - run automated test script
+run_puppeteer_test() {
+    log "Test mode: puppeteer (automated testing)"
 
     cd "$PROJECT_DIR"
 
     # Check if node_modules exists
     if [ ! -d "node_modules" ]; then
-        warn "Installing dependencies..."
+        warn "Installing dependencies (first run)..."
         npm install
     fi
 
@@ -231,8 +291,12 @@ run_test() {
     if [ -n "$LAST_FIX" ]; then
         test_args="$test_args --last-fix=\"$LAST_FIX\""
     fi
+    if [ "$WATCH_MODE" = true ]; then
+        test_args="$test_args --watch"
+    fi
 
     # Run the test script
+    log "Running chrome-test.js..."
     node scripts/chrome-test.js $test_args
 }
 
@@ -256,9 +320,10 @@ main() {
     log "Configuration:"
     log "  Server port:    $PORT"
     log "  Debug port:     $DEBUG_PORT"
-    log "  Run tests:      $RUN_TEST"
+    log "  Test mode:      $TEST_MODE"
     [ -n "$REPORT_FILE" ] && log "  Report file:    $REPORT_FILE"
     [ -n "$LAST_FIX" ] && log "  Last fix:       $LAST_FIX"
+    [ "$WATCH_MODE" = true ] && log "  Watch mode:     enabled"
     log ""
 
     detect_os

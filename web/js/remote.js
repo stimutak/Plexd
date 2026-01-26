@@ -759,6 +759,7 @@ const PlexdRemote = (function() {
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
+        let lastTapTime = 0;
 
         el.heroPreview.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
@@ -793,13 +794,60 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Tap detection - open fullscreen viewer
+            // Tap detection - zone-based actions for fast triage
             if (absX < 15 && absY < 15) {
-                enterViewer();
+                const now = Date.now();
+
+                // Double-tap = enter fullscreen viewer
+                if (now - lastTapTime < 300) {
+                    enterViewer();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+
+                if (!selectedStreamId) return;
+
+                // Calculate tap zone
+                const rect = el.heroPreview.getBoundingClientRect();
+                const relX = (startX - rect.left) / rect.width;
+                const relY = (startY - rect.top) / rect.height;
+
+                // Zone actions:
+                // Top third = random seek (most used during triage)
+                // Left edge = back 30s
+                // Right edge = forward 30s
+                // Center = play/pause
+                // Bottom third = focus toggle
+                if (relY < 0.33) {
+                    // Top = random seek
+                    send('randomSeek', { streamId: selectedStreamId });
+                    haptic.medium();
+                } else if (relY > 0.67) {
+                    // Bottom = toggle focus/fullscreen on Mac
+                    if (state?.fullscreenStreamId === selectedStreamId) {
+                        send('exitFullscreen');
+                    } else {
+                        send('enterFullscreen', { streamId: selectedStreamId });
+                    }
+                    haptic.heavy();
+                } else if (relX < 0.25) {
+                    // Left edge = back 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: -30 });
+                    haptic.light();
+                } else if (relX > 0.75) {
+                    // Right edge = forward 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: 30 });
+                    haptic.light();
+                } else {
+                    // Center = play/pause
+                    send('togglePause', { streamId: selectedStreamId });
+                    haptic.light();
+                }
                 return;
             }
 
-            // Swipe detection - only horizontal swipes for navigation
+            // Swipe detection - horizontal for stream navigation
             if (absX > SWIPE_THRESHOLD && absX > absY) {
                 if (deltaX > 0) {
                     navigateStream('prev');
@@ -864,10 +912,11 @@ const PlexdRemote = (function() {
             haptic.light();
         });
 
-        // Viewer gestures (simplified)
+        // Viewer gestures - zone-based taps + swipes
         let startX = 0;
         let startY = 0;
         let isSwiping = false;
+        let lastTapTime = 0;
 
         el.viewerOverlay.addEventListener('touchstart', (e) => {
             if (e.target.closest('.viewer-btn, .viewer-close, .viewer-progress')) return;
@@ -887,9 +936,77 @@ const PlexdRemote = (function() {
             const absX = Math.abs(deltaX);
             const absY = Math.abs(deltaY);
 
-            // Tap = toggle controls
+            // Tap detection - zone-based actions
             if (absX < 15 && absY < 15) {
-                toggleViewerControls();
+                const now = Date.now();
+
+                // Double-tap = exit viewer
+                if (now - lastTapTime < 300) {
+                    exitViewer();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+
+                if (!selectedStreamId) {
+                    toggleViewerControls();
+                    return;
+                }
+
+                // Calculate video bounds (accounting for letterboxing)
+                const container = el.viewerOverlay.getBoundingClientRect();
+                const video = el.viewerVideo;
+                let videoRect = { left: 0, top: 0, width: container.width, height: container.height };
+
+                if (video && video.videoWidth && video.videoHeight) {
+                    const videoAspect = video.videoWidth / video.videoHeight;
+                    const containerAspect = container.width / container.height;
+
+                    if (videoAspect > containerAspect) {
+                        videoRect.width = container.width;
+                        videoRect.height = container.width / videoAspect;
+                        videoRect.top = (container.height - videoRect.height) / 2;
+                    } else {
+                        videoRect.height = container.height;
+                        videoRect.width = container.height * videoAspect;
+                        videoRect.left = (container.width - videoRect.width) / 2;
+                    }
+                }
+
+                // Check if tap is within video area
+                const inVideoX = startX >= videoRect.left && startX <= videoRect.left + videoRect.width;
+                const inVideoY = startY >= videoRect.top && startY <= videoRect.top + videoRect.height;
+
+                if (!inVideoX || !inVideoY) {
+                    // Outside video = toggle controls
+                    toggleViewerControls();
+                    return;
+                }
+
+                // Zone actions on video area
+                const relX = (startX - videoRect.left) / videoRect.width;
+                const relY = (startY - videoRect.top) / videoRect.height;
+
+                if (relY < 0.25) {
+                    // Top = random seek
+                    send('randomSeek', { streamId: selectedStreamId });
+                    haptic.medium();
+                } else if (relY > 0.75) {
+                    // Bottom = toggle controls
+                    toggleViewerControls();
+                } else if (relX < 0.3) {
+                    // Left = back 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: -30 });
+                    haptic.light();
+                } else if (relX > 0.7) {
+                    // Right = forward 30s
+                    send('seekRelative', { streamId: selectedStreamId, offset: 30 });
+                    haptic.light();
+                } else {
+                    // Center = play/pause
+                    send('togglePause', { streamId: selectedStreamId });
+                    haptic.light();
+                }
                 return;
             }
 

@@ -88,10 +88,9 @@ Plexd/
 The remote (`/remote.html`) is a Progressive Web App for controlling and viewing Plexd from iPhone.
 
 ### Design Principles
-1. **No hidden interactions** - All controls are visible buttons
-2. **One gesture system** - Swipe left/right for navigation only
-3. **Always-visible rating** - No mode switching required
-4. **Progressive disclosure** - Advanced features in "More" sheet
+1. **Always-visible rating** - No mode switching required
+2. **Progressive disclosure** - Advanced features in "More" sheet
+3. **Fast triage workflow** - Tap zones for quick random/seek/play
 
 ### Architecture
 - **PWA**: manifest.json + service worker for "Add to Home Screen"
@@ -120,11 +119,22 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 └─────────────────────────────────────┘
 ```
 
-### Gestures (Simplified)
-- **Hero tap**: Open fullscreen viewer
-- **Hero swipe left/right**: Navigate to next/previous stream
-- **Viewer tap**: Toggle controls visibility
-- **Viewer swipe left/right**: Navigate streams
+### Hero/Viewer Tap Zones
+```
++------------------+
+|   TOP: Random    |
++------+----+------+
+| LEFT |PLAY| RIGHT|
+| -30s |    | +30s |
++------+----+------+
+| BTM: Focus Toggle|
++------------------+
+```
+- **Double-tap hero**: Enter fullscreen viewer
+- **Double-tap viewer**: Exit viewer
+
+### Gestures
+- **Swipe left/right**: Navigate to next/previous stream
 - **Viewer swipe down**: Exit viewer
 
 ### More Sheet Options

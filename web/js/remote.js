@@ -24,6 +24,7 @@ const PlexdRemote = (function() {
     let currentIndex = 0;
     let isDraggingProgress = false;
     let tapHintShown = localStorage.getItem('plexd-tap-hint-shown') === 'true';
+    let currentFilter = 'all'; // 'all', '0', '1'-'9'
 
     // Video player state
     let heroHls = null;
@@ -101,6 +102,9 @@ const PlexdRemote = (function() {
 
         // Rating
         el.ratingStrip = $('rating-strip');
+
+        // Filter tabs
+        el.filterTabs = $('filter-tabs');
 
         // Thumbnails
         el.thumbsSection = $('thumbs-section');
@@ -478,6 +482,7 @@ const PlexdRemote = (function() {
             renderInfo();
             renderTransport();
             renderRating();
+            renderFilterTabs();
             renderThumbnails();
             renderAudioButton();
             updateHeroVideo();
@@ -571,20 +576,20 @@ const PlexdRemote = (function() {
     function renderThumbnails() {
         if (!el.thumbsStrip) return;
 
-        const streams = state?.streams || [];
-        if (streams.length === 0) {
-            el.thumbsStrip.innerHTML = '';
+        const filteredStreams = getFilteredStreams();
+        if (filteredStreams.length === 0) {
+            el.thumbsStrip.innerHTML = `<div class="thumbs-empty">No streams with rating ${currentFilter === '0' ? '☆' : currentFilter}</div>`;
             return;
         }
 
-        el.thumbsStrip.innerHTML = streams.map((stream, idx) => {
+        el.thumbsStrip.innerHTML = filteredStreams.map((stream) => {
             const isSelected = stream.id === selectedStreamId;
             const rating = stream.rating || 0;
             const hasThumbnail = !!stream.thumbnail;
 
             return `
                 <div class="thumb-item ${isSelected ? 'selected' : ''}"
-                     data-id="${stream.id}" data-index="${idx}">
+                     data-id="${stream.id}">
                     ${hasThumbnail
                         ? `<img class="thumb-img" src="${stream.thumbnail}" alt="">`
                         : `<div class="thumb-placeholder"></div>`
@@ -601,6 +606,24 @@ const PlexdRemote = (function() {
         }
     }
 
+    function renderFilterTabs() {
+        if (!el.filterTabs) return;
+
+        const streams = state?.streams || [];
+
+        el.filterTabs.querySelectorAll('.filter-tab').forEach(tab => {
+            const filter = tab.dataset.filter;
+            tab.classList.toggle('active', filter === currentFilter);
+
+            // Update count display (optional: show how many streams match)
+            if (filter !== 'all') {
+                const filterRating = parseInt(filter, 10);
+                const count = streams.filter(s => (s.rating || 0) === filterRating).length;
+                // Could add count badge here if desired
+            }
+        });
+    }
+
     function renderAudioButton() {
         const stream = getCurrentStream();
         if (!el.audioToggle || !stream) return;
@@ -615,6 +638,14 @@ const PlexdRemote = (function() {
             return state?.streams?.[0];
         }
         return state.streams.find(s => s.id === selectedStreamId) || state.streams[0];
+    }
+
+    function getFilteredStreams() {
+        const streams = state?.streams || [];
+        if (currentFilter === 'all') return streams;
+
+        const filterRating = parseInt(currentFilter, 10);
+        return streams.filter(s => (s.rating || 0) === filterRating);
     }
 
     // ============================================
@@ -683,6 +714,20 @@ const PlexdRemote = (function() {
                     haptic.success();
                 }
             });
+        });
+
+        // Filter tabs
+        el.filterTabs?.addEventListener('click', (e) => {
+            const tab = e.target.closest('.filter-tab');
+            if (tab) {
+                const filter = tab.dataset.filter;
+                if (filter && filter !== currentFilter) {
+                    currentFilter = filter;
+                    haptic.light();
+                    renderFilterTabs();
+                    renderThumbnails();
+                }
+            }
         });
 
         // Thumbnail clicks (event delegation)

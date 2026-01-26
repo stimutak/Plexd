@@ -85,13 +85,18 @@ Plexd/
 
 ## iPhone Remote (PWA)
 
-The remote (`/remote.html`) is a Progressive Web App for controlling and viewing Plexd from iPhone.
+The remote (`/remote.html`) is a Progressive Web App that serves **three purposes**:
+
+1. **Control Surface** - Send commands to the Mac app (play, pause, seek, etc.)
+2. **Second Viewer** - Watch video on your phone (synced with Mac playback)
+3. **Triage Tool** - Filter streams by rating, quickly rate and review content
 
 ### Design Principles
-1. **Hero always visible** - Remote controls the Mac, doesn't replace it
-2. **Always-visible rating** - No mode switching required
-3. **Fast triage workflow** - Single-tap zones for quick random/seek/play
-4. **Progressive disclosure** - Advanced features in "More" sheet
+1. **Hero always visible** - Live video preview with tap zones for fast actions
+2. **Always-visible rating** - Assign ratings without mode switching
+3. **Filter by rating** - Filter tabs (All, ☆, 1-9) to show only specific ratings
+4. **Fast triage workflow** - Single-tap zones for quick random/seek/play
+5. **Progressive disclosure** - Advanced features in "More" sheet
 
 ### Architecture
 - **PWA**: manifest.json + service worker for "Add to Home Screen"
@@ -112,9 +117,11 @@ The remote (`/remote.html`) is a Progressive Web App for controlling and viewing
 ├─────────────────────────────────────┤
 │   [|◀]  [-30]  [▶||]  [+30]  [▶|]  │  Transport
 ├─────────────────────────────────────┤
-│  [✕][1][2][3][4][5][6][7][8][9]    │  Rating (always visible)
+│  [✕][1][2][3][4][5][6][7][8][9]    │  Rating (assign)
 ├─────────────────────────────────────┤
-│  [thumb][thumb][thumb]...           │  Thumbnails
+│  [All][☆][1][2][3][4][5][6][7][8][9]│  Filter tabs (filter by rating)
+├─────────────────────────────────────┤
+│  [thumb][thumb][thumb]...           │  Thumbnails (filtered)
 ├─────────────────────────────────────┤
 │  [Random]              [More]       │  Quick actions
 └─────────────────────────────────────┘

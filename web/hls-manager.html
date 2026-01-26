@@ -171,7 +171,7 @@
 
     <div class="controls">
         <button onclick="refresh()">Refresh</button>
-        <button class="danger" onclick="deleteAllComplete()">Delete All Complete</button>
+        <button class="danger" onclick="deleteAllOriginals()">Delete All Originals (Keep HLS)</button>
         <span class="refresh-note">Auto-refreshes every 5s during transcoding</span>
     </div>
 
@@ -219,12 +219,17 @@
             refresh();
         }
 
-        async function deleteAllComplete() {
-            if (!confirm('Delete all completed HLS transcodes?')) return;
+        async function deleteAllOriginals() {
             const data = await fetchFiles();
-            const complete = data.files.filter(f => f.hlsReady);
+            const complete = data.files.filter(f => f.hlsReady && f.hasOriginal);
+            if (complete.length === 0) {
+                alert('No original files to delete (all completed transcodes already have originals removed).');
+                return;
+            }
+            const totalSize = complete.reduce((sum, f) => sum + (f.originalSize || 0), 0);
+            if (!confirm(`Delete ${complete.length} original files?\n\nThis will free ${formatSize(totalSize)}.\nHLS transcodes will be kept.`)) return;
             for (const f of complete) {
-                await fetch(`/api/hls/delete/${f.fileId}`, { method: 'DELETE' });
+                await fetch(`/api/hls/delete-original/${f.fileId}`, { method: 'DELETE' });
             }
             refresh();
         }

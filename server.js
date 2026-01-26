@@ -69,6 +69,40 @@ function getFreeDiskSpaceMB() {
     }
 }
 
+// Sanitize filename for filesystem use (keep readable, remove dangerous chars)
+function sanitizeFileName(name) {
+    return name
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')  // Remove invalid filesystem chars
+        .replace(/\s+/g, '_')                      // Spaces to underscores
+        .replace(/_+/g, '_')                       // Collapse multiple underscores
+        .replace(/^_|_$/g, '');                    // Trim leading/trailing underscores
+}
+
+// Generate a readable file ID from filename, handling collisions
+function generateFileId(fileName) {
+    const sanitized = sanitizeFileName(fileName);
+
+    // If no collision, use as-is
+    if (!fileMetadata[sanitized]) {
+        return sanitized;
+    }
+
+    // Split into name and extension
+    const lastDot = sanitized.lastIndexOf('.');
+    const baseName = lastDot > 0 ? sanitized.slice(0, lastDot) : sanitized;
+    const ext = lastDot > 0 ? sanitized.slice(lastDot) : '';
+
+    // Find next available number
+    let counter = 1;
+    let candidate;
+    do {
+        candidate = `${baseName}_${counter}${ext}`;
+        counter++;
+    } while (fileMetadata[candidate]);
+
+    return candidate;
+}
+
 // Find existing HLS by original filename and size
 function findExistingHLS(fileName, size) {
     for (const [fileId, meta] of Object.entries(fileMetadata)) {
@@ -546,7 +580,7 @@ const server = http.createServer((req, res) => {
 
     // Delete a specific HLS transcode (keeps original if exists)
     if (pathname.startsWith('/api/hls/delete/') && req.method === 'DELETE') {
-        const fileId = pathname.replace('/api/hls/delete/', '');
+        const fileId = decodeURIComponent(pathname.replace('/api/hls/delete/', ''));
         const meta = fileMetadata[fileId];
 
         if (meta) {
@@ -580,7 +614,7 @@ const server = http.createServer((req, res) => {
 
     // Delete original file only (keep HLS)
     if (pathname.startsWith('/api/hls/delete-original/') && req.method === 'DELETE') {
-        const fileId = pathname.replace('/api/hls/delete-original/', '');
+        const fileId = decodeURIComponent(pathname.replace('/api/hls/delete-original/', ''));
         const meta = fileMetadata[fileId];
 
         if (meta) {
@@ -603,7 +637,7 @@ const server = http.createServer((req, res) => {
 
     // Trigger transcoding for a specific file
     if (pathname.startsWith('/api/hls/transcode/') && req.method === 'POST') {
-        const fileId = pathname.replace('/api/hls/transcode/', '');
+        const fileId = decodeURIComponent(pathname.replace('/api/hls/transcode/', ''));
         const meta = fileMetadata[fileId];
 
         if (meta && meta.contentType?.startsWith('video/') && !meta.hlsReady) {
@@ -648,8 +682,8 @@ const server = http.createServer((req, res) => {
             return;
         }
 
-        // Generate unique file ID
-        const fileId = crypto.randomBytes(16).toString('hex');
+        // Generate file ID from sanitized filename (readable, not random hex)
+        const fileId = generateFileId(fileName);
         const filePath = path.join(UPLOADS_DIR, fileId);
 
         const writeStream = fs.createWriteStream(filePath);
@@ -730,8 +764,8 @@ const server = http.createServer((req, res) => {
     // Serve HLS files (playlist and segments)
     if (pathname.startsWith('/api/hls/') && req.method === 'GET') {
         const parts = pathname.replace('/api/hls/', '').split('/');
-        const fileId = parts[0];
-        const hlsFile = parts.slice(1).join('/');
+        const fileId = decodeURIComponent(parts[0]);
+        const hlsFile = decodeURIComponent(parts.slice(1).join('/'));
 
         if (!fileId || !hlsFile) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -845,7 +879,7 @@ const server = http.createServer((req, res) => {
 
     // Serve an uploaded file
     if (pathname.startsWith('/api/files/') && req.method === 'GET') {
-        const fileId = pathname.replace('/api/files/', '');
+        const fileId = decodeURIComponent(pathname.replace('/api/files/', ''));
         const meta = fileMetadata[fileId];
 
         if (!meta) {
@@ -894,7 +928,7 @@ const server = http.createServer((req, res) => {
 
     // Delete a specific file
     if (pathname.startsWith('/api/files/') && req.method === 'DELETE') {
-        const fileId = pathname.replace('/api/files/', '');
+        const fileId = decodeURIComponent(pathname.replace('/api/files/', ''));
         const meta = fileMetadata[fileId];
 
         if (meta) {

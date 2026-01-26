@@ -87,41 +87,51 @@ Plexd/
 
 The remote (`/remote.html`) is a Progressive Web App for controlling and viewing Plexd from iPhone.
 
+### Design Principles
+1. **No hidden interactions** - All controls are visible buttons
+2. **One gesture system** - Swipe left/right for navigation only
+3. **Always-visible rating** - No mode switching required
+4. **Progressive disclosure** - Advanced features in "More" sheet
+
 ### Architecture
 - **PWA**: manifest.json + service worker for "Add to Home Screen"
 - **Server relay**: Commands/state sent via `/api/remote/*` endpoints
 - **Video sync**: Phone video syncs position/play state with Mac (within 2s tolerance)
 - **Server file storage**: Local files auto-upload to server for cross-device playback
 
-### Three Modes
-
-1. **Viewer Mode** - Fullscreen video overlay (tap expand button in hero)
-2. **Controller Mode** - Playback controls without triage (default tab)
-3. **Triage Mode** - Rating assignment and filtering (second tab)
-
-Shared elements (hero, progress bar, transport) appear in both Controller and Triage modes.
-
-### Hero Tap Zones
+### Layout (Top to Bottom)
 ```
-+------------------+
-|   TOP: Random    |
-+------+----+------+
-| LEFT |PLAY| RIGHT|
-| -30s |    | +30s |
-+------+----+------+
-| BTM: Focus Toggle|
-+------------------+
+┌─────────────────────────────────────┐
+│  [Audio]     Plexd     [●]          │  Header
+├─────────────────────────────────────┤
+│         Video Preview               │  Hero (tap=viewer, swipe=navigate)
+│           ← 3 / 12 →                │  Position indicator
+├─────────────────────────────────────┤
+│  Title                    1:23/4:56 │  Info
+│  ═══════════════●─────────────────  │  Progress
+├─────────────────────────────────────┤
+│   [|◀]  [-30]  [▶||]  [+30]  [▶|]  │  Transport
+├─────────────────────────────────────┤
+│  [✕][1][2][3][4][5][6][7][8][9]    │  Rating (always visible)
+├─────────────────────────────────────┤
+│  [thumb][thumb][thumb]...           │  Thumbnails
+├─────────────────────────────────────┤
+│  [Random]              [More]       │  Quick actions
+└─────────────────────────────────────┘
 ```
 
-### Viewer Tap Zones
-Same as hero, but zones calculated on actual video area (not letterbox). Tapping outside video toggles controls.
-
-### Gestures
-- **Swipe up/down/left/right**: Spatial navigation in grid
-- **Double-tap thumbnail**: Random seek that stream
-- **Long-press random button**: Opens action sheet (Pause All, Mute All, etc.)
+### Gestures (Simplified)
+- **Hero tap**: Open fullscreen viewer
+- **Hero swipe left/right**: Navigate to next/previous stream
+- **Viewer tap**: Toggle controls visibility
 - **Viewer swipe left/right**: Navigate streams
 - **Viewer swipe down**: Exit viewer
+
+### More Sheet Options
+- Stream Audio (toggle mute)
+- Mute All / Pause All / Random All
+- Clean Mode / Tetris Mode
+- Fullscreen Viewer
 
 ### Server File Storage
 - Files upload to `uploads/` when dropped (checked by name+size to avoid duplicates)

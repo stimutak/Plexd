@@ -1,6 +1,6 @@
 /**
- * Plexd Remote - Triage Mode Design
- * Ergonomic, one-thumb operation for rapid clip review
+ * Plexd Remote - Redesigned for iPhone
+ * Simplified UI with no hidden interactions
  */
 
 /* ============================================
@@ -112,7 +112,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 8px 16px;
     padding-top: calc(8px + var(--safe-top));
     background: var(--bg-secondary);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -229,20 +229,20 @@ button {
 }
 
 /* ============================================
-   Triage UI Container
+   Remote UI Container
    ============================================ */
-.triage-ui {
+.remote-ui {
     display: flex;
     flex-direction: column;
-    padding: 8px;
-    padding-bottom: calc(8px + var(--safe-bottom));
-    gap: 8px;
+    padding: 12px;
+    padding-bottom: calc(12px + var(--safe-bottom));
+    gap: 12px;
 }
 
-.triage-ui.hidden { display: none; }
+.remote-ui.hidden { display: none; }
 
 /* ============================================
-   Hero Section - Large Preview
+   Hero Section - Preview Only
    ============================================ */
 .hero {
     position: relative;
@@ -256,14 +256,9 @@ button {
     background: var(--bg-card);
     border-radius: var(--radius-lg);
     overflow: hidden;
-    touch-action: none;
-    cursor: grab;
+    touch-action: pan-x;
     user-select: none;
     -webkit-user-select: none;
-}
-
-.hero-preview:active {
-    cursor: grabbing;
 }
 
 .hero-placeholder {
@@ -291,44 +286,33 @@ button {
     display: block;
 }
 
-/* Swipe hints */
-.swipe-hint {
+/* Video in hero */
+.hero-video {
     position: absolute;
-    pointer-events: none;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 24px;
-    transition: opacity 0.5s ease;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
 }
 
-.swipe-hint.faded {
+.hero-video.active {
+    opacity: 1;
+}
+
+.hero-video.active + .hero-placeholder,
+.hero-video.active ~ .hero-image {
     opacity: 0;
 }
 
-.swipe-hint-lr {
-    top: 50%;
-    left: 0;
-    right: 0;
-    transform: translateY(-50%);
-    display: flex;
-    justify-content: space-between;
-    padding: 0 16px;
-}
-
-.swipe-hint-ud {
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 14px;
-    background: rgba(0, 0, 0, 0.5);
-    padding: 4px 12px;
-    border-radius: var(--radius-full);
-}
-
-/* Status overlay */
+/* Status pill (top-left) */
 .hero-status {
     position: absolute;
     top: 8px;
     left: 8px;
+    z-index: 10;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -362,26 +346,77 @@ button {
     background: var(--warning);
 }
 
-/* Stream counter */
-.hero-counter {
+/* Stream position indicator (bottom-center) */
+.hero-position {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    padding: 4px 10px;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
     background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     border-radius: var(--radius-full);
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
     color: var(--text-secondary);
+}
+
+.hero-position .pos-prev,
+.hero-position .pos-next {
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+.hero-position .pos-text {
+    min-width: 48px;
+    text-align: center;
+}
+
+/* Tap hint */
+.hero-tap-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    padding: 10px 18px;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: var(--radius-lg);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+
+.hero-tap-hint.visible {
+    opacity: 1;
+}
+
+/* Swipe feedback */
+.hero-preview.swiping-left {
+    transform: translateX(-20px);
+    transition: transform 0.1s ease;
+}
+
+.hero-preview.swiping-right {
+    transform: translateX(20px);
+    transition: transform 0.1s ease;
 }
 
 /* ============================================
    Info Section - Title + Progress
    ============================================ */
 .info-section {
-    padding: 4px 4px 0;
+    padding: 0 4px;
 }
 
 .stream-info {
@@ -412,9 +447,9 @@ button {
 .progress-track {
     position: relative;
     width: 100%;
-    height: 28px;
+    height: 32px;
     background: rgba(255, 255, 255, 0.06);
-    border-radius: 6px;
+    border-radius: 8px;
     cursor: pointer;
     touch-action: none;
     overflow: hidden;
@@ -430,7 +465,7 @@ button {
     left: 0;
     height: 100%;
     background: rgba(255, 255, 255, 0.2);
-    border-radius: 6px;
+    border-radius: 8px;
     pointer-events: none;
     transition: width 0.1s linear;
 }
@@ -439,8 +474,8 @@ button {
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     background: var(--text-primary);
     border-radius: 50%;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -454,59 +489,62 @@ button {
 }
 
 /* ============================================
-   Transport Row - Cursor Style
+   Transport Row - Playback Controls
    ============================================ */
 .transport-row {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     padding: 4px 0;
 }
 
 .transport-btn {
-    width: 42px;
-    height: 38px;
+    width: 52px;
+    height: 48px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: transparent;
-    border-radius: 8px;
-    color: rgba(255, 255, 255, 0.5);
-    transition: all 0.15s ease;
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    transition: all var(--transition-fast);
 }
 
-.transport-btn:hover,
 .transport-btn:active {
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.8);
+    transform: scale(0.92);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
 }
 
 .transport-btn svg {
-    width: 18px;
-    height: 18px;
+    width: 22px;
+    height: 22px;
 }
 
-.transport-btn.active {
-    color: rgba(255, 255, 255, 0.9);
-}
-
-/* Play button */
+/* Play button - larger and centered */
 .transport-btn-play {
-    color: rgba(255, 255, 255, 0.7);
+    width: 64px;
+    height: 56px;
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.transport-btn-play:active {
+    background: #0070e0;
+}
+
+.transport-btn-play svg {
+    width: 28px;
+    height: 28px;
 }
 
 .transport-btn-play .icon-pause { display: none; }
 .transport-btn-play.playing .icon-play { display: none; }
 .transport-btn-play.playing .icon-pause { display: block; }
 
-/* Random - subtle highlight */
-.transport-btn-accent {
-    color: rgba(255, 255, 255, 0.6);
-}
-
 /* ============================================
-   Rating Strip - BIG Touch Targets
+   Rating Strip - Always Visible
    ============================================ */
 .rating-section {
     padding: 4px 0;
@@ -514,7 +552,7 @@ button {
 
 .rating-strip {
     display: flex;
-    gap: 4px;
+    gap: 6px;
     justify-content: center;
 }
 
@@ -539,7 +577,11 @@ button {
 /* Clear button */
 .rating-btn-clear {
     color: var(--text-muted);
-    font-size: 14px;
+}
+
+.rating-btn-clear svg {
+    width: 16px;
+    height: 16px;
 }
 
 /* Active rating - highlighted with color */
@@ -560,70 +602,15 @@ button {
 .rating-btn[data-rating="8"].active { background: var(--rating-8); color: var(--bg-primary); }
 .rating-btn[data-rating="9"].active { background: var(--rating-9); color: var(--bg-primary); }
 
-/* ============================================
-   Filter Tabs - Exact Rating Filters
-   ============================================ */
-.filter-section {
-    padding: 4px 0;
+/* Animation for rating set */
+@keyframes pop {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+    100% { transform: scale(1.1); }
 }
 
-.filter-tabs {
-    display: flex;
-    gap: 4px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-    padding: 2px;
-}
-
-.filter-tabs::-webkit-scrollbar {
-    display: none;
-}
-
-.filter-tab {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-width: 36px;
-    height: 44px;
-    padding: 4px 8px;
-    background: var(--bg-card);
-    border-radius: var(--radius-md);
-    transition: all var(--transition-fast);
-}
-
-.filter-tab:active {
-    transform: scale(0.95);
-}
-
-.filter-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.filter-count {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-}
-
-/* Active filter */
-.filter-tab.active {
-    background: var(--accent);
-}
-
-.filter-tab.active .filter-label,
-.filter-tab.active .filter-count {
-    color: var(--text-primary);
-}
-
-/* Empty filter (count = 0) */
-.filter-tab.empty {
-    opacity: 0.4;
+.rating-btn.just-set {
+    animation: pop 0.3s ease;
 }
 
 /* ============================================
@@ -635,11 +622,11 @@ button {
 
 .thumbs-strip {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    padding: 2px;
+    padding: 4px 2px;
 }
 
 .thumbs-strip::-webkit-scrollbar {
@@ -648,14 +635,15 @@ button {
 
 .thumb-item {
     flex-shrink: 0;
-    width: 72px;
-    height: 48px;
+    width: 80px;
+    height: 52px;
     background: var(--bg-card);
     border-radius: var(--radius-sm);
     overflow: hidden;
     cursor: pointer;
     transition: all var(--transition-fast);
     position: relative;
+    border: 2px solid transparent;
 }
 
 .thumb-item:active {
@@ -663,11 +651,8 @@ button {
 }
 
 .thumb-item.selected {
-    box-shadow: 0 0 0 2px var(--accent);
-}
-
-.thumb-item.focused {
-    box-shadow: 0 0 0 2px var(--success);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(10, 132, 255, 0.4);
 }
 
 .thumb-img {
@@ -680,13 +665,29 @@ button {
     position: absolute;
     bottom: 2px;
     right: 2px;
-    background: rgba(0, 0, 0, 0.7);
-    color: var(--warning);
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 4px;
     font-size: 10px;
     font-weight: 700;
-    padding: 1px 4px;
-    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
+
+/* Rating badge colors */
+.thumb-rating[data-rating="1"] { color: var(--rating-1); }
+.thumb-rating[data-rating="2"] { color: var(--rating-2); }
+.thumb-rating[data-rating="3"] { color: var(--rating-3); }
+.thumb-rating[data-rating="4"] { color: var(--rating-4); }
+.thumb-rating[data-rating="5"] { color: var(--rating-5); }
+.thumb-rating[data-rating="6"] { color: var(--rating-6); }
+.thumb-rating[data-rating="7"] { color: var(--rating-7); }
+.thumb-rating[data-rating="8"] { color: var(--rating-8); }
+.thumb-rating[data-rating="9"] { color: var(--rating-9); }
+.thumb-rating[data-rating="0"] { color: var(--text-muted); }
 
 .thumb-placeholder {
     width: 100%;
@@ -694,12 +695,39 @@ button {
     background: var(--bg-tertiary);
 }
 
-/* No streams message */
-.no-streams-msg {
-    text-align: center;
-    padding: 12px;
-    color: var(--text-tertiary);
-    font-size: 13px;
+/* ============================================
+   Quick Actions Row
+   ============================================ */
+.actions-row {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.action-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 48px;
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    transition: all var(--transition-fast);
+}
+
+.action-btn:active {
+    transform: scale(0.96);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.action-btn svg {
+    width: 20px;
+    height: 20px;
 }
 
 /* ============================================
@@ -739,7 +767,7 @@ button {
     padding: 8px 16px;
     padding-bottom: calc(16px + var(--safe-bottom));
     transition: transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
-    max-height: 60vh;
+    max-height: 70vh;
     overflow-y: auto;
 }
 
@@ -752,16 +780,14 @@ button {
 }
 
 .sheet-header {
-    padding: 8px 0 12px;
+    padding: 8px 0 16px;
     text-align: center;
 }
 
 .sheet-header h3 {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    color: var(--text-primary);
 }
 
 .sheet-options {
@@ -792,22 +818,28 @@ button {
 
 .sheet-option span {
     font-size: 16px;
+    color: var(--text-primary);
 }
 
 .sheet-option.active svg { color: var(--accent); }
 .sheet-option.active span { color: var(--accent); }
 
+/* Mute toggle in sheet */
+.sheet-option .icon-muted { display: none; }
+.sheet-option.muted .icon-unmuted { display: none; }
+.sheet-option.muted .icon-muted { display: block; }
+
 .sheet-divider {
     height: 1px;
     background: rgba(255, 255, 255, 0.08);
-    margin: 6px 0;
+    margin: 8px 0;
 }
 
 .sheet-cancel {
     display: block;
     width: 100%;
     padding: 14px;
-    margin-top: 8px;
+    margin-top: 12px;
     background: var(--bg-tertiary);
     border-radius: var(--radius-md);
     font-size: 16px;
@@ -819,192 +851,6 @@ button {
 
 .sheet-cancel:active {
     background: var(--bg-elevated);
-}
-
-/* ============================================
-   Utilities
-   ============================================ */
-.hidden { display: none !important; }
-
-/* ============================================
-   Landscape Mode - Side by Side Layout
-   ============================================ */
-@media (orientation: landscape) and (max-height: 500px) {
-    .triage-ui {
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-    .hero {
-        flex: 1 1 50%;
-        min-width: 280px;
-    }
-
-    .hero-preview {
-        aspect-ratio: 16 / 9;
-    }
-
-    .info-section {
-        flex: 1 1 40%;
-        min-width: 200px;
-    }
-
-    .actions-row {
-        flex: 1 1 100%;
-        gap: 6px;
-    }
-
-    .action-btn {
-        min-width: 48px;
-        height: 48px;
-    }
-
-    .action-btn-play {
-        width: 56px;
-        height: 56px;
-    }
-
-    .rating-section,
-    .filter-section {
-        flex: 1 1 50%;
-    }
-
-    .thumbs-section {
-        flex: 1 1 100%;
-    }
-}
-
-/* ============================================
-   Tablet / Large Screen
-   ============================================ */
-@media (min-width: 768px) {
-    .app {
-        max-width: 500px;
-        margin: 0 auto;
-        box-shadow: 0 0 80px rgba(0, 0, 0, 0.5);
-    }
-
-    .sheet {
-        max-width: 500px;
-        left: 50%;
-        transform: translateX(-50%);
-    }
-
-    .rating-btn {
-        width: 40px;
-        height: 52px;
-        font-size: 18px;
-    }
-
-    .filter-tab {
-        min-width: 44px;
-        height: 52px;
-    }
-
-    .action-btn {
-        min-width: 64px;
-        height: 64px;
-    }
-
-    .action-btn-play {
-        width: 72px;
-        height: 72px;
-    }
-
-    .progress-track {
-        height: 44px;
-    }
-}
-
-/* ============================================
-   Reduced Motion
-   ============================================ */
-@media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-        animation-duration: 0.01ms !important;
-        transition-duration: 0.01ms !important;
-    }
-}
-
-/* ============================================
-   Feedback Animations
-   ============================================ */
-@keyframes pop {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.15); }
-    100% { transform: scale(1); }
-}
-
-.rating-btn.just-set {
-    animation: pop 0.3s ease;
-}
-
-/* Visual feedback for swipe */
-.hero-preview.swiping-left {
-    transform: translateX(-20px);
-    transition: transform 0.1s ease;
-}
-
-.hero-preview.swiping-right {
-    transform: translateX(20px);
-    transition: transform 0.1s ease;
-}
-
-.hero-preview.swiping-up {
-    transform: translateY(-10px);
-    transition: transform 0.1s ease;
-}
-
-/* ============================================
-   Video Player in Hero
-   ============================================ */
-.hero-video {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    z-index: 1;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-}
-
-.hero-video.active {
-    opacity: 1;
-}
-
-.hero-video.active + .hero-placeholder,
-.hero-video.active ~ .hero-image {
-    opacity: 0;
-}
-
-.hero-fullscreen-btn {
-    position: absolute;
-    bottom: 12px;
-    right: 12px;
-    width: 40px;
-    height: 40px;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-radius: var(--radius-md);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10;
-    transition: transform 0.2s ease, background 0.2s ease;
-}
-
-.hero-fullscreen-btn svg {
-    width: 22px;
-    height: 22px;
-    fill: white;
-}
-
-.hero-fullscreen-btn:active {
-    transform: scale(0.9);
-    background: rgba(0, 0, 0, 0.8);
 }
 
 /* ============================================
@@ -1032,7 +878,6 @@ button {
     height: 100%;
     object-fit: contain;
     background: #000;
-    pointer-events: none; /* Let touches pass through to overlay */
 }
 
 .viewer-controls {
@@ -1058,16 +903,16 @@ button {
 .viewer-top {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    padding-top: calc(10px + var(--safe-top));
-    background: linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 100%);
+    gap: 12px;
+    padding: 12px 16px;
+    padding-top: calc(12px + var(--safe-top));
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);
 }
 
 .viewer-close {
-    width: 36px;
-    height: 36px;
-    background: rgba(255,255,255,0.08);
+    width: 40px;
+    height: 40px;
+    background: rgba(255,255,255,0.1);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1075,18 +920,18 @@ button {
 }
 
 .viewer-close svg {
-    width: 18px;
-    height: 18px;
-    fill: rgba(255,255,255,0.8);
+    width: 20px;
+    height: 20px;
+    fill: rgba(255,255,255,0.9);
 }
 
 .viewer-close:active {
-    background: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.2);
 }
 
 .viewer-title {
     flex: 1;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 500;
     color: rgba(255,255,255,0.9);
     white-space: nowrap;
@@ -1095,31 +940,32 @@ button {
 }
 
 .viewer-counter {
-    font-size: 12px;
+    font-size: 13px;
     color: rgba(255,255,255,0.5);
-    padding: 3px 8px;
-    background: rgba(255,255,255,0.08);
+    padding: 4px 10px;
+    background: rgba(255,255,255,0.1);
     border-radius: var(--radius-full);
 }
 
 .viewer-bottom {
-    padding: 12px 16px;
-    padding-bottom: calc(12px + var(--safe-bottom));
+    padding: 16px;
+    padding-bottom: calc(16px + var(--safe-bottom));
     background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);
 }
 
 .viewer-time {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
     color: rgba(255,255,255,0.6);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    text-align: center;
 }
 
 .viewer-progress {
-    height: 3px;
+    height: 4px;
     background: rgba(255,255,255,0.2);
     border-radius: 2px;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
     overflow: hidden;
 }
 
@@ -1135,13 +981,13 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 12px;
 }
 
 .viewer-btn {
-    width: 44px;
-    height: 44px;
-    background: rgba(255,255,255,0.08);
+    width: 48px;
+    height: 48px;
+    background: rgba(255,255,255,0.1);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1150,21 +996,19 @@ button {
 }
 
 .viewer-btn svg {
-    width: 20px;
-    height: 20px;
-    fill: rgba(255,255,255,0.8);
+    width: 22px;
+    height: 22px;
+    fill: rgba(255,255,255,0.9);
 }
 
 .viewer-btn:active {
     transform: scale(0.92);
-    background: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.2);
 }
 
 .viewer-btn-play {
-    width: 52px;
-    height: 52px;
-    background: rgba(255,255,255,0.12);
-    height: 72px;
+    width: 64px;
+    height: 64px;
     background: var(--accent);
 }
 
@@ -1172,212 +1016,125 @@ button {
     background: #0070e0;
 }
 
-.viewer-btn-play .icon-pause {
-    display: none;
-}
-
-.viewer-btn-play.playing .icon-play {
-    display: none;
-}
-
-.viewer-btn-play.playing .icon-pause {
-    display: block;
-}
-
-.viewer-gesture-hint {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: rgba(0,0,0,0.7);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    padding: 12px 24px;
-    border-radius: var(--radius-lg);
-    font-size: 14px;
-    color: white;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-    pointer-events: none;
-    z-index: 20;
-}
-
-.viewer-gesture-hint.visible {
-    opacity: 1;
-}
-
-/* ============================================
-   Haptic Feedback Animations
-   ============================================ */
-@keyframes haptic-tap {
-    0% { transform: scale(1); }
-    50% { transform: scale(0.95); }
-    100% { transform: scale(1); }
-}
-
-@keyframes haptic-success {
-    0% { transform: scale(1); }
-    25% { transform: scale(1.05); }
-    50% { transform: scale(0.98); }
-    100% { transform: scale(1); }
-}
-
-.haptic-tap {
-    animation: haptic-tap 0.15s ease;
-}
-
-.haptic-success {
-    animation: haptic-success 0.3s ease;
-}
+.viewer-btn-play .icon-pause { display: none; }
+.viewer-btn-play.playing .icon-play { display: none; }
+.viewer-btn-play.playing .icon-pause { display: block; }
 
 /* Stream change indicator */
-.stream-change-indicator {
-    position: fixed;
+.stream-indicator {
+    position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
     background: rgba(0,0,0,0.8);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    padding: 20px 32px;
+    padding: 16px 28px;
     border-radius: var(--radius-xl);
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 600;
     color: white;
     opacity: 0;
     transition: opacity 0.2s ease;
     pointer-events: none;
-    z-index: 10000;
+    z-index: 100;
 }
 
-.stream-change-indicator.visible {
+.stream-indicator.visible {
     opacity: 1;
 }
 
 /* ============================================
-   Mode Tabs - Cursor Style Segmented Control
+   Utilities
    ============================================ */
-.mode-tabs {
-    display: flex;
-    gap: 0;
-    padding: 2px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 6px;
-    margin-bottom: 8px;
-}
+.hidden { display: none !important; }
 
-.mode-tab {
-    flex: 1;
-    padding: 8px 12px;
-    background: transparent;
-    border-radius: 4px;
-    font-size: 13px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.4);
-    transition: all 0.15s ease;
-}
+/* ============================================
+   Landscape Mode
+   ============================================ */
+@media (orientation: landscape) and (max-height: 500px) {
+    .remote-ui {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: flex-start;
+    }
 
-.mode-tab:active {
-    opacity: 0.8;
-}
+    .hero {
+        flex: 0 0 45%;
+        min-width: 250px;
+    }
 
-.mode-tab.active {
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.9);
-}
+    .info-section {
+        flex: 1 1 50%;
+        min-width: 200px;
+    }
 
-/* Mode content visibility */
-.mode-content.hidden {
-    display: none;
+    .transport-row {
+        flex: 1 1 100%;
+    }
+
+    .rating-section {
+        flex: 1 1 50%;
+    }
+
+    .thumbs-section {
+        flex: 1 1 100%;
+    }
+
+    .actions-row {
+        flex: 1 1 100%;
+    }
 }
 
 /* ============================================
-   Controller Panel - Cursor Style
+   Tablet / Large Screen
    ============================================ */
-.ctrl-panel {
-    display: flex;
-    flex-direction: column;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    overflow: hidden;
+@media (min-width: 768px) {
+    .app {
+        max-width: 500px;
+        margin: 0 auto;
+        box-shadow: 0 0 80px rgba(0, 0, 0, 0.5);
+    }
+
+    .sheet {
+        max-width: 500px;
+        left: 50%;
+        transform: translateX(-50%);
+    }
+
+    .rating-btn {
+        width: 38px;
+        height: 52px;
+        font-size: 18px;
+    }
+
+    .thumb-item {
+        width: 96px;
+        height: 64px;
+    }
+
+    .transport-btn {
+        width: 60px;
+        height: 56px;
+    }
+
+    .transport-btn-play {
+        width: 72px;
+        height: 64px;
+    }
+
+    .progress-track {
+        height: 40px;
+    }
 }
 
-.ctrl-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 11px 14px;
-    background: transparent;
-    border: none;
-    transition: background 0.15s ease;
+/* ============================================
+   Reduced Motion
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
 }
-
-.ctrl-item:active {
-    background: rgba(255, 255, 255, 0.04);
-}
-
-.ctrl-item-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.ctrl-item-left svg {
-    width: 16px;
-    height: 16px;
-    fill: rgba(255, 255, 255, 0.45);
-}
-
-.ctrl-item-left span {
-    font-size: 13px;
-    font-weight: 400;
-    color: rgba(255, 255, 255, 0.75);
-}
-
-.ctrl-divider {
-    height: 1px;
-    background: rgba(255, 255, 255, 0.06);
-    margin: 4px 16px;
-}
-
-/* Toggle switch */
-.ctrl-toggle {
-    width: 32px;
-    height: 18px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 9px;
-    padding: 2px;
-    transition: background 0.2s ease;
-}
-
-.ctrl-toggle-knob {
-    width: 14px;
-    height: 14px;
-    background: rgba(255, 255, 255, 0.35);
-    border-radius: 7px;
-    transition: all 0.2s ease;
-}
-
-/* Active/On states */
-.ctrl-item.active .ctrl-toggle {
-    background: rgba(255, 255, 255, 0.18);
-}
-
-.ctrl-item.active .ctrl-toggle-knob {
-    transform: translateX(14px);
-    background: rgba(255, 255, 255, 0.85);
-}
-
-/* Muted state for audio toggle */
-.ctrl-item.muted .ctrl-item-left svg {
-    fill: rgba(255, 255, 255, 0.3);
-}
-
-.ctrl-item.muted .ctrl-item-left span {
-    color: rgba(255, 255, 255, 0.4);
-}
-
-.ctrl-item .icon-muted { display: none; }
-.ctrl-item.muted .icon-unmuted { display: none; }
-.ctrl-item.muted .icon-muted { display: block; }

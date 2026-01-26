@@ -24,7 +24,9 @@ const PlexdRemote = (function() {
     let currentIndex = 0;
     let isDraggingProgress = false;
     let tapHintShown = localStorage.getItem('plexd-tap-hint-shown') === 'true';
-    let currentFilter = 'all'; // 'all', '0', '1'-'9'
+    let currentFilter = 'all'; // 'all', 'fav', '0', '1'-'9'
+    let currentLayout = 'grid'; // 'grid', 'tetris', 'mosaic', 'clean'
+    const LAYOUT_MODES = ['grid', 'tetris', 'mosaic', 'clean'];
 
     // Video player state
     let heroHls = null;
@@ -102,6 +104,7 @@ const PlexdRemote = (function() {
 
         // Rating
         el.ratingStrip = $('rating-strip');
+        el.btnFavorite = $('btn-favorite');
 
         // Filter tabs
         el.filterTabs = $('filter-tabs');
@@ -110,8 +113,13 @@ const PlexdRemote = (function() {
         el.thumbsSection = $('thumbs-section');
         el.thumbsStrip = $('thumbs-strip');
 
-        // Quick actions
+        // Toolbar buttons
         el.btnRandom = $('btn-random');
+        el.btnFocus = $('btn-focus');
+        el.btnAudioFocus = $('btn-audio-focus');
+        el.btnPauseAll = $('btn-pause-all');
+        el.btnLayout = $('btn-layout');
+        el.layoutLabel = $('layout-label');
         el.btnMore = $('btn-more');
 
         // Sheet
@@ -120,11 +128,12 @@ const PlexdRemote = (function() {
         el.sheetCancel = $('sheet-cancel');
         el.optMute = $('opt-mute');
         el.optMuteAll = $('opt-mute-all');
-        el.optPauseAll = $('opt-pause-all');
         el.optRandomAll = $('opt-random-all');
-        el.optClean = $('opt-clean');
-        el.optTetris = $('opt-tetris');
-        el.optFullscreen = $('opt-fullscreen');
+        el.optMosaic = $('opt-mosaic');
+        el.optBugeye = $('opt-bugeye');
+        el.optCoverflow = $('opt-coverflow');
+        el.optInfo = $('opt-info');
+        el.optCopyUrl = $('opt-copy-url');
 
         // Fullscreen viewer
         el.viewerOverlay = $('viewer-overlay');
@@ -440,6 +449,9 @@ const PlexdRemote = (function() {
         el.viewerOverlay.classList.add('hidden');
         haptic.medium();
         clearTimeout(controlsTimeout);
+
+        // Also exit fullscreen on Mac (synchronized)
+        send('exitFullscreen');
     }
 
     function showViewerControls() {
@@ -485,11 +497,41 @@ const PlexdRemote = (function() {
             renderFilterTabs();
             renderThumbnails();
             renderAudioButton();
+            renderToolbar();
             updateHeroVideo();
 
             if (viewerMode) {
                 updateViewerVideo();
             }
+        }
+    }
+
+    function renderToolbar() {
+        // Update layout label based on state
+        if (el.layoutLabel && state) {
+            if (state.tetrisMode) {
+                currentLayout = 'tetris';
+                el.layoutLabel.textContent = 'Tetris';
+            } else if (state.mosaicMode) {
+                currentLayout = 'mosaic';
+                el.layoutLabel.textContent = 'Mosaic';
+            } else if (state.cleanMode) {
+                currentLayout = 'clean';
+                el.layoutLabel.textContent = 'Clean';
+            } else {
+                currentLayout = 'grid';
+                el.layoutLabel.textContent = 'Grid';
+            }
+        }
+
+        // Update audio focus button state
+        if (el.btnAudioFocus && state) {
+            el.btnAudioFocus.classList.toggle('audio-focus-active', state.audioFocusMode || false);
+        }
+
+        // Update focus button state (if Mac is in fullscreen)
+        if (el.btnFocus && state) {
+            el.btnFocus.classList.toggle('active', !!state.fullscreenStreamId);
         }
     }
 
@@ -510,11 +552,17 @@ const PlexdRemote = (function() {
         // Status
         if (el.heroStatus) {
             const isPlaying = !stream.paused;
+            const isFocused = state?.fullscreenStreamId === stream.id;
             el.heroStatus.classList.toggle('playing', isPlaying);
             el.heroStatus.classList.toggle('paused', !isPlaying);
+            el.heroStatus.classList.toggle('focused', isFocused);
             const statusText = el.heroStatus.querySelector('.status-text');
             if (statusText) {
-                statusText.textContent = isPlaying ? 'Playing' : 'Paused';
+                if (isFocused) {
+                    statusText.textContent = 'Focus';
+                } else {
+                    statusText.textContent = isPlaying ? 'Playing' : 'Paused';
+                }
             }
         }
 
@@ -566,8 +614,15 @@ const PlexdRemote = (function() {
     function renderRating() {
         const stream = getCurrentStream();
         const rating = stream?.rating || 0;
+        const isFavorite = stream?.favorite || false;
 
-        el.ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+        // Update favorite button
+        if (el.btnFavorite) {
+            el.btnFavorite.classList.toggle('active', isFavorite);
+        }
+
+        // Update rating buttons
+        el.ratingStrip?.querySelectorAll('.rating-btn[data-rating]').forEach(btn => {
             const btnRating = parseInt(btn.dataset.rating, 10);
             btn.classList.toggle('active', btnRating === rating);
         });
@@ -578,13 +633,22 @@ const PlexdRemote = (function() {
 
         const filteredStreams = getFilteredStreams();
         if (filteredStreams.length === 0) {
-            el.thumbsStrip.innerHTML = `<div class="thumbs-empty">No streams with rating ${currentFilter === '0' ? '☆' : currentFilter}</div>`;
+            let emptyMsg = 'No streams';
+            if (currentFilter === 'fav') {
+                emptyMsg = 'No favorites yet';
+            } else if (currentFilter === '0') {
+                emptyMsg = 'No unrated streams';
+            } else if (currentFilter !== 'all') {
+                emptyMsg = `No streams rated ${currentFilter}`;
+            }
+            el.thumbsStrip.innerHTML = `<div class="thumbs-empty">${emptyMsg}</div>`;
             return;
         }
 
         el.thumbsStrip.innerHTML = filteredStreams.map((stream) => {
             const isSelected = stream.id === selectedStreamId;
             const rating = stream.rating || 0;
+            const isFavorite = stream.favorite || false;
             const hasThumbnail = !!stream.thumbnail;
 
             return `
@@ -594,6 +658,7 @@ const PlexdRemote = (function() {
                         ? `<img class="thumb-img" src="${stream.thumbnail}" alt="">`
                         : `<div class="thumb-placeholder"></div>`
                     }
+                    ${isFavorite ? `<span class="thumb-fav">♥</span>` : ''}
                     ${rating > 0 ? `<span class="thumb-rating" data-rating="${rating}">${rating}</span>` : ''}
                 </div>
             `;
@@ -615,11 +680,19 @@ const PlexdRemote = (function() {
             const filter = tab.dataset.filter;
             tab.classList.toggle('active', filter === currentFilter);
 
-            // Update count display (optional: show how many streams match)
-            if (filter !== 'all') {
-                const filterRating = parseInt(filter, 10);
-                const count = streams.filter(s => (s.rating || 0) === filterRating).length;
-                // Could add count badge here if desired
+            // Update count badges
+            const countEl = tab.querySelector('.filter-count');
+            if (countEl) {
+                let count = 0;
+                if (filter === 'all') {
+                    count = streams.length;
+                } else if (filter === 'fav') {
+                    count = streams.filter(s => s.favorite).length;
+                } else {
+                    const filterRating = parseInt(filter, 10);
+                    count = streams.filter(s => (s.rating || 0) === filterRating).length;
+                }
+                countEl.textContent = count > 0 ? count : '';
             }
         });
     }
@@ -643,6 +716,7 @@ const PlexdRemote = (function() {
     function getFilteredStreams() {
         const streams = state?.streams || [];
         if (currentFilter === 'all') return streams;
+        if (currentFilter === 'fav') return streams.filter(s => s.favorite);
 
         const filterRating = parseInt(currentFilter, 10);
         return streams.filter(s => (s.rating || 0) === filterRating);
@@ -690,7 +764,7 @@ const PlexdRemote = (function() {
             navigateStream('next');
         });
 
-        // Quick actions
+        // Toolbar buttons
         el.btnRandom?.addEventListener('click', () => {
             if (selectedStreamId) {
                 send('randomSeek', { streamId: selectedStreamId });
@@ -698,16 +772,71 @@ const PlexdRemote = (function() {
             }
         });
 
+        el.btnFocus?.addEventListener('click', () => {
+            // Synchronized focus: opens phone viewer AND triggers Mac focus
+            if (selectedStreamId) {
+                send('enterFullscreen', { streamId: selectedStreamId });
+            }
+            enterViewer();
+        });
+
+        el.btnAudioFocus?.addEventListener('click', () => {
+            send('toggleAudioFocus');
+            haptic.medium();
+            // Toggle visual state
+            el.btnAudioFocus.classList.toggle('audio-focus-active');
+        });
+
+        el.btnPauseAll?.addEventListener('click', () => {
+            send('togglePauseAll');
+            haptic.medium();
+        });
+
+        el.btnLayout?.addEventListener('click', () => {
+            // Cycle through layout modes
+            const idx = LAYOUT_MODES.indexOf(currentLayout);
+            const nextIdx = (idx + 1) % LAYOUT_MODES.length;
+            currentLayout = LAYOUT_MODES[nextIdx];
+
+            // Send the appropriate command
+            if (currentLayout === 'tetris') {
+                send('toggleTetrisMode');
+            } else if (currentLayout === 'mosaic') {
+                send('toggleMosaicMode');
+            } else if (currentLayout === 'clean') {
+                send('toggleCleanMode');
+            } else {
+                // Grid mode - disable all special modes
+                send('setLayoutMode', { mode: 'grid' });
+            }
+
+            // Update label
+            if (el.layoutLabel) {
+                el.layoutLabel.textContent = currentLayout.charAt(0).toUpperCase() + currentLayout.slice(1);
+            }
+            haptic.medium();
+        });
+
         el.btnMore?.addEventListener('click', () => {
             openSheet();
             haptic.light();
         });
 
+        // Favorite button
+        el.btnFavorite?.addEventListener('click', () => {
+            if (selectedStreamId) {
+                send('toggleFavorite', { streamId: selectedStreamId });
+                el.btnFavorite.classList.add('just-set');
+                setTimeout(() => el.btnFavorite.classList.remove('just-set'), 300);
+                haptic.success();
+            }
+        });
+
         // Rating buttons
-        el.ratingStrip?.querySelectorAll('.rating-btn').forEach(btn => {
+        el.ratingStrip?.querySelectorAll('.rating-btn[data-rating]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const rating = parseInt(btn.dataset.rating, 10);
-                if (selectedStreamId) {
+                if (selectedStreamId && !isNaN(rating)) {
                     send('setRating', { streamId: selectedStreamId, rating });
                     btn.classList.add('just-set');
                     setTimeout(() => btn.classList.remove('just-set'), 300);
@@ -765,33 +894,48 @@ const PlexdRemote = (function() {
             closeSheet();
         });
 
-        el.optPauseAll?.addEventListener('click', () => {
-            send('togglePauseAll');
-            haptic.medium();
-            closeSheet();
-        });
-
         el.optRandomAll?.addEventListener('click', () => {
             send('randomSeekAll');
             haptic.medium();
             closeSheet();
         });
 
-        el.optClean?.addEventListener('click', () => {
-            send('toggleCleanMode');
+        el.optMosaic?.addEventListener('click', () => {
+            send('toggleMosaicMode');
+            currentLayout = 'mosaic';
+            if (el.layoutLabel) el.layoutLabel.textContent = 'Mosaic';
             haptic.medium();
             closeSheet();
         });
 
-        el.optTetris?.addEventListener('click', () => {
-            send('toggleTetrisMode');
+        el.optBugeye?.addEventListener('click', () => {
+            send('toggleBugEyeMode');
             haptic.medium();
             closeSheet();
         });
 
-        el.optFullscreen?.addEventListener('click', () => {
+        el.optCoverflow?.addEventListener('click', () => {
+            send('toggleCoverflowMode');
+            haptic.medium();
             closeSheet();
-            setTimeout(() => enterViewer(), 200);
+        });
+
+        el.optInfo?.addEventListener('click', () => {
+            send('toggleStreamInfo');
+            haptic.light();
+            closeSheet();
+        });
+
+        el.optCopyUrl?.addEventListener('click', () => {
+            const stream = getCurrentStream();
+            if (stream?.url) {
+                navigator.clipboard.writeText(stream.url).then(() => {
+                    haptic.success();
+                }).catch(() => {
+                    haptic.light();
+                });
+            }
+            closeSheet();
         });
 
         // Viewer controls
@@ -862,13 +1006,9 @@ const PlexdRemote = (function() {
                     send('randomSeek', { streamId: selectedStreamId });
                     haptic.medium();
                 } else if (relY > 0.67) {
-                    // Bottom third = toggle focus/fullscreen on Mac
-                    if (state?.fullscreenStreamId === selectedStreamId) {
-                        send('exitFullscreen');
-                    } else {
-                        send('enterFullscreen', { streamId: selectedStreamId });
-                    }
-                    haptic.heavy();
+                    // Bottom third = synchronized focus (phone viewer + Mac fullscreen)
+                    send('enterFullscreen', { streamId: selectedStreamId });
+                    enterViewer();
                 } else {
                     // Middle third - divided into left/center/right
                     if (relX < 0.33) {
@@ -1138,12 +1278,6 @@ const PlexdRemote = (function() {
         if (el.optMute) {
             const isMuted = stream?.muted || false;
             el.optMute.classList.toggle('muted', isMuted);
-        }
-        if (el.optClean) {
-            el.optClean.classList.toggle('active', state?.cleanMode || false);
-        }
-        if (el.optTetris) {
-            el.optTetris.classList.toggle('active', state?.tetrisMode || false);
         }
 
         el.moreSheet.classList.remove('hidden');

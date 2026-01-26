@@ -346,6 +346,15 @@ button {
     background: var(--warning);
 }
 
+.hero-status.focused .status-indicator {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+}
+
+.hero-status.focused .status-text {
+    color: var(--accent);
+}
+
 /* Stream position indicator (bottom-center) */
 .hero-position {
     position: absolute;
@@ -574,6 +583,25 @@ button {
     transform: scale(0.9);
 }
 
+/* Favorite button */
+.rating-btn-fav {
+    color: var(--text-muted);
+}
+
+.rating-btn-fav svg {
+    width: 18px;
+    height: 18px;
+}
+
+.rating-btn-fav.active {
+    background: #ff2d55;
+    color: white;
+}
+
+.rating-btn-fav.active svg {
+    filter: drop-shadow(0 0 4px rgba(255, 45, 85, 0.5));
+}
+
 /* Clear button */
 .rating-btn-clear {
     color: var(--text-muted);
@@ -671,10 +699,29 @@ button {
 .filter-tab[data-filter="9"].active { background: var(--rating-9); color: var(--bg-primary); }
 
 /* Show count badge on filter tabs */
-.filter-tab .count {
-    margin-left: 4px;
+.filter-count {
+    margin-left: 2px;
     font-size: 10px;
-    opacity: 0.7;
+    opacity: 0.6;
+    font-weight: 400;
+}
+
+.filter-count:empty {
+    display: none;
+}
+
+.filter-tab.active .filter-count {
+    opacity: 0.8;
+}
+
+/* Favorites filter tab */
+.filter-tab[data-filter="fav"] {
+    color: #ff2d55;
+}
+
+.filter-tab[data-filter="fav"].active {
+    background: #ff2d55;
+    color: white;
 }
 
 /* ============================================
@@ -725,6 +772,15 @@ button {
     object-fit: cover;
 }
 
+.thumb-fav {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    font-size: 12px;
+    color: #ff2d55;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
 .thumb-rating {
     position: absolute;
     bottom: 2px;
@@ -771,38 +827,63 @@ button {
 }
 
 /* ============================================
-   Quick Actions Row
+   Quick Toolbar - 6 buttons
    ============================================ */
-.actions-row {
+.toolbar {
     display: flex;
-    gap: 12px;
+    gap: 6px;
     padding: 4px 0;
+    justify-content: center;
 }
 
-.action-btn {
+.toolbar-btn {
     flex: 1;
+    max-width: 64px;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    height: 48px;
+    gap: 4px;
+    height: 56px;
     background: var(--bg-card);
     border-radius: var(--radius-md);
     color: var(--text-secondary);
-    font-size: 14px;
+    font-size: 10px;
     font-weight: 500;
     transition: all var(--transition-fast);
 }
 
-.action-btn:active {
-    transform: scale(0.96);
+.toolbar-btn:active {
+    transform: scale(0.92);
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
 
-.action-btn svg {
-    width: 20px;
-    height: 20px;
+.toolbar-btn svg {
+    width: 22px;
+    height: 22px;
+}
+
+.toolbar-btn span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* Active states for toolbar buttons */
+.toolbar-btn.active {
+    background: var(--accent);
+    color: var(--text-primary);
+}
+
+.toolbar-btn.audio-focus-active {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.toolbar-btn.audio-focus-active svg {
+    color: var(--success);
 }
 
 /* ============================================

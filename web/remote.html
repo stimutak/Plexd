@@ -114,9 +114,12 @@
                     </button>
                 </section>
 
-                <!-- Rating Strip - Always visible -->
+                <!-- Rating Strip - Always visible (with Favorite toggle) -->
                 <section class="rating-section">
                     <div class="rating-strip" id="rating-strip">
+                        <button class="rating-btn rating-btn-fav" id="btn-favorite" aria-label="Toggle favorite">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                        </button>
                         <button class="rating-btn rating-btn-clear" data-rating="0" aria-label="Clear rating">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
                         </button>
@@ -132,20 +135,21 @@
                     </div>
                 </section>
 
-                <!-- Filter Tabs - Filter by Rating -->
+                <!-- Filter Tabs - Filter by Rating/Favorites -->
                 <section class="filter-section">
                     <div class="filter-tabs" id="filter-tabs">
-                        <button class="filter-tab active" data-filter="all">All</button>
-                        <button class="filter-tab" data-filter="0">☆</button>
-                        <button class="filter-tab" data-filter="1">1</button>
-                        <button class="filter-tab" data-filter="2">2</button>
-                        <button class="filter-tab" data-filter="3">3</button>
-                        <button class="filter-tab" data-filter="4">4</button>
-                        <button class="filter-tab" data-filter="5">5</button>
-                        <button class="filter-tab" data-filter="6">6</button>
-                        <button class="filter-tab" data-filter="7">7</button>
-                        <button class="filter-tab" data-filter="8">8</button>
-                        <button class="filter-tab" data-filter="9">9</button>
+                        <button class="filter-tab active" data-filter="all">All<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="fav">♥<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="0">☆<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="1">1<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="2">2<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="3">3<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="4">4<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="5">5<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="6">6<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="7">7<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="8">8<span class="filter-count"></span></button>
+                        <button class="filter-tab" data-filter="9">9<span class="filter-count"></span></button>
                     </div>
                 </section>
 
@@ -154,13 +158,29 @@
                     <div class="thumbs-strip" id="thumbs-strip"></div>
                 </section>
 
-                <!-- Quick Actions Row -->
-                <section class="actions-row">
-                    <button class="action-btn" id="btn-random" aria-label="Random seek">
+                <!-- Quick Toolbar - 6 icon buttons -->
+                <section class="toolbar">
+                    <button class="toolbar-btn" id="btn-random" aria-label="Random seek">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
                         <span>Random</span>
                     </button>
-                    <button class="action-btn" id="btn-more" aria-label="More options">
+                    <button class="toolbar-btn" id="btn-focus" aria-label="Focus mode">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                        <span>Focus</span>
+                    </button>
+                    <button class="toolbar-btn" id="btn-audio-focus" aria-label="Audio focus">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/></svg>
+                        <span>Audio</span>
+                    </button>
+                    <button class="toolbar-btn" id="btn-pause-all" aria-label="Pause all">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+                        <span>Pause</span>
+                    </button>
+                    <button class="toolbar-btn" id="btn-layout" aria-label="Cycle layout">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4z"/></svg>
+                        <span id="layout-label">Grid</span>
+                    </button>
+                    <button class="toolbar-btn" id="btn-more" aria-label="More options">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
                         <span>More</span>
                     </button>
@@ -174,7 +194,7 @@
             <div class="sheet-content">
                 <div class="sheet-handle"></div>
                 <div class="sheet-header">
-                    <h3>Options</h3>
+                    <h3>More Options</h3>
                 </div>
                 <div class="sheet-options">
                     <button class="sheet-option" id="opt-mute">
@@ -182,32 +202,35 @@
                         <svg class="icon-muted" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
                         <span>Stream Audio</span>
                     </button>
-                    <div class="sheet-divider"></div>
                     <button class="sheet-option" id="opt-mute-all">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
                         <span>Mute All</span>
-                    </button>
-                    <button class="sheet-option" id="opt-pause-all">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
-                        <span>Pause All</span>
                     </button>
                     <button class="sheet-option" id="opt-random-all">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
                         <span>Random All</span>
                     </button>
                     <div class="sheet-divider"></div>
-                    <button class="sheet-option" id="opt-clean">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
-                        <span>Clean Mode</span>
+                    <button class="sheet-option" id="opt-mosaic">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3v8h8V3H3zm6 6H5V5h4v4zm-6 4v8h8v-8H3zm6 6H5v-4h4v4zm4-16v8h8V3h-8zm6 6h-4V5h4v4zm-6 4v8h8v-8h-8zm6 6h-4v-4h4v4z"/></svg>
+                        <span>Mosaic Mode</span>
                     </button>
-                    <button class="sheet-option" id="opt-tetris">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h4v4H4V4zm6 0h4v4h-4V4zm6 0h4v4h-4V4zM4 10h4v4H4v-4zm6 0h4v4h-4v-4zm6 0h4v4h-4v-4zM4 16h4v4H4v-4zm6 0h4v4h-4v-4z"/></svg>
-                        <span>Tetris Mode</span>
+                    <button class="sheet-option" id="opt-bugeye">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                        <span>Bug Eye Mode</span>
+                    </button>
+                    <button class="sheet-option" id="opt-coverflow">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12z"/></svg>
+                        <span>Coverflow Mode</span>
                     </button>
                     <div class="sheet-divider"></div>
-                    <button class="sheet-option" id="opt-fullscreen">
-                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-                        <span>Fullscreen Viewer</span>
+                    <button class="sheet-option" id="opt-info">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                        <span>Toggle Stream Info</span>
+                    </button>
+                    <button class="sheet-option" id="opt-copy-url">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                        <span>Copy Stream URL</span>
                     </button>
                 </div>
                 <button class="sheet-cancel" id="sheet-cancel">Cancel</button>

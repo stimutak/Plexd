@@ -22,8 +22,18 @@
     let selectedVideos = new Set();
     let autoQueueEnabled = false;
 
-    // Default Plexd URL - can be file:// or http://
-    const DEFAULT_PLEXD_URL = '';
+    // Default Plexd URL
+    const DEFAULT_PLEXD_URL = 'http://localhost:8080';
+
+    /**
+     * Ensure URL has a protocol prefix
+     */
+    function normalizeUrl(url) {
+        if (!url) return DEFAULT_PLEXD_URL;
+        url = url.trim();
+        if (url.startsWith('file://') || url.startsWith('http://') || url.startsWith('https://')) return url;
+        return 'http://' + url;
+    }
 
     /**
      * Check if a host is localhost or local network
@@ -83,10 +93,11 @@
             // Load saved settings
             const stored = await chrome.storage.local.get(['plexdUrl', 'autoQueue']);
             if (plexdUrlInput) {
-                plexdUrlInput.value = stored.plexdUrl || DEFAULT_PLEXD_URL;
+                plexdUrlInput.value = normalizeUrl(stored.plexdUrl || DEFAULT_PLEXD_URL);
 
                 // Save URL when changed
                 plexdUrlInput.addEventListener('change', () => {
+                    plexdUrlInput.value = normalizeUrl(plexdUrlInput.value);
                     chrome.storage.local.set({ plexdUrl: plexdUrlInput.value });
                 });
             }
@@ -130,56 +141,160 @@
                 return;
             }
 
-            // Get intercepted streams from chrome.storage
-            const tabUrl = new URL(tab.url);
-            const pageKey = 'streams_' + tabUrl.hostname + tabUrl.pathname;
-            const stored = await chrome.storage.local.get([pageKey]);
-            const storedData = stored[pageKey];
-
+            // PRIMARY: Read stream URLs from page's Performance API
+            // Runs in MAIN world so it sees ALL resources the page actually loaded
+            // Works even if extension was just reloaded (performance entries persist until page reload)
             let interceptedVideos = [];
-            if (storedData && storedData.streams && storedData.streams.length > 0) {
-                interceptedVideos = storedData.streams.map(url => ({
-                    type: 'stream',
-                    url: url,
-                    title: storedData.title + ' (Captured)',
-                    intercepted: true
-                }));
+            try {
+                const perfResults = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id, allFrames: true },
+                    world: 'MAIN',
+                    func: () => {
+                        const urls = [];
+                        const seen = new Set();
+                        performance.getEntriesByType('resource').forEach(entry => {
+                            const lower = entry.name.toLowerCase();
+                            if ((lower.includes('.m3u8') || lower.includes('.mpd')) && !seen.has(entry.name)) {
+                                seen.add(entry.name);
+                                urls.push(entry.name);
+                            }
+                        });
+                        return urls;
+                    }
+                });
+                const seen = new Set();
+                for (const r of (perfResults || [])) {
+                    if (r && r.result) {
+                        for (const url of r.result) {
+                            if (!seen.has(url)) {
+                                seen.add(url);
+                                interceptedVideos.push({
+                                    type: 'stream',
+                                    url: url,
+                                    title: tab.title + ' (Stream)',
+                                    intercepted: true
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('[Plexd] Performance API scan failed:', e);
             }
 
-            // Also try to get DOM video elements via executeScript
+            // FALLBACK: Check background webRequest storage
+            if (interceptedVideos.length === 0) {
+                try {
+                    const stored = await chrome.storage.local.get(['intercepted_' + tab.id]);
+                    const streams = stored['intercepted_' + tab.id];
+                    if (streams && streams.length > 0) {
+                        interceptedVideos = streams.map(url => ({
+                            type: 'stream',
+                            url: url,
+                            title: tab.title + ' (Stream)',
+                            intercepted: true
+                        }));
+                    }
+                } catch {}
+            }
+
+            // FALLBACK 2: Check content.js storage
+            if (interceptedVideos.length === 0) {
+                try {
+                    const tabUrl = new URL(tab.url);
+                    const pageKey = 'streams_' + tabUrl.hostname + tabUrl.pathname;
+                    const stored = await chrome.storage.local.get([pageKey]);
+                    const storedData = stored[pageKey];
+                    if (storedData && storedData.streams && storedData.streams.length > 0) {
+                        interceptedVideos = storedData.streams.map(url => ({
+                            type: 'stream',
+                            url: url,
+                            title: (storedData.title || tab.title) + ' (Stream)',
+                            intercepted: true
+                        }));
+                    }
+                } catch {}
+            }
+
+            // Ask content script for video list (with timeout so popup never hangs)
+            let contentVideos = [];
+            try {
+                const response = await Promise.race([
+                    chrome.tabs.sendMessage(tab.id, { action: 'getVideos' }),
+                    new Promise((_, reject) => setTimeout(() => reject('timeout'), 1500))
+                ]);
+                if (response && response.videos) {
+                    contentVideos = response.videos;
+                }
+            } catch {}
+
+            // Also scan ALL frames via executeScript for <video> elements
+            // (catches videos in iframes that the main frame content script can't see)
             let domVideos = [];
+            const seen = new Set(contentVideos.map(v => v.url));
             try {
                 const scriptResults = await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
+                    target: { tabId: tab.id, allFrames: true },
                     func: () => {
                         const sources = [];
                         const seen = new Set();
                         document.querySelectorAll('video').forEach(video => {
-                            if (video.src && !video.src.startsWith('blob:') && !seen.has(video.src)) {
-                                seen.add(video.src);
-                                sources.push({ type: 'video', url: video.src, title: document.title });
-                            }
-                            if (video.currentSrc && !video.currentSrc.startsWith('blob:') && !seen.has(video.currentSrc)) {
-                                seen.add(video.currentSrc);
-                                sources.push({ type: 'currentSrc', url: video.currentSrc, title: document.title });
-                            }
+                            [video.src, video.currentSrc].forEach(src => {
+                                if (src && !src.startsWith('blob:') && !src.startsWith('data:') && !seen.has(src)) {
+                                    try { new URL(src); } catch { return; }
+                                    seen.add(src);
+                                    sources.push({ type: 'video', url: src, title: video.title || document.title || 'Video' });
+                                }
+                            });
                         });
                         return sources;
                     }
                 });
-                if (scriptResults && scriptResults[0] && scriptResults[0].result) {
-                    domVideos = scriptResults[0].result;
+                for (const r of scriptResults) {
+                    if (r && r.result) {
+                        for (const v of r.result) {
+                            if (!seen.has(v.url)) {
+                                seen.add(v.url);
+                                domVideos.push(v);
+                            }
+                        }
+                    }
                 }
-            } catch (e) {
-                console.log('executeScript failed:', e);
+            } catch {
+                // allFrames can fail on restricted frames, try main frame only
+                try {
+                    const scriptResults = await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: () => {
+                            const sources = [];
+                            document.querySelectorAll('video').forEach(video => {
+                                [video.src, video.currentSrc].forEach(src => {
+                                    if (src && !src.startsWith('blob:') && !src.startsWith('data:')) {
+                                        try { new URL(src); } catch { return; }
+                                        sources.push({ type: 'video', url: src, title: document.title || 'Video' });
+                                    }
+                                });
+                            });
+                            return sources;
+                        }
+                    });
+                    if (scriptResults && scriptResults[0] && scriptResults[0].result) {
+                        for (const v of scriptResults[0].result) {
+                            if (!seen.has(v.url)) {
+                                seen.add(v.url);
+                                domVideos.push(v);
+                            }
+                        }
+                    }
+                } catch {}
             }
 
-            // Combine: intercepted streams first, then DOM videos
-            const allVideos = [...interceptedVideos, ...domVideos];
+            // Combine: intercepted first, then content script, then iframe DOM
+            const allVideos = [...interceptedVideos, ...contentVideos, ...domVideos];
 
             if (allVideos.length > 0) {
                 videos = allVideos;
-                renderVideoList(storedData?.title || tab.title);
+                renderVideoList(tab.title);
             } else {
                 showEmpty('No videos found. Play a video first, then reopen this popup.');
             }
@@ -336,15 +451,27 @@
     }
 
     /**
+     * Send a command to Plexd via the server API
+     */
+    async function sendCommand(action, payload = {}) {
+        const plexdUrl = normalizeUrl(plexdUrlInput.value).replace(/\/$/, '');
+        const resp = await fetch(`${plexdUrl}/api/remote/command`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, payload, timestamp: Date.now() })
+        });
+        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+        return resp.json();
+    }
+
+    /**
      * Send selected videos to Plexd
      */
     async function sendToPlexd() {
         if (selectedVideos.size === 0) return;
 
         const selectedList = Array.from(selectedVideos).map(i => videos[i]);
-
-        // Get Plexd URL
-        const plexdUrl = plexdUrlInput.value;
+        const plexdUrl = normalizeUrl(plexdUrlInput.value);
 
         if (!plexdUrl) {
             showStatus('Please set Plexd URL first', true);
@@ -352,25 +479,11 @@
         }
 
         try {
-            // Send selected streams - Plexd will accumulate them in localStorage
             const newUrls = selectedList.map(v => v.url);
             console.log('[Plexd Popup] Sending:', newUrls);
 
-            const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
-            // Build target URL - for file:// need to use different separator
-            const separator = plexdUrl.includes('?') ? '&' : '?';
-            const targetUrl = `${plexdUrl}${separator}streams=${streamUrls}`;
-
-            // Find existing Plexd tab or create new one
-            const plexdTab = await findPlexdTab(plexdUrl);
-            console.log('[Plexd Popup] Found tab:', plexdTab ? plexdTab.url : 'none');
-
-            if (plexdTab) {
-                await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
-                // Also focus the window
-                await chrome.windows.update(plexdTab.windowId, { focused: true });
-            } else {
-                await chrome.tabs.create({ url: targetUrl });
+            for (const url of newUrls) {
+                await sendCommand('addStream', { url });
             }
 
             showStatus(`Sent ${selectedList.length} video(s) to Plexd`);
@@ -384,7 +497,7 @@
 
         } catch (err) {
             console.error('Send error:', err);
-            showStatus('Failed to send. Is Plexd open?', true);
+            showStatus('Failed to send. Is Plexd running?', true);
         }
     }
 
@@ -395,9 +508,7 @@
         if (selectedVideos.size === 0) return;
 
         const selectedList = Array.from(selectedVideos).map(i => videos[i]);
-
-        // Get Plexd URL
-        const plexdUrl = plexdUrlInput.value;
+        const plexdUrl = normalizeUrl(plexdUrlInput.value);
 
         if (!plexdUrl) {
             showStatus('Please set Plexd URL first', true);
@@ -405,22 +516,11 @@
         }
 
         try {
-            // Send selected streams to queue
             const newUrls = selectedList.map(v => v.url);
             console.log('[Plexd Popup] Queueing:', newUrls);
 
-            const streamUrls = newUrls.map(url => encodeURIComponent(url)).join('|||');
-            const separator = plexdUrl.includes('?') ? '&' : '?';
-            const targetUrl = `${plexdUrl}${separator}queue=${streamUrls}`;
-
-            // Find existing Plexd tab or create new one
-            const plexdTab = await findPlexdTab(plexdUrl);
-
-            if (plexdTab) {
-                await chrome.tabs.update(plexdTab.id, { url: targetUrl, active: true });
-                await chrome.windows.update(plexdTab.windowId, { focused: true });
-            } else {
-                await chrome.tabs.create({ url: targetUrl });
+            for (const url of newUrls) {
+                await sendCommand('queueStream', { url });
             }
 
             showStatus(`Queued ${selectedList.length} video(s)`);
@@ -442,7 +542,7 @@
      * Open Plexd - finds existing tab or creates new one
      */
     async function openPlexd() {
-        const plexdUrl = plexdUrlInput.value;
+        const plexdUrl = normalizeUrl(plexdUrlInput.value);
 
         if (!plexdUrl) {
             showStatus('Please set Plexd URL first', true);

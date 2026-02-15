@@ -12,8 +12,15 @@
     // Store intercepted stream URLs
     const interceptedStreams = new Set();
 
+    // Receive URLs from MAIN world interceptor (intercept.js) via postMessage
+    window.addEventListener('message', (event) => {
+        if (event.source === window && event.data && event.data.type === '__plexd_url' && typeof event.data.url === 'string') {
+            checkForStreamUrl(event.data.url);
+        }
+    });
+
     /**
-     * Intercept fetch to capture .m3u8 and video URLs
+     * Intercept fetch to capture .m3u8 and video URLs (ISOLATED world - backup)
      */
     const originalFetch = window.fetch;
     window.fetch = async function(...args) {

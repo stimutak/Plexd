@@ -604,6 +604,11 @@ const PlexdApp = (function() {
     let tetrisMode = 0;
     window._plexdTetrisMode = tetrisMode;
 
+    // Wall mode: Multi-stream viewing modes for content-dense display
+    // 0 = off, 1 = strips (vertical columns), 2 = crop tiles (stackable zoom), 3 = spotlight (hero + thumbs)
+    let wallMode = 0;
+    window._plexdWallMode = wallMode;
+
     // Coverflow mode: Z-depth overlapping with hover-to-front effects
     let coverflowMode = false;
     window._plexdCoverflowMode = coverflowMode;
@@ -1520,7 +1525,13 @@ const PlexdApp = (function() {
         };
 
         let layout;
-        if (tetrisMode > 0) {
+        if (wallMode === 1) {
+            // Wall: Strips — vertical columns, center-cropped
+            layout = PlexdGrid.calculateStripsLayout(container, streamsToShow);
+        } else if (wallMode === 3) {
+            // Wall: Spotlight — hero + thumbnails
+            layout = PlexdGrid.calculateSpotlightLayout(container, streamsToShow);
+        } else if (tetrisMode > 0) {
             // Tetris mode: Intelligent bin-packing that eliminates black bars
             // Pass the specific mode (1=rows, 2=columns, 3=treemap)
             layout = PlexdGrid.calculateTetrisLayout(container, streamsToShow, tetrisMode);
@@ -1530,6 +1541,14 @@ const PlexdApp = (function() {
         } else {
             // Standard grid layout
             layout = PlexdGrid.calculateLayout(container, streamsToShow);
+        }
+
+        // Wall: Crop Tiles — apply zoom modifier to all cells regardless of layout
+        if (wallMode === 2) {
+            layout.cells.forEach(cell => {
+                cell.objectFit = 'cover';
+                cell.wallCropZoom = 1.8;
+            });
         }
 
         PlexdGrid.applyLayout(containerEl, layout, PlexdStream.getVideoElements());
@@ -1653,6 +1672,16 @@ const PlexdApp = (function() {
             if (coverflowBtn) coverflowBtn.classList.remove('active');
         }
 
+        // Turn off wall layout modes (strips/spotlight) but keep crop tiles (it stacks)
+        if (wallMode === 1 || wallMode === 3) {
+            wallMode = 0;
+            window._plexdWallMode = 0;
+            const wallBtn = document.getElementById('wall-btn');
+            if (wallBtn) wallBtn.classList.remove('active');
+            const app2 = document.querySelector('.plexd-app');
+            if (app2) app2.classList.remove('wall-strips', 'wall-spotlight');
+        }
+
         // Cycle through modes: 0 -> 1 -> 2 -> 3 -> 4 -> 0
         tetrisMode = (tetrisMode + 1) % 5;
         window._plexdTetrisMode = tetrisMode;
@@ -1698,6 +1727,16 @@ const PlexdApp = (function() {
             if (tetrisBtn) tetrisBtn.classList.remove('active');
         }
 
+        // Turn off wall layout modes (strips/spotlight) but keep crop tiles (it stacks)
+        if (wallMode === 1 || wallMode === 3) {
+            wallMode = 0;
+            window._plexdWallMode = 0;
+            const wallBtn = document.getElementById('wall-btn');
+            if (wallBtn) wallBtn.classList.remove('active');
+            const app2 = document.querySelector('.plexd-app');
+            if (app2) app2.classList.remove('wall-strips', 'wall-spotlight');
+        }
+
         coverflowMode = !coverflowMode;
         window._plexdCoverflowMode = coverflowMode;
 
@@ -1730,6 +1769,76 @@ const PlexdApp = (function() {
      */
     function toggleSmartLayoutMode() {
         toggleCoverflowMode();
+    }
+
+    /**
+     * Wall mode names for display
+     */
+    const wallModeNames = ['OFF', 'Strips', 'Crop Tiles', 'Spotlight'];
+
+    /**
+     * Cycle Wall mode — multi-stream viewing modes for content-dense display
+     * Off → Strips → Crop Tiles → Spotlight → Off
+     *
+     * Strips & Spotlight are full layouts (turn off Tetris/Coverflow).
+     * Crop Tiles is a stackable modifier (works on top of current layout).
+     */
+    function cycleWallMode(backward = false) {
+        if (backward) {
+            wallMode = (wallMode - 1 + 4) % 4;
+        } else {
+            wallMode = (wallMode + 1) % 4;
+        }
+        window._plexdWallMode = wallMode;
+
+        const app = document.querySelector('.plexd-app');
+        const wallBtn = document.getElementById('wall-btn');
+
+        // Clear all wall CSS classes
+        if (app) {
+            app.classList.remove('wall-strips', 'wall-crop', 'wall-spotlight');
+        }
+
+        // Strips and Spotlight are full layouts — turn off other layout modes
+        if (wallMode === 1 || wallMode === 3) {
+            if (tetrisMode) {
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                const tetrisBtn = document.getElementById('tetris-btn');
+                if (tetrisBtn) tetrisBtn.classList.remove('active');
+                if (app) {
+                    app.classList.remove('tetris-mode', 'tetris-mode-1', 'tetris-mode-2', 'tetris-mode-3', 'tetris-mode-4', 'tetris-content-visible');
+                }
+            }
+            if (coverflowMode) {
+                coverflowMode = false;
+                window._plexdCoverflowMode = false;
+                const coverflowBtn = document.getElementById('coverflow-btn');
+                if (coverflowBtn) coverflowBtn.classList.remove('active');
+                if (app) {
+                    app.classList.remove('coverflow-mode', 'smart-layout-mode');
+                }
+            }
+        }
+
+        // Apply current wall mode class
+        if (app) {
+            if (wallMode === 1) app.classList.add('wall-strips');
+            else if (wallMode === 2) app.classList.add('wall-crop');
+            else if (wallMode === 3) app.classList.add('wall-spotlight');
+        }
+
+        if (wallBtn) wallBtn.classList.toggle('active', wallMode > 0);
+
+        updateLayout();
+
+        // Show contextual message
+        if (wallMode === 2 && (tetrisMode > 0 || coverflowMode)) {
+            const base = tetrisMode > 0 ? `Tetris ${tetrisModeNames[tetrisMode]}` : 'Coverflow';
+            showMessage(`Wall: Crop Tiles (on ${base})`, 'info');
+        } else {
+            showMessage(`Wall: ${wallModeNames[wallMode]}`, 'info');
+        }
     }
 
     /**
@@ -3122,7 +3231,7 @@ const PlexdApp = (function() {
                 removeDuplicateStreams();
                 break;
             case 'Escape':
-                // Escape priority: Bug Eye > Mosaic > Fullscreen modes
+                // Escape priority: Bug Eye > Mosaic > Wall > Fullscreen modes
                 // Note: capture-phase handler should catch these first
                 if (bugEyeMode) {
                     toggleBugEyeMode(true);
@@ -3130,6 +3239,18 @@ const PlexdApp = (function() {
                 }
                 if (mosaicMode) {
                     toggleMosaicMode(true);
+                    break;
+                }
+                if (wallMode > 0) {
+                    // Reset wall mode to off
+                    wallMode = 0;
+                    window._plexdWallMode = 0;
+                    const wallBtn = document.getElementById('wall-btn');
+                    if (wallBtn) wallBtn.classList.remove('active');
+                    const appEl = document.querySelector('.plexd-app');
+                    if (appEl) appEl.classList.remove('wall-strips', 'wall-crop', 'wall-spotlight');
+                    updateLayout();
+                    showMessage('Wall: OFF', 'info');
                     break;
                 }
                 // Escape handles all fullscreen modes:
@@ -3172,6 +3293,12 @@ const PlexdApp = (function() {
             case 'O':
                 // Toggle Coverflow mode (Z-depth overlapping with hover effects)
                 toggleCoverflowMode();
+                break;
+            case 'w':
+            case 'W':
+                // W = Cycle Wall mode (Strips → Crop Tiles → Spotlight → Off)
+                // Shift+W = Cycle backward
+                cycleWallMode(e.shiftKey);
                 break;
             case '[':
                 // [ = Rotate CCW
@@ -5651,6 +5778,7 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>T</kbd> Cycle Tetris mode</div>
                         <div class="plexd-shortcut"><kbd>Shift+T</kbd> Reset pan positions</div>
                         <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
+                        <div class="plexd-shortcut"><kbd>W</kbd> Cycle Wall mode (Strips/Crop/Spotlight)</div>
                         <div class="plexd-shortcut"><kbd>]</kbd> / <kbd>[</kbd> Rotate CW / CCW</div>
                         <div class="plexd-shortcut"><kbd>}</kbd> / <kbd>{</kbd> Shuffle randomly</div>
                         <div class="plexd-shortcut"><kbd>L</kbd> Force relayout</div>
@@ -7034,6 +7162,7 @@ const PlexdApp = (function() {
         cycleTetrisMode,
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
+        cycleWallMode,
         rotateStreams,
         forceRelayout,
         toggleBugEyeMode,
@@ -7300,6 +7429,10 @@ const PlexdRemote = (function() {
                 PlexdApp.toggleCoverflowMode();
                 sendState();
                 break;
+            case 'cycleWallMode':
+                PlexdApp.cycleWallMode();
+                sendState();
+                break;
 
             // Ratings
             case 'setRating':
@@ -7393,6 +7526,7 @@ const PlexdRemote = (function() {
             fullscreenMode: PlexdStream.getFullscreenMode(),
             viewMode: window.PlexdAppState?.viewMode || 'all',
             tetrisMode: window.PlexdAppState?.tetrisMode || false,
+            wallMode: window.PlexdAppState?.wallMode || 0,
             headerVisible: window.PlexdAppState?.headerVisible || false,
             cleanMode: PlexdStream.isCleanMode ? PlexdStream.isCleanMode() : false,
             // `getAudioFocusMode()` returns a boolean (true = focus on).
@@ -7471,6 +7605,9 @@ window.PlexdAppState = {
     },
     get tetrisMode() {
         return window._plexdTetrisMode || false;
+    },
+    get wallMode() {
+        return window._plexdWallMode || 0;
     },
     get coverflowMode() {
         return window._plexdCoverflowMode || false;

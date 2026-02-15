@@ -243,7 +243,7 @@ const PlexdGrid = (function() {
                     videoWrapper.style.pointerEvents = '';
                 }
 
-                // Apply object-fit to the video element (for Tetris mode)
+                // Apply object-fit to the video element (for Tetris/Wall modes)
                 const video = videoWrapper.querySelector('video');
                 if (video) {
                     if (cell.objectFit === 'cover') {
@@ -259,6 +259,26 @@ const PlexdGrid = (function() {
                         video.style.objectPosition = ''; // Reset when not in cover mode
                         videoWrapper.classList.remove('plexd-tetris-cell');
                     }
+
+                    // Wall: Crop Tiles zoom — scale video inside overflow:hidden wrapper
+                    if (cell.wallCropZoom) {
+                        video.style.transform = `scale(${cell.wallCropZoom})`;
+                        video.style.transformOrigin = typeof PlexdStream !== 'undefined' && PlexdStream.getPanPosition
+                            ? (() => { const p = PlexdStream.getPanPosition(cell.streamId); return `${p.x}% ${p.y}%`; })()
+                            : 'center center';
+                        videoWrapper.classList.add('plexd-wall-crop');
+                    } else {
+                        video.style.transform = '';
+                        video.style.transformOrigin = '';
+                        videoWrapper.classList.remove('plexd-wall-crop');
+                    }
+                }
+
+                // Spotlight hero marker
+                if (cell.isSpotlightHero) {
+                    videoWrapper.classList.add('plexd-spotlight-hero');
+                } else {
+                    videoWrapper.classList.remove('plexd-spotlight-hero');
                 }
             }
         });
@@ -1825,11 +1845,127 @@ const PlexdGrid = (function() {
         };
     }
 
+    // =========================================================================
+    // Wall Mode Layouts — Strips and Spotlight
+    // =========================================================================
+
+    /**
+     * Strips layout — equal-width vertical columns, full container height.
+     * Each stream fills a narrow column with object-fit: cover for center crop.
+     */
+    function calculateStripsLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, mode: 'strips' };
+
+        const gap = 2; // Thin gap between strips
+        const totalGap = gap * (count - 1);
+        const colWidth = (container.width - totalGap) / count;
+
+        const cells = streams.map((stream, i) => ({
+            streamId: stream.id,
+            x: i * (colWidth + gap),
+            y: 0,
+            width: colWidth,
+            height: container.height,
+            objectFit: 'cover'
+        }));
+
+        return { cells, rows: 1, cols: count, mode: 'strips' };
+    }
+
+    /**
+     * Spotlight layout — hero stream at ~65% of screen, rest as thumbnails.
+     * First stream in array is the hero. Thumbnails fill right side and bottom.
+     */
+    function calculateSpotlightLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, mode: 'spotlight' };
+
+        if (count === 1) {
+            return {
+                cells: [{
+                    streamId: streams[0].id,
+                    x: 0, y: 0,
+                    width: container.width,
+                    height: container.height,
+                    objectFit: 'cover',
+                    isSpotlightHero: true
+                }],
+                rows: 1, cols: 1, mode: 'spotlight'
+            };
+        }
+
+        const gap = 3;
+        const thumbCount = count - 1;
+
+        // Hero takes left ~65%, full height
+        // Thumbnails fill a column on the right, plus overflow to bottom row
+        const heroRatio = thumbCount <= 4 ? 0.70 : thumbCount <= 8 ? 0.65 : 0.60;
+        const heroWidth = Math.floor(container.width * heroRatio) - gap;
+        const sideWidth = container.width - heroWidth - gap;
+
+        // How many thumbs fit on the right column vs bottom row?
+        // Right column: stack vertically along the hero's height
+        const maxSideThumbs = Math.min(thumbCount, Math.max(2, Math.floor(container.height / 120)));
+        const sideThumbs = Math.min(thumbCount, maxSideThumbs);
+        const bottomThumbs = thumbCount - sideThumbs;
+
+        const cells = [];
+
+        // Hero cell
+        const heroHeight = bottomThumbs > 0
+            ? Math.floor(container.height * 0.78) - gap
+            : container.height;
+        cells.push({
+            streamId: streams[0].id,
+            x: 0, y: 0,
+            width: heroWidth,
+            height: heroHeight,
+            objectFit: 'cover',
+            isSpotlightHero: true
+        });
+
+        // Right-side thumbnails
+        const sideThumbHeight = (heroHeight - gap * (sideThumbs - 1)) / sideThumbs;
+        for (let i = 0; i < sideThumbs; i++) {
+            cells.push({
+                streamId: streams[1 + i].id,
+                x: heroWidth + gap,
+                y: i * (sideThumbHeight + gap),
+                width: sideWidth,
+                height: sideThumbHeight,
+                objectFit: 'cover'
+            });
+        }
+
+        // Bottom-row thumbnails (if any overflow)
+        if (bottomThumbs > 0) {
+            const bottomY = heroHeight + gap;
+            const bottomHeight = container.height - bottomY;
+            // Bottom row spans full width
+            const bottomThumbWidth = (container.width - gap * (bottomThumbs - 1)) / bottomThumbs;
+            for (let i = 0; i < bottomThumbs; i++) {
+                cells.push({
+                    streamId: streams[1 + sideThumbs + i].id,
+                    x: i * (bottomThumbWidth + gap),
+                    y: bottomY,
+                    width: bottomThumbWidth,
+                    height: bottomHeight,
+                    objectFit: 'cover'
+                });
+            }
+        }
+
+        return { cells, rows: bottomThumbs > 0 ? 2 : 1, cols: count, mode: 'spotlight' };
+    }
+
     // Public API
     return {
         calculateLayout,
         calculateCoverflowLayout,
         calculateTetrisLayout,
+        calculateStripsLayout,
+        calculateSpotlightLayout,
         applyLayout,
         onContainerResize,
         fitToContainer,

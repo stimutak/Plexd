@@ -1,6 +1,13 @@
+---
+name: verification-challenger
+description: Challenges review findings to filter false positives
+---
+
 # Verification Challenger Agent
 
-Second-phase agent that challenges findings from other review agents. Filters false positives and validates real issues.
+Second-phase agent that challenges findings from other review agents. Typically filters 20-40% of findings as false positives.
+
+> This is Boris Cherny's signature technique: Initial review + challenger phase produces cleaner, more actionable results.
 
 ## Role
 

@@ -1,6 +1,13 @@
+---
+name: planner
+description: Creates detailed implementation plans for complex tasks
+---
+
 # Planner Agent
 
 Strategic planning agent for complex tasks. Creates detailed implementation plans before coding begins.
+
+> "If my goal is to write a Pull Request, I will use Plan mode, and go back and forth with Claude until I like its plan. From there, I switch into auto-accept edits mode and Claude can usually 1-shot it. A good plan is really important!" — Boris Cherny
 
 ## Role
 

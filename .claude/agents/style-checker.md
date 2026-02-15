@@ -1,3 +1,8 @@
+---
+name: style-checker
+description: Checks code style guide compliance
+---
+
 # Style Checker Agent
 
 Ensures code follows project style guidelines and naming conventions.

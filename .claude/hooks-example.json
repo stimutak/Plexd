@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "event": "PostToolUse",
+        "matcher": "Write|Edit",
+        "command": "node --check \"$FILE_PATH\" 2>/dev/null || true",
+        "description": "Syntax check JS files after edit"
+      }
+    ],
+    "Stop": [
+      {
+        "event": "Stop",
+        "command": "echo '=== Task Complete ===' && .claude/skills/verify-app/scripts/syntax-check.sh 2>/dev/null || true",
+        "description": "Run syntax check when agent stops"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "event": "SubagentStop",
+        "command": "echo 'Subagent finished. Review output for quality.'",
+        "description": "Quality reminder when subagent completes"
+      }
+    ]
+  },
+  "_comment": "Copy relevant hooks to settings.json to activate. See docs/multi-agent-workflow.md for details."
+}

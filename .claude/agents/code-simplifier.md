@@ -1,3 +1,8 @@
+---
+name: code-simplifier
+description: Removes unnecessary complexity and simplifies code
+---
+
 # Code Simplifier Agent
 
 Simplifies and refactors code after implementation is complete. Removes unnecessary complexity while preserving functionality.

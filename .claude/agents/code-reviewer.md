@@ -1,3 +1,8 @@
+---
+name: code-reviewer
+description: Reviews code for quality, security, and maintainability
+---
+
 # Code Reviewer Agent
 
 Expert code review specialist for the Plexd project. Focuses on quality, security, performance, and maintainability.

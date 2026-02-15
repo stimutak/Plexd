@@ -1,3 +1,8 @@
+---
+name: bug-finder
+description: Finds bugs, edge cases, and failure modes in code
+---
+
 # Bug Finder Agent
 
 Specialized agent for identifying bugs, vulnerabilities, and potential issues in code.

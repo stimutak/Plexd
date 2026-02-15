@@ -1,3 +1,8 @@
+---
+name: parallel-coordinator
+description: Orchestrates multiple agents working in parallel
+---
+
 # Parallel Coordinator Agent
 
 Orchestrates multiple agents working in parallel. Manages task distribution, result aggregation, and conflict resolution.

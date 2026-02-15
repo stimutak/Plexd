@@ -547,66 +547,84 @@ body {
     position: absolute;
     inset: 0;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.8);
+    flex-direction: column;
+    background: rgba(0, 0, 0, 0.85);
     z-index: 20;
+    padding: 12px;
+}
+
+.plexd-error-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-bottom: auto;
 }
 
 .plexd-error-content {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
-    max-width: 80%;
-}
-
-.plexd-error-msg {
-    padding: 12px 20px;
-    background: rgba(239, 68, 68, 0.9);
-    border-radius: 8px;
-    color: #fff;
-    font-size: 14px;
+    justify-content: center;
+    flex: 1;
+    padding: 0 10px 20px;
     text-align: center;
 }
 
-.plexd-error-close {
-    padding: 12px 28px;
-    background: #ef4444;
-    border: none;
-    border-radius: 6px;
-    color: #fff;
-    font-size: 16px;
+.plexd-error-title {
+    color: #999;
+    font-size: 11px;
     font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
 }
 
-.plexd-error-close:hover {
-    background: #dc2626;
+.plexd-error-msg {
+    color: #ccc;
+    font-size: 13px;
+    line-height: 1.4;
+    max-width: 90%;
 }
 
-.plexd-error-actions {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    justify-content: center;
+.plexd-error-detail {
+    color: #666;
+    font-size: 11px;
+    margin-top: 8px;
+    font-family: monospace;
 }
 
 .plexd-error-retry {
-    padding: 12px 28px;
-    background: #3b82f6;
-    border: none;
-    border-radius: 6px;
+    padding: 6px 14px;
+    background: #333;
+    border: 1px solid #555;
+    border-radius: 4px;
     color: #fff;
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background 0.15s, border-color 0.15s;
 }
 
 .plexd-error-retry:hover {
-    background: #2563eb;
+    background: #444;
+    border-color: #666;
+}
+
+.plexd-error-close {
+    padding: 6px 14px;
+    background: transparent;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #888;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.plexd-error-close:hover {
+    background: #2a2a2a;
+    color: #aaa;
 }
 
 /* Recovering state indicator */
@@ -643,8 +661,8 @@ body {
 @media (pointer: coarse) {
     .plexd-error-close,
     .plexd-error-retry {
-        padding: 16px 40px;
-        font-size: 18px;
+        padding: 10px 20px;
+        font-size: 14px;
     }
 }
 
@@ -781,6 +799,20 @@ body {
 .plexd-stream.plexd-selected .plexd-selected-badge {
     opacity: 1;
     transform: translateY(0);
+}
+
+/* Hide selection styling in focused/fullscreen mode - it's redundant */
+.plexd-stream.plexd-fullscreen.plexd-selected {
+    outline: none;
+    box-shadow: none;
+}
+
+.plexd-stream.plexd-fullscreen.plexd-selected::before {
+    display: none;
+}
+
+.plexd-stream.plexd-fullscreen .plexd-selected-badge {
+    display: none;
 }
 
 /* ========================================
@@ -1066,12 +1098,17 @@ body {
 .plexd-history-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 8px 10px;
+    gap: 8px;
+    padding: 7px 10px;
     background: #252525;
     border-radius: 4px;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
     cursor: pointer;
+}
+
+.plexd-history-item.plexd-history-active {
+    border-left: 2px solid #3b82f6;
+    padding-left: 8px;
 }
 
 .plexd-queue-item:hover,
@@ -1079,8 +1116,50 @@ body {
     background: #303030;
 }
 
-.plexd-queue-url,
-.plexd-history-url {
+.plexd-history-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.plexd-history-name {
+    font-size: 12px;
+    color: #e0e0e0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plexd-history-meta {
+    font-size: 10px;
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plexd-history-delete {
+    background: none;
+    border: none;
+    color: #555;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.plexd-history-item:hover .plexd-history-delete {
+    opacity: 1;
+}
+
+.plexd-history-delete:hover {
+    color: #ef4444;
+}
+
+.plexd-queue-url {
     font-size: 12px;
     color: #ccc;
     overflow: hidden;
@@ -1100,12 +1179,6 @@ body {
 
 .plexd-queue-item button:hover {
     color: #ef4444;
-}
-
-.plexd-history-time {
-    font-size: 10px;
-    color: #666;
-    margin-left: 8px;
 }
 
 .plexd-badge {
@@ -1146,12 +1219,25 @@ body {
 }
 
 .plexd-stream-item.selected {
-    background: #3a3a3a;
-    border-left: 3px solid #3b82f6;
+    background: #1e3a5f;
+    outline: 2px solid #3b82f6;
+    outline-offset: -2px;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
 }
 
-.plexd-stream-item.local-file {
+.plexd-stream-item.selected .plexd-stream-name {
+    color: #fff;
+    font-weight: 600;
+}
+
+.plexd-stream-item.local-file:not(.selected) {
     border-left: 3px solid #10b981;
+}
+
+.plexd-stream-item.local-file.selected {
+    outline-color: #10b981;
+    background: #1a3a2e;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
 }
 
 .plexd-stream-info {
@@ -1548,6 +1634,18 @@ body {
 .plexd-stored-file-size {
     font-size: 12px;
     color: #666;
+    min-width: 60px;
+    text-align: right;
+}
+
+.plexd-stored-file-status {
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 65px;
+    text-align: center;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.05);
 }
 
 .plexd-btn-icon {

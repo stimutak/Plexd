@@ -11,6 +11,9 @@ Plexd enables simultaneous playback of multiple video streams in a single applic
 - **Smart Grid Layout**: Automatically arranges videos to maximize display area
 - **Tetris Layout Mode**: Intelligent packing based on video aspect ratios
 - **HLS Support**: Native .m3u8 streaming with auto-max quality selection
+- **HLS CORS Proxy**: Server-side proxy for external HLS streams (bypasses CORS restrictions)
+- **Stream Downloads**: Download any stream as MP4 (local files, HLS remux via ffmpeg, external streams)
+- **Session Persistence**: Streams auto-save and restore across page reloads
 - **Responsive Design**: Adapts to any screen size, optimized for iPad and desktop
 
 ### Rating System
@@ -84,6 +87,7 @@ When Audio Focus is disabled (speaker icon):
 - **History**: Track recently played streams, click to replay
 - **Save Combinations**: Save current stream sets with custom names
 - **Export/Import**: Share stream sets via file (AirDrop compatible)
+- **Per-Stream Download**: Download button on each stream's hover controls (⬇)
 
 ### Stream Info
 - **Resolution Display**: Shows video dimensions
@@ -119,13 +123,19 @@ When Audio Focus is disabled (speaker icon):
 
 ## Quick Start
 
-### Web Application
+### Using Plexd Chrome App (Recommended)
 
-1. Open `web/index.html` in a modern browser (or serve via local server)
-2. Enter a video stream URL in the input field
-3. Click "Add Stream" to add it to the grid
-4. Tap the ☰ hamburger menu (top-right) to show header controls
-5. Use keyboard or touch to navigate
+1. Double-click `~/Applications/Plexd Chrome.app`
+   - Auto-starts the Node.js server if not running
+   - Opens Chrome with persistent Plexd profile (history, saved sets, extension)
+   - Restores your last session automatically
+
+### Manual Setup
+
+1. Start the server: `node --watch server.js 8080`
+2. Open `http://localhost:8080` in Chrome
+3. Enter a video stream URL in the input field
+4. Click "Add Stream" or drag-and-drop video files
 
 ### iPad Setup
 
@@ -138,8 +148,9 @@ When Audio Focus is disabled (speaker icon):
 
 **Works:**
 - Direct video URLs (MP4, WebM, OGG)
-- HLS streams (.m3u8) - auto-selects highest quality
+- HLS streams (.m3u8) - auto-selects highest quality, external streams proxied through server
 - DASH streams (.mpd) - with browser support
+- Drag-and-drop local video files (auto-upload + HLS transcode)
 - Public video URLs without authentication
 
 **Does NOT work:**
@@ -172,60 +183,99 @@ The Plexd extension detects video URLs on any webpage and sends them to Plexd.
 - Network requests for .m3u8, .mpd, .mp4
 - Embedded video players
 
-## Deployment
+## Server
 
-### Vercel
+Plexd runs a Node.js server that provides:
 
-The project includes `vercel.json` for easy deployment:
+- **Static file serving** for the web app
+- **Remote control relay** (`/api/remote/*`) for iPhone PWA
+- **File upload & storage** (`/api/files/*`) with deduplication
+- **HLS transcoding** (`/api/hls/*`) using hardware-accelerated h264_videotoolbox (libx264 fallback)
+- **HLS CORS proxy** (`/api/proxy/hls`) for external streams blocked by CORS
+- **HLS-to-MP4 download** (`/api/proxy/hls/download`) using ffmpeg remux (`-c copy -bsf:a aac_adtstoasc`)
+
+### Running the Server
+
+```bash
+# Development (auto-restart on changes)
+node --watch server.js 8080
+
+# Or use the autostart script (starts server + Chrome with debug port)
+./scripts/autostart.sh
+
+# Or use the macOS app (~/Applications/Plexd Chrome.app)
+```
+
+### Deployment
+
+Vercel deployment available for static-only mode:
 
 ```bash
 vercel deploy
-```
-
-### Local Server
-
-```bash
-cd web
-python -m http.server 8000
-# or
-npx serve .
 ```
 
 ## Project Structure
 
 ```
 Plexd/
-├── CLAUDE.md          # Development guidelines
-├── README.md          # This file
-├── vercel.json        # Vercel deployment config
-├── web/               # Web application
-│   ├── index.html     # Main entry
+├── CLAUDE.md           # Development guidelines
+├── README.md           # This file
+├── server.js           # Node server (remote relay, file storage, HLS proxy/transcode)
+├── vercel.json         # Vercel deployment config
+├── uploads/            # Server-side video storage (gitignored)
+│   ├── hls/            # HLS transcoded segments
+│   └── metadata.json   # File metadata
+├── scripts/
+│   ├── autostart.sh    # MBP autostart (server + Chrome + extension)
+│   └── chrome-test.js  # Chrome remote debugging test runner
+├── web/                # Web application
+│   ├── index.html      # Main entry
+│   ├── remote.html     # iPhone remote control PWA
+│   ├── hls-manager.html # HLS transcode management UI
 │   ├── css/
-│   │   └── plexd.css  # All styles
+│   │   ├── plexd.css   # Main app styles
+│   │   └── remote.css  # Remote control styles
 │   └── js/
-│       ├── app.js     # Main app logic, queue, history, ratings
-│       ├── grid.js    # Smart grid layout engine
-│       └── stream.js  # Stream manager, controls, playback
-└── extension/         # Browser extension
-    ├── manifest.json  # Extension config (Manifest V3)
-    ├── popup.html     # Extension popup UI
-    ├── popup.js       # Popup logic
-    ├── content.js     # Video detection script
-    └── background.js  # Service worker
+│       ├── app.js      # Main app logic, queue, history, downloads, ratings
+│       ├── grid.js     # Smart grid layout engine
+│       ├── stream.js   # Stream manager, controls, HLS proxy, playback
+│       └── remote.js   # Remote control logic
+├── extension/          # Chrome extension (Manifest V3)
+│   ├── manifest.json   # Extension config
+│   ├── popup.html      # Extension popup UI
+│   ├── popup.js        # Popup logic (send/queue to Plexd)
+│   ├── content.js      # Video/stream detection (intercepts .m3u8/.mpd)
+│   └── background.js   # Service worker (network request interception)
+└── .chrome-profile/    # Persistent Chrome profile for Plexd (gitignored)
 ```
 
 ## Data Persistence
 
-All data stored in localStorage:
+Session state auto-saves on every stream add, on page unload, and every 30 seconds. All data stored in localStorage:
 
 | Key | Content |
 |-----|---------|
-| `plexd_streams` | Current active stream URLs |
+| `plexd_streams` | Current active stream URLs (uses serverUrl when available) |
 | `plexd_queue` | Queued stream URLs |
 | `plexd_history` | Last 50 played streams with timestamps |
 | `plexd_combinations` | Saved stream sets with names |
 | `plexd_ratings` | Stream ratings (URL → 1-9) |
+| `plexd_favorites` | Favorited stream URLs |
 | `plexd_audio_focus` | Audio focus mode preference (true/false) |
+
+## Stream Downloads
+
+Every stream has a download button (⬇) in its hover controls. Download behavior depends on stream type:
+
+| Stream Type | Download Method |
+|-------------|----------------|
+| Server file (original exists) | Direct download from `/api/files/<id>` |
+| Server HLS (original deleted) | ffmpeg remux of HLS segments to MP4 |
+| External HLS (.m3u8) | ffmpeg remux via server proxy |
+| Blob URL (dropped file) | Direct blob download |
+| Regular URL | Fetch with CORS proxy fallback |
+
+The server-side download uses `ffmpeg -c copy -bsf:a aac_adtstoasc` to remux HLS segments into a streamable fragmented MP4 without re-encoding.
 
 ## Performance Targets
 

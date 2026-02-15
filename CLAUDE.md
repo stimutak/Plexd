@@ -63,12 +63,13 @@
 Plexd/
 ├── CLAUDE.md           # This file - AI guidelines
 ├── README.md           # Project documentation
-├── server.js           # Node server with remote relay + file storage + HLS transcoding
+├── server.js           # Node server: remote relay, file storage, HLS transcode, CORS proxy, download
 ├── uploads/            # Server-side video storage (gitignored)
 │   ├── hls/            # HLS transcoded segments
 │   └── metadata.json   # File metadata
 ├── scripts/
-│   └── autostart.sh    # MBP autostart with Chrome debugging
+│   ├── autostart.sh    # MBP autostart with Chrome debugging
+│   └── chrome-test.js  # Chrome remote debugging test runner
 ├── web/                # Web application
 │   ├── index.html      # Main entry point
 │   ├── remote.html     # iPhone remote PWA
@@ -80,10 +81,17 @@ Plexd/
 │   │   └── remote.css  # Remote styles
 │   ├── js/
 │   │   ├── grid.js     # Smart grid layout algorithm
-│   │   ├── stream.js   # Stream management
-│   │   ├── app.js      # Main application logic
+│   │   ├── stream.js   # Stream management, HLS proxy, controls overlay
+│   │   ├── app.js      # Main app logic, downloads, history, session save
 │   │   └── remote.js   # Remote control logic
 │   └── assets/         # Icons, images
+├── extension/          # Chrome extension (Manifest V3)
+│   ├── manifest.json   # Extension config (host_permissions: <all_urls>)
+│   ├── popup.html      # Extension popup UI
+│   ├── popup.js        # Send/queue to Plexd via /api/remote/command
+│   ├── content.js      # Video/stream detection on pages
+│   └── background.js   # Network request interception (.m3u8, .mpd)
+├── .chrome-profile/    # Persistent Chrome profile (gitignored)
 ├── ios/                # iOS application (future)
 └── docs/               # Additional documentation
 ```
@@ -161,12 +169,46 @@ All zones are single-tap. No double-tap required.
 - Purge via "Files" button in Sets panel or `/api/files/purge`
 
 ### HLS Transcoding
-- Videos auto-transcode to HLS in background after upload
-- Uses h264_videotoolbox (Apple Silicon hardware) with libx264 fallback
+- Transcoding starts **paused** — must be started via Files modal (D→F→Start) or `POST /api/hls/start`
+- Uses **HEVC** (H.265) via `hevc_videotoolbox` (Apple Silicon hardware) with `libx265` fallback
+- `-tag:v hvc1` required for Safari/iPhone HEVC HLS compatibility
+- HEVC produces ~40-50% smaller files than H.264 at equivalent quality
+- Target devices: Apple Silicon, iPhone, high-spec Win11 (all have hardware HEVC decode)
 - Queue system limits to 4 concurrent transcodes (configurable: `MAX_CONCURRENT_TRANSCODES`)
-- Original files preserved - delete manually via HLS Manager (`/hls-manager.html`)
+- Original files auto-deleted after successful transcode
 - Client polls `/api/files/transcode-status` and swaps to HLS URL when ready
 - Disk space checked before transcoding (min 500MB required)
+
+### HLS CORS Proxy
+- Server-side proxy at `/api/proxy/hls?url=<encoded-url>` for external HLS streams
+- `fetchUrl()` helper follows redirects (up to 5), sets User-Agent header
+- `rewriteM3u8()` rewrites all URLs in m3u8 manifests (segment refs + `URI=` in `#EXT-X-KEY` etc.) to route through proxy
+- Manifests detected by URL (`.m3u8`) or Content-Type (`mpegurl`)
+- Segments streamed as binary passthrough with `Content-Length` preserved
+- `stream.js` stores both `url` (original, for display/save) and `sourceUrl` (proxied, for playback)
+- `getProxiedHlsUrl(url)` skips proxying for localhost/same-host URLs
+
+### HLS-to-MP4 Download
+- Endpoint: `GET /api/proxy/hls/download?url=<encoded-url>&name=<filename>`
+- Uses `ffmpeg -c copy -bsf:a aac_adtstoasc -movflags frag_keyframe+empty_moov -f mp4 pipe:1`
+- `-bsf:a aac_adtstoasc`: Required — HLS uses ADTS-wrapped AAC, MP4 needs ASC format
+- `-movflags frag_keyframe+empty_moov`: Enables streaming to stdout without seeking
+- `-user_agent`: Browser User-Agent string to avoid CDN blocks
+- Backpressure handling: pauses ffmpeg stdout when response buffer is full
+- Logs file size on completion for diagnostics
+
+### Session Auto-Save
+- `saveCurrentStreams()` saves to `localStorage['plexd_streams']`
+- Uses `s.serverUrl || s.url` (prefers server URL over ephemeral blob URLs)
+- Deduplicates by URL key and fileId
+- Triggered on: `addStream()`, `beforeunload`, 30-second interval
+- `addStreamSilent()` used for restoring (no history, no messages)
+
+### Chrome Extension
+- Uses server relay (`POST /api/remote/command`) with `{ action, payload, timestamp }` format
+- Health check: `GET /api/remote/state` with 3-second timeout
+- `host_permissions: ["<all_urls>"]` for cross-origin fetch to Plexd server
+- Auto-loaded via `--load-extension` in autostart script and Plexd Chrome app
 
 ## Prohibited Practices
 
@@ -243,6 +285,17 @@ This project uses a Boris Cherny-inspired multi-agent workflow for efficient dev
 | `/plan` | Enter planning mode for complex tasks |
 | `/parallel-review` | Real-time strategy mode parallel review |
 | `/shared-knowledge` | Update CLAUDE.md with learnings |
+| `/test-and-commit` | Parallel verify, then commit if passing |
+
+### Skills (`.claude/skills/`)
+
+| Skill | Purpose |
+|-------|---------|
+| `/verify-app` | End-to-end app verification (syntax, server, browser) |
+| `/retrospective` | Extract session learnings, update CLAUDE.md |
+| `/perf-audit` | Performance audit for video streaming |
+
+**Full guide**: See `docs/multi-agent-workflow.md` for comprehensive documentation.
 
 ### Two-Phase Review Loop
 
@@ -343,20 +396,26 @@ For panels with selectable items:
 
 **Architecture:**
 - Queue-based system prevents CPU overload (`transcodeQueue`, `activeTranscodes`)
-- `MAX_CONCURRENT_TRANSCODES = 4` for M4 Max (adjust per machine)
+- `MAX_CONCURRENT_TRANSCODES = 4` for M4 (adjust per machine)
 - Jobs tracked in `transcodingJobs` object with status/progress
+- Guard `transcodingJobs[fileId]` access — job can be deleted mid-transcode by cleanup
 
-**Encoder Fallback:**
+**Encoder: HEVC (H.265)**
 ```javascript
 // Hardware first, software fallback
 runTranscode(fileId, useSoftwareEncoder = false)
-// If h264_videotoolbox fails, auto-retries with libx264
+// If hevc_videotoolbox fails, auto-retries with libx265
 ```
+- `-tag:v hvc1` is **required** for Safari/iPhone HEVC HLS playback
+- Originals auto-deleted after successful transcode
 
 **Key APIs:**
-- `POST /api/files/upload` - Upload, returns fileId, starts transcode
+- `POST /api/files/upload` - Upload, returns fileId, queues transcode
+- `POST /api/hls/start` - Unpause and queue all pending files
+- `POST /api/hls/resume` / `POST /api/hls/pause` - Toggle queue processing
 - `GET /api/files/transcode-status?fileId=X` - Poll for progress
 - `GET /api/hls/list` - List all files with transcode status
+- `GET /api/hls/status` - Queue status (paused, queueLength, activeCount)
 - `DELETE /api/hls/delete/:id` - Delete HLS only (keep original)
 - `DELETE /api/hls/delete-original/:id` - Delete original only (keep HLS)
 
@@ -365,3 +424,27 @@ runTranscode(fileId, useSoftwareEncoder = false)
 deleteFileAndHLS(fileId, { deleteOriginal, deleteHLS, cancelTranscode })
 ```
 Use this instead of inline deletion code (DRY pattern).
+
+### Stream URL Patterns
+
+Streams maintain two URL properties:
+- `stream.url` — Original URL (for display, dedup, saving, history)
+- `stream.sourceUrl` — Actual URL for media loading (may be proxied via `/api/proxy/hls`)
+
+**Download filename resolution** (in `downloadStream()`):
+1. `stream.fileName` (set during file drop)
+2. `fileId` from `extractServerFileId()` (original filename for server files)
+3. `getDownloadName(url)` — walks URL path, skips generic names (master, playlist, index)
+
+**`addStream` vs `addStreamSilent`:**
+- `addStream()` — full add: dedup check, history, auto-save, message
+- `addStreamSilent()` — restore only: dedup check, no history, no message (for auto-load, sets, queue)
+- `addStreamFromFile()` — file drop: creates blob URL, uploads to server, adds server URL to history after upload
+
+### Plexd Chrome App
+
+Located at `~/Applications/Plexd Chrome.app` (AppleScript app, native ARM64+x86_64):
+- Auto-starts Node.js server if not running on port 8080
+- Launches Chrome with `--user-data-dir=.chrome-profile` (persistent profile)
+- Loads extension via `--load-extension`
+- Opens `http://localhost:8080/?autoload=last`

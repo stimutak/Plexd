@@ -137,8 +137,8 @@ start_server() {
 
     cd "$PROJECT_DIR"
 
-    # Start server in background
-    node server.js "$PORT" > /tmp/plexd-server.log 2>&1 &
+    # Start server in background with --watch for auto-restart on changes
+    node --watch server.js "$PORT" > /tmp/plexd-server.log 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be ready
@@ -168,26 +168,16 @@ launch_chrome() {
     local user_data_dir="$SCRIPT_DIR/../.chrome-profile"
     mkdir -p "$user_data_dir"
 
-    # Launch Chrome
-    if [ "$OS" = "macos" ]; then
-        "$CHROME_PATH" \
-            --remote-debugging-port="$DEBUG_PORT" \
-            --user-data-dir="$user_data_dir" \
-            --no-first-run \
-            --disable-default-apps \
-            --disable-popup-blocking \
-            --start-maximized \
-            "$url" &
-    else
-        "$CHROME_PATH" \
-            --remote-debugging-port="$DEBUG_PORT" \
-            --user-data-dir="$user_data_dir" \
-            --no-first-run \
-            --disable-default-apps \
-            --disable-popup-blocking \
-            --start-maximized \
-            "$url" &
-    fi
+    # Launch Chrome with Plexd extension
+    "$CHROME_PATH" \
+        --remote-debugging-port="$DEBUG_PORT" \
+        --user-data-dir="$user_data_dir" \
+        --load-extension="$PROJECT_DIR/extension" \
+        --no-first-run \
+        --disable-default-apps \
+        --disable-popup-blocking \
+        --start-maximized \
+        "$url" &
 
     CHROME_PID=$!
 

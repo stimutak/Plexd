@@ -1529,7 +1529,16 @@ const PlexdApp = (function() {
             // Wall: Strips — vertical columns, center-cropped
             layout = PlexdGrid.calculateStripsLayout(container, streamsToShow);
         } else if (wallMode === 3) {
-            // Wall: Spotlight — hero + thumbnails
+            // Wall: Spotlight — hero is the selected stream (or first if none selected)
+            const selected = PlexdStream.getSelectedStream();
+            if (selected) {
+                const idx = streamsToShow.findIndex(s => s.id === selected.id);
+                if (idx > 0) {
+                    // Move selected to front so it becomes the hero
+                    const hero = streamsToShow.splice(idx, 1)[0];
+                    streamsToShow.unshift(hero);
+                }
+            }
             layout = PlexdGrid.calculateSpotlightLayout(container, streamsToShow);
         } else if (tetrisMode > 0) {
             // Tetris mode: Intelligent bin-packing that eliminates black bars
@@ -1544,10 +1553,14 @@ const PlexdApp = (function() {
         }
 
         // Wall: Crop Tiles — apply zoom modifier to all cells regardless of layout
+        // Selected stream gets a bigger zoom to stand out as the "hero crop"
         if (wallMode === 2) {
+            const selectedStream = PlexdStream.getSelectedStream();
+            const selectedId = selectedStream ? selectedStream.id : null;
             layout.cells.forEach(cell => {
                 cell.objectFit = 'cover';
-                cell.wallCropZoom = 1.8;
+                cell.wallCropZoom = (cell.streamId === selectedId) ? 2.2 : 1.8;
+                cell.isWallCropSelected = (cell.streamId === selectedId);
             });
         }
 
@@ -1863,6 +1876,25 @@ const PlexdApp = (function() {
                 : PlexdStream.getNextStreamId(focusedId, true);
             if (nextId) {
                 PlexdStream.enterFocusedMode(nextId);
+            }
+            return;
+        }
+
+        // In Spotlight or Crop Tiles mode, rotate cycles the selected stream
+        // (changes which stream is hero/highlighted) instead of reordering
+        if (wallMode === 2 || wallMode === 3) {
+            const selected = PlexdStream.getSelectedStream();
+            const allStreams = PlexdStream.getAllStreams().filter(s => !s.hidden);
+            if (allStreams.length > 0) {
+                const currentIdx = selected ? allStreams.findIndex(s => s.id === selected.id) : -1;
+                let nextIdx;
+                if (reverse) {
+                    nextIdx = currentIdx <= 0 ? allStreams.length - 1 : currentIdx - 1;
+                } else {
+                    nextIdx = currentIdx >= allStreams.length - 1 ? 0 : currentIdx + 1;
+                }
+                PlexdStream.selectStream(allStreams[nextIdx].id);
+                updateLayout();
             }
             return;
         }

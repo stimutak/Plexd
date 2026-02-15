@@ -280,6 +280,13 @@ const PlexdGrid = (function() {
                 } else {
                     videoWrapper.classList.remove('plexd-spotlight-hero');
                 }
+
+                // Crop Tiles selected highlight
+                if (cell.isWallCropSelected) {
+                    videoWrapper.classList.add('plexd-wall-crop-selected');
+                } else {
+                    videoWrapper.classList.remove('plexd-wall-crop-selected');
+                }
             }
         });
 

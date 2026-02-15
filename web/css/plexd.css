@@ -2255,14 +2255,14 @@ body {
 }
 
 /* Selected stream in center - prominent display */
+/* NOTE: Do NOT use !important on transform/opacity — it breaks CSS transitions
+   during coverflow navigation. The JS already sets correct values via inline styles. */
 .plexd-app.coverflow-mode .plexd-stream.plexd-coverflow-selected {
     z-index: 100 !important;
     box-shadow:
         0 0 0 3px rgba(139, 92, 246, 0.8),
         0 20px 60px rgba(0, 0, 0, 0.6),
         0 0 80px rgba(139, 92, 246, 0.3);
-    transform: none !important;
-    opacity: 1 !important;
 }
 
 /* Add glow ring to selected stream */
@@ -2395,13 +2395,9 @@ body {
 }
 
 /* --- Wall: Strips --- */
-/* Vertical columns with center-cropped content */
-.plexd-app.wall-strips #plexd-container {
-    display: flex;
-    flex-direction: row;
-    gap: 2px;
-    align-items: stretch;
-}
+/* Vertical columns with center-cropped content
+   Layout is calculated by calculateStripsLayout (absolute positioning),
+   not CSS flex — this avoids conflicts with applyLayout's inline styles. */
 
 .plexd-app.wall-strips #plexd-container::before {
     content: 'STRIPS';
@@ -2461,6 +2457,13 @@ body {
 .plexd-app.wall-crop .plexd-stream {
     overflow: hidden;
     border-radius: 4px;
+    transition: box-shadow 0.2s ease;
+}
+
+/* Selected stream in Crop mode gets a highlight ring and bigger zoom */
+.plexd-wall-crop-selected {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.8), 0 4px 20px rgba(0, 0, 0, 0.5);
+    z-index: 10;
 }
 
 /* --- Wall: Spotlight --- */

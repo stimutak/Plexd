@@ -13,9 +13,81 @@ const PlexdApp = (function() {
     // ========================================
 
     const DB_NAME = 'PlexdLocalFiles';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;  // Keep at 2 - can't downgrade IndexedDB
     const STORE_NAME = 'files';
     let dbInstance = null;
+
+    // ========================================
+    // Persistent Video Folder Handle
+    // ========================================
+
+    const FOLDER_DB_NAME = 'PlexdVideoFolder';
+    const FOLDER_STORE_NAME = 'handle';
+    let folderDbInstance = null;
+    let cachedFolderHandle = null;
+
+    async function openFolderDb() {
+        if (folderDbInstance) return folderDbInstance;
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(FOLDER_DB_NAME, 1);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                folderDbInstance = request.result;
+                resolve(folderDbInstance);
+            };
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(FOLDER_STORE_NAME)) {
+                    db.createObjectStore(FOLDER_STORE_NAME);
+                }
+            };
+        });
+    }
+
+    async function saveVideoFolderHandle(handle) {
+        const db = await openFolderDb();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(FOLDER_STORE_NAME, 'readwrite');
+            const store = tx.objectStore(FOLDER_STORE_NAME);
+            const request = store.put(handle, 'videoFolder');
+            request.onsuccess = () => {
+                cachedFolderHandle = handle;
+                console.log('[Plexd] Video folder saved:', handle.name);
+                resolve();
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async function getVideoFolderHandle() {
+        if (cachedFolderHandle) return cachedFolderHandle;
+        try {
+            const db = await openFolderDb();
+            return new Promise((resolve) => {
+                const tx = db.transaction(FOLDER_STORE_NAME, 'readonly');
+                const store = tx.objectStore(FOLDER_STORE_NAME);
+                const request = store.get('videoFolder');
+                request.onsuccess = () => {
+                    cachedFolderHandle = request.result || null;
+                    resolve(cachedFolderHandle);
+                };
+                request.onerror = () => resolve(null);
+            });
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function requestFolderPermission(handle) {
+        if (!handle) return false;
+        try {
+            const permission = await handle.requestPermission({ mode: 'read' });
+            return permission === 'granted';
+        } catch (e) {
+            console.log('[Plexd] Folder permission denied or handle invalid');
+            return false;
+        }
+    }
 
     // ========================================
     // Video File Detection
@@ -42,21 +114,53 @@ const PlexdApp = (function() {
      */
     function openDatabase() {
         return new Promise((resolve, reject) => {
+            let settled = false;
+            const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+            // Timeout - don't wait more than 2 seconds for IndexedDB
+            const timeoutId = setTimeout(() => {
+                console.warn('[Plexd] IndexedDB open timeout');
+                dbInstance = null;
+                settle(reject, new Error('Database open timeout'));
+            }, 2000);
+
+            // Check if cached instance is still valid
             if (dbInstance) {
-                resolve(dbInstance);
-                return;
+                try {
+                    // Test if connection is still valid by checking objectStoreNames
+                    if (dbInstance.objectStoreNames.contains(STORE_NAME)) {
+                        clearTimeout(timeoutId);
+                        settle(resolve, dbInstance);
+                        return;
+                    }
+                } catch (e) {
+                    // Connection is closed/invalid, clear cache
+                    dbInstance = null;
+                }
             }
 
             const request = indexedDB.open(DB_NAME, DB_VERSION);
 
             request.onerror = () => {
+                clearTimeout(timeoutId);
                 console.error('[Plexd] IndexedDB error:', request.error);
-                reject(request.error);
+                settle(reject, request.error);
             };
 
             request.onsuccess = () => {
+                clearTimeout(timeoutId);
                 dbInstance = request.result;
-                resolve(dbInstance);
+                // Handle connection closing unexpectedly
+                dbInstance.onclose = () => { dbInstance = null; };
+                dbInstance.onerror = () => { dbInstance = null; };
+                settle(resolve, dbInstance);
+            };
+
+            request.onblocked = () => {
+                clearTimeout(timeoutId);
+                console.warn('[Plexd] IndexedDB blocked - close other tabs');
+                dbInstance = null;
+                settle(reject, new Error('Database blocked'));
             };
 
             request.onupgradeneeded = (event) => {
@@ -205,22 +309,41 @@ const PlexdApp = (function() {
     async function getAllStoredFiles() {
         try {
             const db = await openDatabase();
+
+            // Fast path: just get keys, never read blob data
             const tx = db.transaction(STORE_NAME, 'readonly');
             const store = tx.objectStore(STORE_NAME);
+            const keys = await new Promise((resolve, reject) => {
+                let settled = false;
+                const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
 
-            return new Promise((resolve, reject) => {
-                const request = store.getAll();
+                // Timeout for the transaction itself
+                const timeoutId = setTimeout(() => {
+                    console.warn('[Plexd] getAllKeys timeout');
+                    settle(resolve, []);
+                }, 2000);
+
+                const request = store.getAllKeys();
                 request.onsuccess = () => {
-                    const files = request.result.map(f => ({
-                        id: f.id,
-                        setName: f.setName,
-                        fileName: f.fileName,
-                        size: f.size || 0,
-                        savedAt: f.savedAt || 0
-                    }));
-                    resolve(files);
+                    clearTimeout(timeoutId);
+                    settle(resolve, request.result || []);
                 };
-                request.onerror = () => reject(request.error);
+                request.onerror = () => {
+                    clearTimeout(timeoutId);
+                    settle(reject, request.error);
+                };
+            });
+
+            // Parse keys to extract metadata (key format: "setName::fileName")
+            return keys.map(key => {
+                const parts = key.split('::');
+                return {
+                    id: key,
+                    setName: parts[0] || 'Unknown',
+                    fileName: parts[1] || key,
+                    size: 0,
+                    savedAt: 0
+                };
             });
         } catch (err) {
             console.error('[Plexd] Failed to get all stored files:', err);
@@ -299,6 +422,22 @@ const PlexdApp = (function() {
         }, TRANSCODE_POLL_INTERVAL_MS);
 
         transcodingPolls[fileId] = { stream, intervalId };
+    }
+
+    /**
+     * Stop polling for a specific stream (called when stream is removed)
+     * @param {object} stream - Stream object being removed
+     */
+    function stopTranscodePollForStream(stream) {
+        // Find and clear any polling interval for this stream
+        for (const [fileId, poll] of Object.entries(transcodingPolls)) {
+            if (poll.stream === stream || poll.stream?.id === stream?.id) {
+                clearInterval(poll.intervalId);
+                delete transcodingPolls[fileId];
+                console.log(`[Plexd] Stopped transcode polling for removed stream`);
+                break;
+            }
+        }
     }
 
     /**
@@ -453,6 +592,11 @@ const PlexdApp = (function() {
     let slotAssignTimeout = null;
     const DOUBLE_TAP_THRESHOLD = 300; // ms
 
+    // Double-tap detection for / key
+    // Single / = random seek selected, double // = random seek all
+    let lastSlashTime = 0;
+    let slashTimeout = null;
+
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
     // 0 = off, 1 = row-pack (rows with varying heights), 2 = column-pack (columns with varying widths),
@@ -546,6 +690,10 @@ const PlexdApp = (function() {
 
         // Check for autoload parameter (used by autostart script)
         handleAutoload();
+
+        // Auto-save session state on page close and periodically
+        window.addEventListener('beforeunload', saveCurrentStreams);
+        setInterval(saveCurrentStreams, 30000); // Every 30s as safety net
 
         console.log('Plexd initialized');
     }
@@ -782,6 +930,17 @@ const PlexdApp = (function() {
      * @param {File} [fileObj] - Original File object (for efficient saving)
      */
     function addStreamFromFile(objectUrl, fileName, fileObj = null) {
+        // Check for duplicates by fileName (handles blob vs server URL for same file)
+        const existing = findDuplicateStream(objectUrl, fileName);
+        if (existing) {
+            console.log(`[Plexd] addStreamFromFile: duplicate found for ${fileName}`);
+            PlexdStream.selectStream(existing.id);
+            showMessage('File already added', 'info');
+            // Revoke the blob URL since we're not using it
+            URL.revokeObjectURL(objectUrl);
+            return;
+        }
+
         const stream = PlexdStream.createStream(objectUrl, {
             autoplay: true,
             muted: true
@@ -818,6 +977,9 @@ const PlexdApp = (function() {
                     stream.serverFileId = result.fileId;
                     console.log(`[Plexd] Server URL ready for ${fileName}: ${result.url}`);
 
+                    // Add server URL to history (blob URLs are ephemeral, server URLs persist)
+                    addToHistory(result.url);
+
                     // If transcoding started, poll for HLS completion
                     if (result.transcoding && !result.hlsReady) {
                         pollTranscodeStatus(result.fileId, stream, fileName);
@@ -825,8 +987,6 @@ const PlexdApp = (function() {
                 }
             });
         }
-
-        // Note: We don't add file streams to history since object URLs are temporary
         showMessage(`Added: ${fileName}`, 'success');
     }
 
@@ -1050,9 +1210,8 @@ const PlexdApp = (function() {
      * Add stream without showing message (for loading saved streams)
      */
     function addStreamSilent(url) {
-        // Avoid duplicates - equality based on normalized URL (network URLs).
-        const key = urlEqualityKey(url);
-        const existing = PlexdStream.getAllStreams().find(s => urlEqualityKey(s.url) === key);
+        // Avoid duplicates - check by URL, fileName, and server fileId
+        const existing = findDuplicateStream(url);
         if (existing) {
             console.log(`[Plexd] addStreamSilent: duplicate, selecting existing stream`);
             PlexdStream.selectStream(existing.id);
@@ -1140,6 +1299,12 @@ const PlexdApp = (function() {
             if (isTypingTarget(e.target)) return;
 
             if (e.key === 'f' || e.key === 'F') {
+                // If Sets panel is open, F opens files modal (handled by handleSetsPanelKeyboard)
+                const setsPanel = document.getElementById('saved-panel');
+                if (setsPanel && setsPanel.classList.contains('plexd-panel-open')) {
+                    return; // Let handleSetsPanelKeyboard handle it
+                }
+
                 e.preventDefault();
                 const mode = PlexdStream.getFullscreenMode();
                 console.log(`[Plexd] F key pressed, current mode=${mode}`);
@@ -1225,9 +1390,8 @@ const PlexdApp = (function() {
      * Add a stream to the display
      */
     function addStream(url) {
-        // Avoid duplicates - equality based on normalized URL (network URLs).
-        const key = urlEqualityKey(url);
-        const existing = PlexdStream.getAllStreams().find(s => urlEqualityKey(s.url) === key);
+        // Avoid duplicates - check by URL, fileName, and server fileId
+        const existing = findDuplicateStream(url);
         if (existing) {
             PlexdStream.selectStream(existing.id);
             if (existing.wrapper && existing.wrapper.focus) {
@@ -1251,6 +1415,9 @@ const PlexdApp = (function() {
 
         // Add to history
         addToHistory(url);
+
+        // Auto-save session state
+        saveCurrentStreams();
 
         showMessage(`Added stream: ${truncateUrl(url)}`, 'success');
         return true;
@@ -1565,6 +1732,50 @@ const PlexdApp = (function() {
         toggleCoverflowMode();
     }
 
+    /**
+     * Rotate stream positions in the grid
+     * @param {boolean} reverse - If true, rotate counterclockwise, else clockwise
+     * CW: each stream moves to next position (first goes to last)
+     * CCW: each stream moves to previous position (last goes to first)
+     */
+    function rotateStreams(reverse = false) {
+        const count = PlexdStream.getStreamCount();
+        if (count < 2) {
+            showMessage('Need 2+ streams to rotate', 'warning');
+            return;
+        }
+
+        // In focus mode, navigate to next/prev stream instead of rotating
+        const fullscreenMode = PlexdStream.getFullscreenMode();
+        const focusedId = PlexdStream.getFullscreenStream();
+        if ((fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') && focusedId) {
+            const nextId = reverse
+                ? PlexdStream.getPrevStreamId(focusedId, true)
+                : PlexdStream.getNextStreamId(focusedId, true);
+            if (nextId) {
+                PlexdStream.enterFocusedMode(nextId);
+            }
+            return;
+        }
+
+        // Normal mode: rotate stream order
+        // CW visually = first to last in array
+        // CCW visually = last to first in array
+        PlexdStream.rotateStreamOrder(!reverse);
+
+        // Relayout with new order
+        updateLayout();
+        showMessage(`Rotated ${reverse ? 'CCW' : 'CW'}`, 'info');
+    }
+
+    /**
+     * Force relayout of the grid
+     */
+    function forceRelayout() {
+        updateLayout();
+        showMessage('Layout refreshed', 'info');
+    }
+
     // Bug Eye mode state
     let bugEyeMode = false;
     let bugEyeOverlay = null;
@@ -1636,11 +1847,25 @@ const PlexdApp = (function() {
         bugEyeOverlay.className = 'plexd-bugeye-overlay active';
         bugEyeOverlay.id = 'plexd-bugeye-overlay';
 
+        // Click anywhere on overlay to close
+        bugEyeOverlay.onclick = () => toggleBugEyeMode(true);
+
+        // Handle keyboard on overlay (Escape or B to close)
+        bugEyeOverlay.tabIndex = 0;
+        bugEyeOverlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' || e.key === 'b' || e.key === 'B') {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleBugEyeMode(true);
+            }
+        });
+        bugEyeOverlay.focus();
+
         // Close button
         const closeBtn = document.createElement('button');
         closeBtn.className = 'plexd-bugeye-close';
         closeBtn.innerHTML = '&times;';
-        closeBtn.title = 'Close (Esc)';
+        closeBtn.title = 'Close (B or Esc)';
         closeBtn.onclick = (e) => { e.stopPropagation(); toggleBugEyeMode(true); };
         bugEyeOverlay.appendChild(closeBtn);
 
@@ -1857,6 +2082,20 @@ const PlexdApp = (function() {
         mosaicOverlay = document.createElement('div');
         mosaicOverlay.className = 'plexd-mosaic-overlay';
         mosaicOverlay.id = 'plexd-mosaic-overlay';
+
+        // Click anywhere on overlay to close
+        mosaicOverlay.onclick = () => toggleMosaicMode(true);
+
+        // Handle keyboard on overlay (Escape or Shift+B to close)
+        mosaicOverlay.tabIndex = 0;
+        mosaicOverlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' || ((e.key === 'b' || e.key === 'B') && e.shiftKey)) {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleMosaicMode(true);
+            }
+        });
+        mosaicOverlay.focus();
 
         // Add close button
         const closeBtn = document.createElement('button');
@@ -2621,6 +2860,10 @@ const PlexdApp = (function() {
         // Ignore only when typing into text-entry controls (not sliders/buttons).
         if (isTypingTarget(e.target)) return;
 
+        // Let browser handle Cmd/Ctrl shortcuts (refresh, new tab, etc.)
+        // Exception: Ctrl/Cmd+S is intentionally overridden for save
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() !== 's') return;
+
         // Handle Sets panel keyboard navigation first
         if (handleSetsPanelKeyboard(e)) return;
 
@@ -2930,6 +3173,21 @@ const PlexdApp = (function() {
                 // Toggle Coverflow mode (Z-depth overlapping with hover effects)
                 toggleCoverflowMode();
                 break;
+            case '[':
+                // [ = Rotate CCW
+                rotateStreams(true);
+                break;
+            case ']':
+                // ] = Rotate CW
+                rotateStreams(false);
+                break;
+            case '{':
+            case '}':
+                // { or } = Shuffle randomly
+                PlexdStream.shuffleStreamOrder();
+                updateLayout();
+                showMessage('Shuffled', 'info');
+                break;
             case 'b':
             case 'B':
                 // B = Bug Eye mode (compound vision), Shift+B = Mosaic mode (cleaner)
@@ -3113,23 +3371,32 @@ const PlexdApp = (function() {
                 }
                 break;
             case '/':
-                // / : Random seek selected stream (near arrow keys for easy access)
+                // / : Random seek selected, // : Random seek all
                 e.preventDefault();
-                randomSeekSelected();
+                {
+                    const now = Date.now();
+                    if ((now - lastSlashTime) < DOUBLE_TAP_THRESHOLD) {
+                        // Double tap: random seek all
+                        if (slashTimeout) { clearTimeout(slashTimeout); slashTimeout = null; }
+                        lastSlashTime = 0;
+                        randomSeekAll();
+                    } else {
+                        // Single tap: delay to check for double
+                        lastSlashTime = now;
+                        slashTimeout = setTimeout(() => {
+                            slashTimeout = null;
+                            randomSeekSelected();
+                        }, DOUBLE_TAP_THRESHOLD);
+                    }
+                }
                 break;
             case '\\':
-                // \ : Random seek ALL streams (backslash, near /)
-                e.preventDefault();
-                randomSeekAll();
-                showMessage('Random seek all', 'info');
-                break;
-            case '[':
-                // [ : Rewind selected stream to beginning
+                // \ : Rewind selected stream to beginning
                 e.preventDefault();
                 rewindSelected();
                 break;
-            case '{':
-                // { (Shift+[) : Rewind all streams to beginning
+            case '|':
+                // | (Shift+\) : Rewind all streams to beginning
                 e.preventDefault();
                 rewindAll();
                 break;
@@ -3337,9 +3604,15 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Validate URL format
+     * Validate URL format (supports both absolute and relative URLs)
      */
     function isValidUrl(string) {
+        if (!string || typeof string !== 'string') return false;
+        // Allow relative URLs starting with /
+        if (string.startsWith('/')) return true;
+        // Allow blob URLs
+        if (string.startsWith('blob:')) return true;
+        // Check absolute URLs
         try {
             new URL(string);
             return true;
@@ -3453,8 +3726,8 @@ const PlexdApp = (function() {
      * Check if a stream should be saved (has sufficient duration and is not a blob URL)
      */
     function shouldSaveStream(stream) {
-        // Exclude blob URLs - they're temporary and won't work after browser restarts
-        if (isBlobUrl(stream.url)) return false;
+        // Exclude blob URLs unless they have a server URL (uploaded/transcoded)
+        if (isBlobUrl(stream.url) && !stream.serverUrl) return false;
 
         const duration = stream.video && stream.video.duration;
         // Save if duration is unknown (not loaded yet) or meets minimum
@@ -3463,18 +3736,25 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Save current streams to localStorage (excludes local files and short videos)
+     * Save current streams to localStorage (auto-restores on reload)
+     * Uses serverUrl when available so blob URLs survive reload.
      */
     function saveCurrentStreams() {
         const streams = PlexdStream.getAllStreams();
         const urls = [];
         const seen = new Set();
+        const seenFileIds = new Set();
         streams.forEach(s => {
             if (!shouldSaveStream(s)) return;
-            const key = urlEqualityKey(s.url);
+            // Prefer serverUrl (HLS/uploaded) over blob/raw URL
+            const url = s.serverUrl || s.url;
+            const key = urlEqualityKey(url);
+            const fileId = extractServerFileId(url);
             if (seen.has(key)) return;
+            if (fileId && seenFileIds.has(fileId.toLowerCase())) return;
             seen.add(key);
-            urls.push(s.url);
+            if (fileId) seenFileIds.add(fileId.toLowerCase());
+            urls.push(url);
         });
         localStorage.setItem('plexd_streams', JSON.stringify(urls));
     }
@@ -3529,8 +3809,9 @@ const PlexdApp = (function() {
         }
 
         // Separate local files from URL streams
-        const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName);
-        const urlStreams = streams.filter(s => !isBlobUrl(s.url));
+        // If a local file has a server HLS URL, use that instead (no re-upload needed on load)
+        const localFileStreams = streams.filter(s => isBlobUrl(s.url) && s.fileName && !s.serverUrl);
+        const urlStreams = streams.filter(s => !isBlobUrl(s.url) || s.serverUrl);
         const shortVideos = urlStreams.filter(s => !shouldSaveStream(s)).length;
         const validUrlStreams = urlStreams.filter(s => shouldSaveStream(s));
 
@@ -3565,14 +3846,21 @@ const PlexdApp = (function() {
             }
         }
 
-        // Dedupe URLs by normalized equality key to avoid saving the same stream twice
+        // Dedupe URLs by normalized equality key AND server fileId to avoid saving the same stream twice
+        // Use serverUrl (HLS) when available instead of blob URL
         const urls = [];
-        const seen = new Set();
+        const seenKeys = new Set();
+        const seenFileIds = new Set();
         validUrlStreams.forEach(s => {
-            const key = urlEqualityKey(s.url);
-            if (seen.has(key)) return;
-            seen.add(key);
-            urls.push(s.url);
+            const url = s.serverUrl || s.url;
+            const key = urlEqualityKey(url);
+            // Also extract server fileId to catch /api/files/X vs /api/hls/X duplicates
+            const fileId = extractServerFileId(url);
+            if (seenKeys.has(key)) return;
+            if (fileId && seenFileIds.has(fileId.toLowerCase())) return;
+            seenKeys.add(key);
+            if (fileId) seenFileIds.add(fileId.toLowerCase());
+            urls.push(url);
         });
         // Save local files with their ratings
         const localFilesData = localFileStreams.map(s => ({
@@ -3854,6 +4142,25 @@ const PlexdApp = (function() {
 
         console.log(`[Plexd] Set "${name}" has ${(combo.urls || []).length} URLs, ${localFiles.length} local files`);
 
+        // Upgrade server file URLs to HLS if available
+        const serverFiles = await getServerFileList();
+        if (combo.urls && combo.urls.length > 0) {
+            combo.urls = combo.urls.map(url => {
+                // Check if this is a server file URL (/api/files/{fileId})
+                // Handle both relative and absolute URLs
+                const match = url.match(/\/api\/files\/([^/?]+)/);
+                if (match) {
+                    const fileId = decodeURIComponent(match[1]);
+                    const serverFile = serverFiles.find(f => f.fileId === fileId);
+                    if (serverFile && serverFile.hlsReady && serverFile.hlsUrl) {
+                        console.log(`[Plexd] Upgrading ${fileId} to HLS: ${serverFile.hlsUrl}`);
+                        return serverFile.hlsUrl;
+                    }
+                }
+                return url;
+            });
+        }
+
         // Chain of modals: login domains first, then local files
         const loadWithFiles = (providedFiles) => {
             console.log(`[Plexd] loadWithFiles called with ${providedFiles.length} files, now loading streams...`);
@@ -3867,15 +4174,53 @@ const PlexdApp = (function() {
         };
 
         if (localFiles.length > 0) {
-            // First try to load from disc storage
+            // Check if local files exist on server (HLS or original) - reuse serverFiles from above
+            const serverMatches = {};
+            localFiles.forEach(fileName => {
+                const match = serverFiles.find(f =>
+                    (f.hlsReady || f.originalExists) && (f.fileName === fileName || f.originalFileName === fileName)
+                );
+                if (match) {
+                    // Prefer HLS URL if available, fall back to original
+                    serverMatches[fileName] = match.hlsUrl || match.url;
+                }
+            });
+
+            // If all files found on server, use server URLs directly
+            if (Object.keys(serverMatches).length === localFiles.length) {
+                console.log('[Plexd] All local files found on server, using HLS URLs');
+                // Convert to URL streams format - add server URLs to combo.urls temporarily
+                const serverUrls = localFiles.map(f => serverMatches[f]);
+                combo.urls = [...(combo.urls || []), ...serverUrls];
+                combo.localFiles = []; // Clear local files since we're using server
+                loadWithFiles([]);
+                return;
+            }
+
+            // Some files on server - filter out matched ones
+            const remainingLocalFiles = localFiles.filter(f => !serverMatches[f]);
+            if (Object.keys(serverMatches).length > 0) {
+                console.log(`[Plexd] ${Object.keys(serverMatches).length} files found on server, ${remainingLocalFiles.length} still needed`);
+                // Add server URLs to combo
+                const serverUrls = localFiles.filter(f => serverMatches[f]).map(f => serverMatches[f]);
+                combo.urls = [...(combo.urls || []), ...serverUrls];
+            }
+
+            // No remaining local files needed - all found on server
+            if (remainingLocalFiles.length === 0) {
+                loadWithFiles([]);
+                return;
+            }
+
+            // Then try to load remaining from disc storage
             if (combo.localFilesSavedToDisc) {
                 showMessage('Loading local files from storage...', 'info');
                 const loadedFiles = [];
                 let loadedCount = 0;
                 const missingFiles = [];
 
-                for (let i = 0; i < localFiles.length; i++) {
-                    const fileName = localFiles[i];
+                for (let i = 0; i < remainingLocalFiles.length; i++) {
+                    const fileName = remainingLocalFiles[i];
                     const file = await loadLocalFileFromDisc(name, fileName);
                     if (file) {
                         loadedFiles[i] = file;
@@ -3892,15 +4237,13 @@ const PlexdApp = (function() {
                     // Some files missing - show modal for remaining
                     showLocalFilesModal(name, missingFiles, (additionalFiles) => {
                         // Merge loaded and additional files
-                        // additionalFiles indices correspond to missingFiles order
                         let addIdx = 0;
-                        for (let i = 0; i < localFiles.length; i++) {
+                        for (let i = 0; i < remainingLocalFiles.length; i++) {
                             if (!loadedFiles[i]) {
-                                // This slot was missing - check if user provided it
                                 if (additionalFiles[addIdx]) {
                                     loadedFiles[i] = additionalFiles[addIdx];
                                 }
-                                addIdx++; // Always increment for missing slots
+                                addIdx++;
                             }
                         }
                         loadWithFiles(loadedFiles);
@@ -3908,7 +4251,7 @@ const PlexdApp = (function() {
                 }
             } else {
                 // Files not saved to disc - show modal
-                showLocalFilesModal(name, localFiles, loadWithFiles);
+                showLocalFilesModal(name, remainingLocalFiles, loadWithFiles);
             }
         } else {
             loadWithFiles([]);
@@ -3944,12 +4287,17 @@ const PlexdApp = (function() {
                     <div class="plexd-drop-text">Drop video files here or click to browse</div>
                     <input type="file" id="local-files-input" multiple accept="video/*,.mov,.mp4,.m4v,.webm,.mkv,.avi,.ogv,.3gp,.flv,.mpeg,.mpg" style="display: none;">
                 </div>
-                <button id="local-modal-folder" class="plexd-button plexd-button-secondary" style="margin-top: 10px; width: 100%; white-space: nowrap; overflow: visible;">
-                    Select Folder to Search...
-                </button>
+                <div style="display: flex; gap: 10px; margin-top: 10px;">
+                    <button id="local-modal-autoscan" class="plexd-button plexd-button-primary" style="flex: 1;">
+                        Quick Scan
+                    </button>
+                    <button id="local-modal-folder" class="plexd-button plexd-button-secondary" style="flex: 1;">
+                        Pick Folder...
+                    </button>
+                </div>
                 <div id="local-modal-status" class="plexd-modal-hint" style="color: #4ade80; min-height: 20px;"></div>
                 <div class="plexd-modal-hint">
-                    Files will be matched by name. Use "Select Folder" to auto-find files in a directory.
+                    Quick Scan uses your saved folder (or Downloads). Pick Folder to choose a different location.
                 </div>
                 <div class="plexd-modal-actions">
                     <button id="local-modal-cancel" class="plexd-button plexd-button-secondary">Cancel</button>
@@ -3964,9 +4312,13 @@ const PlexdApp = (function() {
         const dropZone = document.getElementById('local-files-drop-zone');
         const fileInput = document.getElementById('local-files-input');
 
-        // Handle file selection
+        // Handle file selection - supports both File objects and server file objects {name, url}
         function handleFiles(files) {
             Array.from(files).forEach(file => {
+                // Determine if this is a File object or a server file object
+                const isFileObject = file instanceof File;
+                const fileName = isFileObject ? file.name : file.name;
+
                 // Find matching expected file by name
                 const fileItems = modal.querySelectorAll('.plexd-local-file-item');
                 let matched = false;
@@ -3977,16 +4329,21 @@ const PlexdApp = (function() {
 
                     // Match by exact name or similar name (case-insensitive, without extension)
                     const expectedBase = expected.replace(/\.[^/.]+$/, '').toLowerCase();
-                    const fileBase = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+                    const fileBase = fileName.replace(/\.[^/.]+$/, '').toLowerCase();
 
-                    if (!matched && (file.name === expected || expectedBase === fileBase)) {
-                        // Create blob URL and store with File object for efficient saving
-                        const objectUrl = URL.createObjectURL(file);
-                        providedFiles[idx] = { url: objectUrl, fileName: file.name, fileObj: file };
+                    if (!matched && (fileName === expected || expectedBase === fileBase)) {
+                        // For File objects, create blob URL; for server files, use provided URL
+                        if (isFileObject) {
+                            const objectUrl = URL.createObjectURL(file);
+                            providedFiles[idx] = { url: objectUrl, fileName: fileName, fileObj: file };
+                        } else {
+                            // Server file - already has URL
+                            providedFiles[idx] = { url: file.url, fileName: fileName, isServerFile: true };
+                        }
 
                         // Update UI
                         item.classList.add('plexd-local-file-matched');
-                        item.querySelector('.plexd-local-file-status').textContent = '✓ ' + file.name;
+                        item.querySelector('.plexd-local-file-status').textContent = '✓ ' + fileName;
                         matched = true;
                     }
                 });
@@ -3998,14 +4355,18 @@ const PlexdApp = (function() {
                         const expected = item.dataset.expected;
                         const idx = parseInt(item.dataset.index);
                         const expectedBase = expected.replace(/\.[^/.]+$/, '').toLowerCase();
-                        const fileBase = file.name.replace(/\.[^/.]+$/, '').toLowerCase();
+                        const fileBase = fileName.replace(/\.[^/.]+$/, '').toLowerCase();
 
                         if (providedFiles[idx] === undefined &&
                             (expectedBase.includes(fileBase) || fileBase.includes(expectedBase))) {
-                            const objectUrl = URL.createObjectURL(file);
-                            providedFiles[idx] = { url: objectUrl, fileName: file.name, fileObj: file };
+                            if (isFileObject) {
+                                const objectUrl = URL.createObjectURL(file);
+                                providedFiles[idx] = { url: objectUrl, fileName: fileName, fileObj: file };
+                            } else {
+                                providedFiles[idx] = { url: file.url, fileName: fileName, isServerFile: true };
+                            }
                             item.classList.add('plexd-local-file-matched');
-                            item.querySelector('.plexd-local-file-status').textContent = '✓ ' + file.name;
+                            item.querySelector('.plexd-local-file-status').textContent = '✓ ' + fileName;
                             matched = true;
                         }
                     });
@@ -4013,8 +4374,27 @@ const PlexdApp = (function() {
             });
         }
 
-        // Click to browse
-        dropZone.addEventListener('click', () => fileInput.click());
+        // Click to browse - use File System Access API to start in Downloads
+        dropZone.addEventListener('click', async () => {
+            if ('showOpenFilePicker' in window) {
+                try {
+                    const handles = await window.showOpenFilePicker({
+                        startIn: 'downloads',
+                        multiple: true,
+                        types: [{
+                            description: 'Video files',
+                            accept: { 'video/*': ['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg'] }
+                        }]
+                    });
+                    const files = await Promise.all(handles.map(h => h.getFile()));
+                    handleFiles(files);
+                } catch (e) {
+                    if (e.name !== 'AbortError') console.error('File picker error:', e);
+                }
+            } else {
+                fileInput.click();
+            }
+        });
         fileInput.addEventListener('change', (e) => {
             if (e.target.files) handleFiles(e.target.files);
         });
@@ -4044,85 +4424,227 @@ const PlexdApp = (function() {
             }
         }
 
+        // Shared folder scanning function
+        async function scanFolderForVideos(dirHandle) {
+            const foundFiles = [];
+            let scannedCount = 0;
+            let errorCount = 0;
+
+            async function searchDir(handle, depth = 0) {
+                if (depth > 10) return;
+                try {
+                    for await (const entry of handle.values()) {
+                        try {
+                            if (entry.kind === 'file') {
+                                scannedCount++;
+                                if (scannedCount % 50 === 0) {
+                                    setStatus(`Scanning... ${scannedCount} files checked`);
+                                }
+                                const file = await entry.getFile();
+                                if (isVideoFile(file)) {
+                                    foundFiles.push(file);
+                                }
+                            } else if (entry.kind === 'directory' && !entry.name.startsWith('.')) {
+                                await searchDir(entry, depth + 1);
+                            }
+                        } catch (e) {
+                            errorCount++;
+                        }
+                    }
+                } catch (e) {
+                    errorCount++;
+                }
+            }
+
+            await searchDir(dirHandle);
+            console.log(`[Plexd] Scan: ${scannedCount} files, ${foundFiles.length} videos, ${errorCount} skipped`);
+            return foundFiles;
+        }
+
+        // Quick Scan logic - extracted for auto-scan on modal open
+        const autoscanBtn = document.getElementById('local-modal-autoscan');
+
+        // Server-side scan (no permission needed)
+        // Priority: 1) Server uploads, 2) HLS folder, 3) Downloads
+        async function performServerScan() {
+            const allFiles = [];
+            const sources = [];
+
+            try {
+                // 1. Check server uploads first
+                setStatus('Checking server uploads...');
+                const uploadResp = await fetch('/api/files/list');
+                if (uploadResp.ok) {
+                    const uploads = await uploadResp.json();
+                    if (uploads.length > 0) {
+                        uploads.forEach(f => {
+                            allFiles.push({
+                                name: f.fileName,
+                                url: f.url,
+                                size: f.size,
+                                isServerUpload: true
+                            });
+                        });
+                        sources.push('uploads');
+                    }
+                }
+
+                // 2. Scan HLS folder
+                setStatus('Checking transcoded files...');
+                const hlsResp = await fetch('/api/files/scan-local?folder=uploads/hls');
+                if (hlsResp.ok) {
+                    const hlsData = await hlsResp.json();
+                    if (hlsData.files?.length > 0) {
+                        hlsData.files.forEach(f => {
+                            allFiles.push({
+                                name: f.name,
+                                url: `/api/files/local?path=${encodeURIComponent(f.path)}`,
+                                size: f.size,
+                                isHLS: true
+                            });
+                        });
+                        sources.push('hls');
+                    }
+                }
+
+                // 3. Scan Downloads
+                setStatus('Checking Downloads...');
+                const dlResp = await fetch('/api/files/scan-local');
+                if (dlResp.ok) {
+                    const dlData = await dlResp.json();
+                    if (dlData.files?.length > 0) {
+                        dlData.files.forEach(f => {
+                            allFiles.push({
+                                name: f.name,
+                                url: `/api/files/local?path=${encodeURIComponent(f.path)}`,
+                                size: f.size,
+                                isDownloads: true
+                            });
+                        });
+                        sources.push('Downloads');
+                    }
+                }
+
+                if (allFiles.length === 0) return null;
+                return { files: allFiles, sources: sources.join(', ') };
+            } catch (e) {
+                console.log('[Plexd] Server scan failed:', e.message);
+                return null;
+            }
+        }
+
+        async function performQuickScan(autoMode = false) {
+            try {
+                autoscanBtn.disabled = true;
+                folderBtn.disabled = true;
+
+                // Try server-side scan first (no permission needed)
+                const serverResult = await performServerScan();
+                if (serverResult && serverResult.files.length > 0) {
+                    handleFiles(serverResult.files);
+                    const matchedCount = providedFiles.filter(Boolean).length;
+                    const matchRatio = matchedCount / expectedFiles.length;
+                    if (matchedCount > 0) {
+                        setStatus(`Found ${serverResult.files.length} videos (${serverResult.sources}), matched ${matchedCount}/${expectedFiles.length}`);
+                        return { success: true, matchedCount, matchRatio };
+                    }
+                }
+
+                // Fall back to File System Access API
+                let dirHandle = await getVideoFolderHandle();
+                if (dirHandle) {
+                    setStatus(`Requesting access to ${dirHandle.name}...`);
+                    const hasPermission = await requestFolderPermission(dirHandle);
+                    if (!hasPermission) {
+                        if (autoMode) {
+                            setStatus('Permission needed - click Quick Scan to grant access');
+                            return { success: false, needsPermission: true };
+                        }
+                        setStatus('Permission denied, pick a new folder...');
+                        dirHandle = null;
+                    }
+                }
+
+                // No saved handle or permission denied - show picker (auto-opens to Downloads)
+                if (!dirHandle) {
+                    if (autoMode) {
+                        setStatus('No matches in Downloads - use Quick Scan or Pick Folder');
+                        return { success: false, noFolder: true };
+                    }
+                    setStatus('Select your video folder...');
+                    dirHandle = await window.showDirectoryPicker({
+                        startIn: 'downloads',
+                        mode: 'read'
+                    });
+                    await saveVideoFolderHandle(dirHandle);
+                }
+
+                setStatus(`Scanning ${dirHandle.name}...`);
+                const foundFiles = await scanFolderForVideos(dirHandle);
+
+                if (foundFiles.length > 0) {
+                    handleFiles(foundFiles);
+                    const matchedCount = providedFiles.filter(Boolean).length;
+                    const matchRatio = matchedCount / expectedFiles.length;
+                    setStatus(`Found ${foundFiles.length} videos, matched ${matchedCount}/${expectedFiles.length}`);
+                    return { success: true, matchedCount, matchRatio };
+                } else {
+                    setStatus('No videos found in folder', true);
+                    return { success: false, noVideos: true };
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    setStatus(`Error: ${e.message}`, true);
+                } else {
+                    setStatus('');
+                }
+                return { success: false, error: e };
+            } finally {
+                autoscanBtn.disabled = false;
+                folderBtn.disabled = false;
+            }
+        }
+
+        autoscanBtn.addEventListener('click', () => performQuickScan(false));
+
         if ('showDirectoryPicker' in window) {
             folderBtn.addEventListener('click', async () => {
                 try {
                     folderBtn.disabled = true;
+                    autoscanBtn.disabled = true;
                     setStatus('Selecting folder...');
-                    const dirHandle = await window.showDirectoryPicker();
-                    setStatus('Searching...');
+                    const dirHandle = await window.showDirectoryPicker({
+                        startIn: 'downloads',
+                        mode: 'read'
+                    });
 
-                    // Recursively search for video files, skipping inaccessible files
-                    const foundFiles = [];
-                    let scannedCount = 0;
-                    let errorCount = 0;
-
-                    async function searchDir(handle, depth = 0) {
-                        if (depth > 10) return; // Limit recursion depth
-                        console.log(`[Plexd] Scanning directory at depth ${depth}: ${handle.name || 'root'}`);
-                        try {
-                            for await (const entry of handle.values()) {
-                                try {
-                                    if (entry.kind === 'file') {
-                                        scannedCount++;
-                                        // Update UI periodically
-                                        if (scannedCount % 50 === 0) {
-                                            setStatus(`Scanning... ${scannedCount} files checked`);
-                                        }
-                                        const file = await entry.getFile();
-                                        const ext = file.name.toLowerCase().split('.').pop();
-                                        if (isVideoFile(file)) {
-                                            foundFiles.push(file);
-                                            console.log(`[Plexd] Found video: ${file.name} (type: ${file.type || 'unknown'})`);
-                                        } else if (scannedCount <= 20) {
-                                            // Log first 20 non-video files for debugging
-                                            console.log(`[Plexd] Not a video: ${file.name} (type: ${file.type || 'unknown'}, ext: .${ext})`);
-                                        }
-                                    } else if (entry.kind === 'directory') {
-                                        // Skip hidden directories (start with .)
-                                        if (!entry.name.startsWith('.')) {
-                                            await searchDir(entry, depth + 1);
-                                        }
-                                    }
-                                } catch (fileErr) {
-                                    // Skip files we can't access (permissions, system files, etc.)
-                                    errorCount++;
-                                    console.log(`[Plexd] Skipping inaccessible: ${entry.name} (${fileErr.message})`);
-                                }
-                            }
-                        } catch (dirErr) {
-                            // Skip directories we can't access
-                            errorCount++;
-                            console.log(`[Plexd] Skipping inaccessible directory: ${handle.name || 'unknown'} (${dirErr.message})`);
-                        }
-                    }
-
-                    await searchDir(dirHandle);
-
-                    console.log(`[Plexd] Folder scan complete: ${scannedCount} files scanned, ${foundFiles.length} videos found, ${errorCount} skipped`);
+                    // Save and scan
+                    await saveVideoFolderHandle(dirHandle);
+                    setStatus(`Scanning ${dirHandle.name}...`);
+                    const foundFiles = await scanFolderForVideos(dirHandle);
 
                     if (foundFiles.length > 0) {
                         handleFiles(foundFiles);
                         const matchedCount = providedFiles.filter(Boolean).length;
-                        setStatus(`Found ${foundFiles.length} videos, matched ${matchedCount} of ${expectedFiles.length} needed`);
+                        setStatus(`Found ${foundFiles.length} videos, matched ${matchedCount}/${expectedFiles.length}`);
                     } else {
-                        setStatus(`No videos found in folder (scanned ${scannedCount} files)`, true);
+                        setStatus('No videos found in folder', true);
                     }
-
-                    folderBtn.disabled = false;
                 } catch (err) {
-                    folderBtn.disabled = false;
                     if (err.name !== 'AbortError') {
-                        console.error('[Plexd] Folder selection error:', err);
-                        setStatus(`Error: ${err.message || 'Folder access failed'}`, true);
+                        setStatus(`Error: ${err.message}`, true);
                     } else {
                         setStatus('');
                     }
+                } finally {
+                    folderBtn.disabled = false;
+                    autoscanBtn.disabled = false;
                 }
             });
         } else {
-            // Hide button if not supported
+            // Hide buttons if not supported
             folderBtn.style.display = 'none';
+            autoscanBtn.style.display = 'none';
             setStatus('Folder search not supported in this browser', true);
         }
 
@@ -4148,23 +4670,53 @@ const PlexdApp = (function() {
             onContinue(providedFiles);
         });
 
+        // Cleanup function for consistent modal closing
+        const cleanupModal = () => {
+            document.removeEventListener('keydown', handleEscape, true);
+            providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
+            modal.remove();
+        };
+
         // Close on overlay click
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
-                modal.remove();
-            }
+            if (e.target === modal) cleanupModal();
         });
 
-        // Close on Escape
+        // Close on Escape - capture phase to intercept before fullscreen exit
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
-                providedFiles.forEach(f => f && URL.revokeObjectURL(f.url));
-                modal.remove();
-                document.removeEventListener('keydown', handleEscape);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                cleanupModal();
             }
         };
-        document.addEventListener('keydown', handleEscape);
+        document.addEventListener('keydown', handleEscape, true);
+
+        // Auto-scan on modal open - if >=50% matched, auto-continue
+        (async () => {
+            if (!('showDirectoryPicker' in window)) return;
+
+            setStatus('Auto-scanning...');
+            const result = await performQuickScan(true);
+
+            // Check if modal was closed while scanning (user cancelled)
+            if (!document.body.contains(modal)) {
+                console.log('[Plexd] Auto-scan: modal was closed during scan, aborting');
+                return;
+            }
+
+            if (result.success && result.matchRatio >= 0.5) {
+                // Good enough match - auto-continue
+                console.log(`[Plexd] Auto-scan matched ${result.matchedCount}/${expectedFiles.length} (${Math.round(result.matchRatio * 100)}%) - auto-loading`);
+                modal.remove();
+                document.removeEventListener('keydown', handleEscape, true);
+                onContinue(providedFiles);
+            } else {
+                // Not enough matches - show modal for manual intervention
+                console.log(`[Plexd] Auto-scan: ${result.success ? `only ${result.matchedCount}/${expectedFiles.length} matched` : 'failed'} - showing modal`);
+            }
+        })();
     }
 
     /**
@@ -4181,12 +4733,40 @@ const PlexdApp = (function() {
             currentStreams.forEach(s => PlexdStream.removeStream(s.id));
         }
 
-        // Get existing URLs to avoid duplicates when merging
+        // Pre-dedupe URLs in the combo to catch /api/files/X vs /api/hls/X duplicates
+        // Prefer HLS version when both exist
+        let dedupedUrls = [];
+        if (combo.urls && combo.urls.length > 0) {
+            const seenKeys = new Set();
+            const seenFileIds = new Set();
+            // Sort to process HLS URLs first (so they win over originals)
+            const sortedUrls = [...combo.urls].sort((a, b) => {
+                const aIsHls = a && a.includes('/api/hls/');
+                const bIsHls = b && b.includes('/api/hls/');
+                return bIsHls - aIsHls; // HLS first
+            });
+            sortedUrls.forEach(url => {
+                if (!url) return;
+                const key = urlEqualityKey(url);
+                const fileId = extractServerFileId(url);
+                if (seenKeys.has(key)) return;
+                if (fileId && seenFileIds.has(fileId.toLowerCase())) return;
+                seenKeys.add(key);
+                if (fileId) seenFileIds.add(fileId.toLowerCase());
+                dedupedUrls.push(url);
+            });
+        }
+
+        // Get existing URLs/fileIds to avoid duplicates when merging
         const existingUrls = merge ? new Set(PlexdStream.getAllStreams().map(s => s.url)) : new Set();
+        const existingFileIds = merge ? new Set(PlexdStream.getAllStreams().map(s => {
+            const id = extractServerFileId(s.url) || extractServerFileId(s.serverUrl);
+            return id ? id.toLowerCase() : null;
+        }).filter(Boolean)) : new Set();
 
         // Log HLS.js availability for debugging
         const hlsAvailable = typeof Hls !== 'undefined' && Hls.isSupported();
-        const urlCount = combo.urls?.length || 0;
+        const urlCount = dedupedUrls.length;
         const localCount = providedFiles.filter(f => f).length;
         console.log(`[Plexd] Loading "${name}": ${urlCount} URL streams, ${localCount} local files, HLS.js: ${hlsAvailable ? 'available' : 'NOT AVAILABLE'}`);
 
@@ -4195,23 +4775,28 @@ const PlexdApp = (function() {
         let skippedCount = 0;
         let duplicateCount = 0;
 
-        if (combo.urls) {
-            combo.urls.forEach((url, index) => {
-                if (url && isValidUrl(url)) {
-                    // Skip duplicates when merging
-                    if (merge && existingUrls.has(url)) {
+        dedupedUrls.forEach((url, index) => {
+            if (url && isValidUrl(url)) {
+                // Skip duplicates when merging (check both URL and fileId)
+                if (merge) {
+                    if (existingUrls.has(url)) {
                         duplicateCount++;
                         return;
                     }
-                    console.log(`[Plexd] Loading stream ${index + 1}/${urlCount}: ${truncateUrl(url, 80)}`);
-                    addStreamSilent(url);
-                    loadedCount++;
-                } else {
-                    console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
-                    skippedCount++;
+                    const fileId = extractServerFileId(url);
+                    if (fileId && existingFileIds.has(fileId.toLowerCase())) {
+                        duplicateCount++;
+                        return;
+                    }
                 }
-            });
-        }
+                console.log(`[Plexd] Loading stream ${index + 1}/${urlCount}: ${truncateUrl(url, 80)}`);
+                addStreamSilent(url);
+                loadedCount++;
+            } else {
+                console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
+                skippedCount++;
+            }
+        });
 
         // Load provided local files and restore their ratings
         let localLoaded = 0;
@@ -4359,26 +4944,32 @@ const PlexdApp = (function() {
             modal.remove();
         });
 
-        document.getElementById('modal-continue').addEventListener('click', () => {
+        // Cleanup function for consistent modal closing
+        const cleanupModal = () => {
+            document.removeEventListener('keydown', handleEscape, true);
             modal.remove();
+        };
+
+        document.getElementById('modal-continue').addEventListener('click', () => {
+            cleanupModal();
             onContinue();
         });
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.remove();
-            }
+            if (e.target === modal) cleanupModal();
         });
 
-        // Close on Escape
+        // Close on Escape - capture phase to intercept before fullscreen exit
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
-                modal.remove();
-                document.removeEventListener('keydown', handleEscape);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                cleanupModal();
             }
         };
-        document.addEventListener('keydown', handleEscape);
+        document.addEventListener('keydown', handleEscape, true);
     }
 
     /**
@@ -4389,19 +4980,111 @@ const PlexdApp = (function() {
         const existingModal = document.getElementById('manage-files-modal');
         if (existingModal) existingModal.remove();
 
-        // Get browser-stored files (IndexedDB)
-        const files = await getAllStoredFiles();
-        const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+        // Show loading indicator immediately - append to fullscreen element if active
+        const loadingModal = document.createElement('div');
+        loadingModal.id = 'manage-files-modal';
+        loadingModal.className = 'plexd-modal-overlay';
+        loadingModal.innerHTML = '<div class="plexd-modal"><h3>Loading files...</h3></div>';
+        const appendTarget = document.fullscreenElement || document.body;
+        appendTarget.appendChild(loadingModal);
 
-        // Get server-uploaded files
-        let serverFiles = [];
-        let serverTotalSize = 0;
+        // Fetch all data in parallel with timeout (10s to allow for busy server during transcodes)
+        const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
+        const withTimeout = (promise, ms) => Promise.race([promise, timeout(ms)]);
+
+        const [files, serverFiles, dlData, orphanedData, queueStatus] = await Promise.all([
+            withTimeout(getAllStoredFiles(), 10000).catch((e) => { console.warn('[Plexd] getAllStoredFiles failed:', e); return []; }),
+            withTimeout(getServerFileList(), 10000).catch((e) => { console.warn('[Plexd] getServerFileList failed:', e); return []; }),
+            withTimeout(fetch('/api/files/scan-local').then(r => r.ok ? r.json() : { files: [] }), 10000).catch((e) => { console.warn('[Plexd] scan-local failed:', e); return { files: [] }; }),
+            withTimeout(fetch('/api/files/orphaned').then(r => r.ok ? r.json() : { files: [] }), 10000).catch((e) => { console.warn('[Plexd] orphaned failed:', e); return { files: [] }; }),
+            withTimeout(fetch('/api/hls/status').then(r => r.ok ? r.json() : {}), 10000).catch((e) => { console.warn('[Plexd] hls/status failed:', e); return {}; })
+        ]);
+
+        const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+        const serverTotalSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+        const downloadsFiles = dlData.files || [];
+        const downloadsFolder = dlData.folder || 'Downloads';
+        const orphanedFiles = orphanedData.files || [];
+
+        console.log('[Plexd] Files modal data:', {
+            browserFiles: files.length,
+            serverFiles: serverFiles.length,
+            downloadsFiles: downloadsFiles.length,
+            downloadsFolder,
+            orphanedFiles: orphanedFiles.length,
+            dlData
+        });
+        if (!queueStatus.paused) queueStatus.paused = false;
+        if (!queueStatus.queueLength) queueStatus.queueLength = 0;
+        if (!queueStatus.activeCount) queueStatus.activeCount = 0;
+
+        // Build set of loaded fileIds for quick lookup (green = already loaded)
+        const loadedFileIds = new Set();
+        PlexdStream.getAllStreams().forEach(s => {
+            const id1 = extractServerFileId(s.url);
+            const id2 = extractServerFileId(s.serverUrl);
+            if (id1) loadedFileIds.add(id1.toLowerCase());
+            if (id2) loadedFileIds.add(id2.toLowerCase());
+            if (s.fileName) loadedFileIds.add(s.fileName.toLowerCase());
+        });
+
+        // Build map of all fileNames across all sources to detect duplicates
+        const fileNameCount = new Map();
+        const countFileName = (name) => {
+            if (!name) return;
+            const key = name.toLowerCase();
+            fileNameCount.set(key, (fileNameCount.get(key) || 0) + 1);
+        };
+        serverFiles.forEach(f => countFileName(f.fileId || f.fileName));
+        downloadsFiles.forEach(f => countFileName(f.name));
+        orphanedFiles.forEach(f => countFileName(f.name));
+
+        // Also check ratings storage for known clips
+        const knownFileNames = new Set();
         try {
-            serverFiles = await getServerFileList();
-            serverTotalSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
-        } catch (e) {
-            console.log('[Plexd] Server files not available');
-        }
+            const savedRatings = localStorage.getItem('plexd_fileName_ratings');
+            if (savedRatings) {
+                Object.keys(JSON.parse(savedRatings)).forEach(fn => knownFileNames.add(fn.toLowerCase()));
+            }
+        } catch (e) {}
+
+        // Helper functions for file status
+        const isFileLoaded = (fileId) => fileId && loadedFileIds.has(fileId.toLowerCase());
+        const isFileDuplicate = (fileName) => fileName && fileNameCount.get(fileName.toLowerCase()) > 1;
+        const isFileKnown = (fileName) => fileName && knownFileNames.has(fileName.toLowerCase());
+
+        // Get color for file: green=loaded, cyan=known/rated but not loaded, orange=duplicate
+        const getFileColor = (fileId, fileName) => {
+            if (isFileLoaded(fileId) || isFileLoaded(fileName)) return '#4a4'; // green - in grid
+            if (isFileKnown(fileName)) return '#4ad'; // cyan - has rating, not in grid
+            if (isFileDuplicate(fileName)) return '#fa0'; // orange - duplicate across sources
+            return ''; // default - unknown, not loaded
+        };
+
+        // Remove loading modal
+        loadingModal.remove();
+
+        // Calculate storage breakdown for server files
+        const storageBreakdown = {
+            hlsOnly: { count: 0, size: 0 },      // Good - HLS ready, no original
+            hlsAndOrig: { count: 0, size: 0 },   // Redundant - both exist
+            origOnly: { count: 0, size: 0 },     // Pending - needs transcode
+            missing: { count: 0 }                 // Orphaned metadata
+        };
+        serverFiles.forEach(f => {
+            if (f.hlsExists && !f.originalExists) {
+                storageBreakdown.hlsOnly.count++;
+                storageBreakdown.hlsOnly.size += f.size || 0;
+            } else if (f.hlsExists && f.originalExists) {
+                storageBreakdown.hlsAndOrig.count++;
+                storageBreakdown.hlsAndOrig.size += f.size || 0; // original size (redundant)
+            } else if (f.originalExists && !f.hlsExists) {
+                storageBreakdown.origOnly.count++;
+                storageBreakdown.origOnly.size += f.size || 0;
+            } else {
+                storageBreakdown.missing.count++;
+            }
+        });
 
         // Group browser files by set name
         const filesBySet = {};
@@ -4448,142 +5131,469 @@ const PlexdApp = (function() {
 
         const renderServerFileList = () => {
             if (serverFiles.length === 0) {
-                return '<div class="plexd-panel-empty">No server files (for remote playback)</div>';
+                return '<div class="plexd-panel-empty">No server files</div>';
             }
+            const getStatus = (f) => {
+                // Clear status based on what actually exists
+                if (f.hlsExists && !f.originalExists) {
+                    return '<span style="color:#4a4" title="Final HLS - ready to use">HLS</span>';
+                }
+                if (f.hlsExists && f.originalExists) {
+                    return '<span style="color:#fa0" title="HLS exists but original redundant">HLS+Orig</span>';
+                }
+                if (f.transcoding) {
+                    return `<span style="color:#08f" title="Transcoding in progress">${f.transcodeProgress || 0}%</span>`;
+                }
+                if (f.originalExists && !f.hlsExists) {
+                    return '<span style="color:#888" title="Original only - waiting for transcode">Pending</span>';
+                }
+                if (!f.originalExists && !f.hlsExists) {
+                    return '<span style="color:#f44" title="Missing - metadata only">Missing</span>';
+                }
+                return '<span style="color:#f44" title="Unknown state">???</span>';
+            };
             return Object.entries(serverFilesBySet).map(([setName, setFiles]) => `
                 <div class="plexd-stored-set">
                     <div class="plexd-stored-set-header">
                         <span class="plexd-stored-set-name">${escapeHtml(setName)}</span>
-                        <span class="plexd-stored-set-size">${setFiles.length} file${setFiles.length !== 1 ? 's' : ''}, ${formatBytes(setFiles.reduce((s, f) => s + (f.size || 0), 0))}</span>
+                        <span class="plexd-stored-set-size">${setFiles.length} file${setFiles.length !== 1 ? 's' : ''}</span>
+                        <button class="plexd-button-small" onclick="PlexdApp._loadServerSet('${escapeAttr(setName)}')" title="Load all files from this set">Load Set</button>
                     </div>
                     <div class="plexd-stored-files">
-                        ${setFiles.map(f => `
-                            <div class="plexd-stored-file">
-                                <span class="plexd-stored-file-name" title="${escapeAttr(f.fileName)}">${escapeHtml(f.fileName)}</span>
+                        ${setFiles.map(f => {
+                            const color = getFileColor(f.fileId, f.fileName);
+                            const loaded = isFileLoaded(f.fileId) || isFileLoaded(f.fileName);
+                            return `
+                            <div class="plexd-stored-file" data-server-id="${escapeAttr(f.fileId)}">
+                                <button class="plexd-button-small" onclick="PlexdApp._loadServerFile('${escapeAttr(f.url)}')" style="padding:2px 6px;font-size:10px;">${loaded ? '...' : 'Load'}</button>
+                                <span class="plexd-stored-file-name" title="${escapeAttr(f.fileName)}" style="${color ? 'color:' + color + ';' : ''}">${escapeHtml(f.fileName)}</span>
+                                <span class="plexd-stored-file-status">${getStatus(f)}</span>
                                 <span class="plexd-stored-file-size">${formatBytes(f.size || 0)}</span>
+                                <button class="plexd-btn-icon plexd-btn-danger" onclick="PlexdApp._deleteServerFile('${escapeAttr(f.fileId)}')" title="Delete">x</button>
                             </div>
-                        `).join('')}
+                        `;}).join('')}
                     </div>
                 </div>
             `).join('');
         };
 
+        const renderDownloadsList = () => {
+            if (downloadsFiles.length === 0) {
+                return '<div class="plexd-panel-empty">No videos in Downloads</div>';
+            }
+            const totalSize = downloadsFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+            return `
+                <div class="plexd-stored-set-header" style="margin-bottom: 8px;">
+                    <span class="plexd-stored-set-name">Downloads</span>
+                    <span class="plexd-stored-set-size">${downloadsFiles.length} file${downloadsFiles.length !== 1 ? 's' : ''} (${formatBytes(totalSize)})</span>
+                    <button class="plexd-button-small" onclick="PlexdApp._loadAllDownloads()" title="Import all files">Load All</button>
+                </div>
+                <div class="plexd-stored-files">
+                    ${downloadsFiles.map(f => {
+                        const color = getFileColor(f.name, f.name);
+                        const loaded = isFileLoaded(f.name);
+                        // Show relative path if file is in a subfolder
+                        const displayName = f.relativePath && f.relativePath !== f.name ? f.relativePath : f.name;
+                        return `
+                        <div class="plexd-stored-file">
+                            <button class="plexd-button-small" onclick="PlexdApp._importLocalFile('${escapeAttr(f.path)}')" style="padding:2px 6px;font-size:10px;">${loaded ? '...' : 'Load'}</button>
+                            <span class="plexd-stored-file-name" title="${escapeAttr(f.path)}" style="${color ? 'color:' + color + ';' : ''}">${escapeHtml(displayName)}</span>
+                            <span class="plexd-stored-file-size">${formatBytes(f.size || 0)}</span>
+                        </div>
+                    `;}).join('')}
+                </div>`;
+        };
+
+        const renderOrphanedList = () => {
+            if (orphanedFiles.length === 0) {
+                return '<div class="plexd-panel-empty">No orphaned files</div>';
+            }
+            const totalSize = orphanedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+            return `
+                <div class="plexd-stored-set-header" style="margin-bottom: 8px;">
+                    <span class="plexd-stored-set-name" style="color:#f44;">Orphaned</span>
+                    <span class="plexd-stored-set-size">${orphanedFiles.length} file${orphanedFiles.length !== 1 ? 's' : ''} (${formatBytes(totalSize)})</span>
+                    <button class="plexd-button-small" onclick="PlexdApp._adoptAllOrphans()" title="Adopt all orphaned files">Adopt All</button>
+                </div>
+                <div class="plexd-stored-files">
+                    ${orphanedFiles.map(f => {
+                        const color = getFileColor(f.name, f.name);
+                        const loaded = isFileLoaded(f.name);
+                        return `
+                        <div class="plexd-stored-file">
+                            <button class="plexd-button-small" onclick="PlexdApp._adoptOrphanedFile('${escapeAttr(f.name)}')" style="padding:2px 6px;font-size:10px;">Adopt</button>
+                            <span class="plexd-stored-file-name" title="${escapeAttr(f.name)}" style="${color ? 'color:' + color + ';' : ''}">${escapeHtml(f.name)}</span>
+                            <span class="plexd-stored-file-size">${formatBytes(f.size || 0)}</span>
+                            <button class="plexd-btn-icon plexd-btn-danger" onclick="PlexdApp._deleteOrphanedFile('${escapeAttr(f.name)}')" title="Delete">x</button>
+                        </div>
+                    `;}).join('')}
+                </div>`;
+        };
+
         modal.innerHTML = `
             <div class="plexd-modal plexd-modal-wide">
-                <h3>Stored Files</h3>
-                <p class="plexd-modal-subtitle">Browser: ${files.length} file${files.length !== 1 ? 's' : ''}, ${formatBytes(totalSize)} | Server: ${serverFiles.length} file${serverFiles.length !== 1 ? 's' : ''}, ${formatBytes(serverTotalSize)}</p>
+                <h3>Server Files</h3>
 
-                <h4 style="margin: 15px 0 10px; font-size: 14px; color: #888;">Browser Storage (for offline use)</h4>
-                <div id="stored-files-list" class="plexd-stored-files-container">
-                    ${renderFileList()}
+                <div style="margin: 10px 0; padding: 12px; background: #1a1a1a; border-radius: 6px;">
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
+                        <div>
+                            <div style="font-size: 20px; font-weight: bold; color: #4a4;">${formatBytes(storageBreakdown.hlsOnly.size)}</div>
+                            <div style="font-size: 11px; color: #888;">HLS Ready (${storageBreakdown.hlsOnly.count})</div>
+                            <div style="font-size: 10px; color: #4a4;">Keep</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 20px; font-weight: bold; color: #fa0;">${formatBytes(storageBreakdown.hlsAndOrig.size)}</div>
+                            <div style="font-size: 11px; color: #888;">Redundant (${storageBreakdown.hlsAndOrig.count})</div>
+                            <div style="font-size: 10px; color: #fa0;">Can Delete</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 20px; font-weight: bold; color: #888;">${formatBytes(storageBreakdown.origOnly.size)}</div>
+                            <div style="font-size: 11px; color: #888;">Pending (${storageBreakdown.origOnly.count})</div>
+                            <div style="font-size: 10px; color: #888;">Needs Transcode</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 20px; font-weight: bold; color: #f44;">${storageBreakdown.missing.count}</div>
+                            <div style="font-size: 11px; color: #888;">Missing</div>
+                            <div style="font-size: 10px; color: #f44;">Orphaned</div>
+                        </div>
+                    </div>
+                    ${storageBreakdown.hlsAndOrig.count > 0 ? `
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="color: #fa0; font-size: 12px;">Redundant originals can be deleted to save ${formatBytes(storageBreakdown.hlsAndOrig.size)}</span>
+                        <button id="delete-redundant-btn" class="plexd-button-small plexd-btn-danger">Delete Redundant</button>
+                    </div>` : ''}
                 </div>
 
-                <h4 style="margin: 15px 0 10px; font-size: 14px; color: #888;">Server Storage (for remote playback)</h4>
-                <div id="server-files-list" class="plexd-stored-files-container">
+                <div style="margin: 10px 0; padding: 8px 10px; background: #1a1a1a; border-radius: 6px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <span style="color: #888; font-size: 12px;">Transcode: <span id="transcode-status" style="color: ${queueStatus.paused ? '#fa0' : '#4a4'}">${queueStatus.paused ? 'Paused' : 'Active'}</span></span>
+                    <span style="color: #888; font-size: 12px;">Queue: <span id="queue-count">${queueStatus.queueLength}</span></span>
+                    <span style="color: #888; font-size: 12px;">Active: <span id="active-count">${queueStatus.activeCount}</span></span>
+                    <span style="flex:1"></span>
+                    <button id="load-missing-btn" class="plexd-button-small" title="Load known files not in grid (cyan)">Load Missing</button>
+                    <button id="transcode-start" class="plexd-button-small">Start</button>
+                    <button id="transcode-pause" class="plexd-button-small">${queueStatus.paused ? 'Resume' : 'Pause'}</button>
+                    <button id="transcode-stop" class="plexd-button-small plexd-btn-danger">Stop</button>
+                </div>
+
+                <div id="server-files-list" class="plexd-stored-files-container" style="max-height: 300px;">
                     ${renderServerFileList()}
                 </div>
 
+                <div id="downloads-list" class="plexd-stored-files-container" style="margin-top: 15px;">
+                    ${renderDownloadsList()}
+                </div>
+
+                ${orphanedFiles.length > 0 ? `
+                <div id="orphaned-list" class="plexd-stored-files-container" style="margin-top: 15px;">
+                    ${renderOrphanedList()}
+                </div>
+                ` : ''}
+
                 <div class="plexd-modal-actions">
-                    <button id="manage-files-clear-all" class="plexd-button plexd-button-secondary plexd-btn-danger" ${files.length === 0 ? 'disabled' : ''}>Clear Browser</button>
-                    <button id="manage-files-purge-server" class="plexd-button plexd-button-secondary plexd-btn-danger" ${serverFiles.length === 0 ? 'disabled' : ''}>Purge Server</button>
+                    <button id="manage-files-purge-server" class="plexd-button plexd-button-secondary plexd-btn-danger" ${serverFiles.length === 0 ? 'disabled' : ''}>Purge All</button>
                     <button id="manage-files-close" class="plexd-button plexd-button-primary">Done</button>
                 </div>
             </div>
         `;
 
-        document.body.appendChild(modal);
+        // Append to fullscreen element if active, otherwise body
+        (document.fullscreenElement || document.body).appendChild(modal);
 
-        // Expose delete functions temporarily
-        PlexdApp._deleteStoredFile = async (fileId) => {
-            if (await deleteStoredFile(fileId)) {
+        // Expose delete function temporarily
+        PlexdApp._deleteServerFile = async (fileId) => {
+            try {
+                const resp = await fetch(`/api/files/${fileId}`, { method: 'DELETE' });
+                if (!resp.ok) throw new Error('Delete failed');
                 // Remove from local arrays
-                const idx = files.findIndex(f => f.id === fileId);
+                const idx = serverFiles.findIndex(f => f.fileId === fileId);
                 if (idx >= 0) {
-                    const file = files[idx];
-                    files.splice(idx, 1);
-                    const setFiles = filesBySet[file.setName];
-                    const setIdx = setFiles.findIndex(f => f.id === fileId);
-                    if (setIdx >= 0) setFiles.splice(setIdx, 1);
-                    if (setFiles.length === 0) delete filesBySet[file.setName];
+                    const file = serverFiles[idx];
+                    serverFiles.splice(idx, 1);
+                    const setName = file.setName || '(Unsaved)';
+                    const setFiles = serverFilesBySet[setName];
+                    if (setFiles) {
+                        const setIdx = setFiles.findIndex(f => f.fileId === fileId);
+                        if (setIdx >= 0) setFiles.splice(setIdx, 1);
+                        if (setFiles.length === 0) delete serverFilesBySet[setName];
+                    }
                 }
-                // Re-render
-                document.getElementById('stored-files-list').innerHTML = renderFileList();
-                const newTotal = files.reduce((sum, f) => sum + f.size, 0);
-                modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
-                document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+                document.getElementById('server-files-list').innerHTML = renderServerFileList();
+                updateSubtitle();
+                document.getElementById('manage-files-purge-server').disabled = serverFiles.length === 0;
+            } catch (e) {
+                console.error('[Plexd] Delete server file failed:', e);
             }
         };
 
-        PlexdApp._deleteStoredSet = async (setName) => {
-            await deleteLocalFilesForSet(setName);
-            // Remove from local arrays
-            const setFiles = filesBySet[setName] || [];
+        // Load a single file to current streams
+        PlexdApp._loadServerFile = (url) => {
+            // addStream handles duplicates and shows appropriate messages
+            PlexdApp.addStream(url);
+        };
+
+        // Load all files from a set to current streams
+        PlexdApp._loadServerSet = (setName) => {
+            const setFiles = serverFilesBySet[setName] || [];
+            let added = 0;
             setFiles.forEach(f => {
-                const idx = files.findIndex(ff => ff.id === f.id);
-                if (idx >= 0) files.splice(idx, 1);
+                if (f.url) {
+                    PlexdApp.addStream(f.url);
+                    added++;
+                }
             });
-            delete filesBySet[setName];
-            // Re-render
-            document.getElementById('stored-files-list').innerHTML = renderFileList();
-            const newTotal = files.reduce((sum, f) => sum + f.size, 0);
-            modal.querySelector('.plexd-modal-subtitle').textContent = `${files.length} file${files.length !== 1 ? 's' : ''} stored, ${formatBytes(newTotal)} total`;
-            document.getElementById('manage-files-clear-all').disabled = files.length === 0;
+            showMessage(`Added ${added} streams`, 'info');
+            modal.remove();
+        };
+
+        // Import a local file (from Downloads): copy to server, queue transcode, add to grid
+        PlexdApp._importLocalFile = async (filePath) => {
+            try {
+                showMessage('Importing...', 'info');
+                const resp = await fetch('/api/files/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath })
+                });
+                if (!resp.ok) throw new Error('Import failed');
+                const result = await resp.json();
+
+                // Add to grid
+                PlexdApp.addStream(result.url);
+
+                // Mark as loaded in UI
+                const fileName = filePath.split('/').pop();
+                if (result.fileId) loadedFileIds.add(result.fileId.toLowerCase());
+                if (fileName) loadedFileIds.add(fileName.toLowerCase());
+
+                // Update downloads list to show loaded state
+                const dlList = document.getElementById('downloads-list');
+                if (dlList) dlList.innerHTML = renderDownloadsList();
+
+                // Start polling for HLS completion
+                if (result.transcoding && !result.hlsReady) {
+                    const streams = PlexdStream.getAllStreams();
+                    const stream = streams.find(s => s.url === result.url);
+                    if (stream) {
+                        pollTranscodeStatus(result.fileId, stream, fileName);
+                    }
+                }
+
+                showMessage(result.existing ? 'Already imported' : 'Imported and queued for transcode', 'success');
+            } catch (e) {
+                console.error('[Plexd] Import failed:', e);
+                showMessage('Import failed', 'error');
+            }
+        };
+
+        // Adopt an orphaned file (add to metadata and queue transcode)
+        PlexdApp._adoptOrphanedFile = async (fileName) => {
+            try {
+                const filePath = `/Users/oliver/Projects/Plexd/uploads/${fileName}`;
+                // Import will detect it's already in uploads and just add metadata
+                const resp = await fetch('/api/files/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath })
+                });
+                if (!resp.ok) throw new Error('Adopt failed');
+                const result = await resp.json();
+
+                // Remove from orphaned list
+                const idx = orphanedFiles.findIndex(f => f.name === fileName);
+                if (idx >= 0) orphanedFiles.splice(idx, 1);
+                document.getElementById('orphaned-list').innerHTML = renderOrphanedList();
+
+                // Add to grid
+                PlexdApp.addStream(result.url);
+                showMessage('File adopted and queued', 'success');
+            } catch (e) {
+                console.error('[Plexd] Adopt failed:', e);
+                showMessage('Adopt failed', 'error');
+            }
+        };
+
+        // Delete an orphaned file
+        PlexdApp._deleteOrphanedFile = async (fileName) => {
+            try {
+                // Delete directly from uploads folder
+                const resp = await fetch(`/api/files/${encodeURIComponent(fileName)}`, { method: 'DELETE' });
+                // Remove from UI even if delete fails (file might not exist)
+                const idx = orphanedFiles.findIndex(f => f.name === fileName);
+                if (idx >= 0) orphanedFiles.splice(idx, 1);
+                document.getElementById('orphaned-list').innerHTML = renderOrphanedList();
+                showMessage('Orphaned file deleted', 'success');
+            } catch (e) {
+                console.error('[Plexd] Delete orphaned failed:', e);
+            }
+        };
+
+        // Load all downloads at once
+        PlexdApp._loadAllDownloads = async () => {
+            showMessage(`Importing ${downloadsFiles.length} files...`, 'info');
+            let imported = 0;
+            for (const f of downloadsFiles) {
+                try {
+                    await PlexdApp._importLocalFile(f.path);
+                    imported++;
+                } catch (e) { /* continue with others */ }
+            }
+            showMessage(`Imported ${imported} files`, 'success');
+        };
+
+        // Adopt all orphaned files at once
+        PlexdApp._adoptAllOrphans = async () => {
+            showMessage(`Adopting ${orphanedFiles.length} files...`, 'info');
+            let adopted = 0;
+            const toAdopt = [...orphanedFiles]; // Copy since we modify during iteration
+            for (const f of toAdopt) {
+                try {
+                    await PlexdApp._adoptOrphanedFile(f.name);
+                    adopted++;
+                } catch (e) { /* continue with others */ }
+            }
+            showMessage(`Adopted ${adopted} files`, 'success');
+        };
+
+        const updateSubtitle = () => {
+            const browserSize = files.reduce((sum, f) => sum + f.size, 0);
+            const serverSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+            modal.querySelector('.plexd-modal-subtitle').textContent =
+                `Browser: ${files.length} files, ${formatBytes(browserSize)} | Server: ${serverFiles.length} files, ${formatBytes(serverSize)}`;
         };
 
         document.getElementById('manage-files-close').addEventListener('click', () => {
-            delete PlexdApp._deleteStoredFile;
-            delete PlexdApp._deleteStoredSet;
-            modal.remove();
+            cleanupModal();
         });
 
-        document.getElementById('manage-files-clear-all').addEventListener('click', async () => {
-            if (confirm('Delete all browser-stored files? This cannot be undone.')) {
-                for (const f of files) {
-                    await deleteStoredFile(f.id);
+        // Transcode controls
+        const updateQueueStatus = async () => {
+            try {
+                const resp = await fetch('/api/hls/status');
+                if (resp.ok) {
+                    const s = await resp.json();
+                    document.getElementById('transcode-status').textContent = s.paused ? 'Paused' : 'Active';
+                    document.getElementById('transcode-status').style.color = s.paused ? '#fa0' : '#4a4';
+                    document.getElementById('queue-count').textContent = s.queueLength;
+                    document.getElementById('active-count').textContent = s.activeCount;
+                    document.getElementById('transcode-pause').textContent = s.paused ? 'Resume' : 'Pause';
                 }
-                files.length = 0;
-                Object.keys(filesBySet).forEach(k => delete filesBySet[k]);
-                document.getElementById('stored-files-list').innerHTML = renderFileList();
-                const serverSize = serverFiles.reduce((sum, f) => sum + (f.size || 0), 0);
-                modal.querySelector('.plexd-modal-subtitle').textContent =
-                    `Browser: 0 files, 0 B | Server: ${serverFiles.length} file${serverFiles.length !== 1 ? 's' : ''}, ${formatBytes(serverSize)}`;
-                document.getElementById('manage-files-clear-all').disabled = true;
+            } catch (e) { /* ignore */ }
+        };
+
+        document.getElementById('transcode-start').addEventListener('click', async () => {
+            await fetch('/api/hls/start', { method: 'POST' });
+            await updateQueueStatus();
+            showMessage('Transcoding started', 'info');
+        });
+
+        document.getElementById('transcode-pause').addEventListener('click', async () => {
+            const isPaused = document.getElementById('transcode-status').textContent === 'Paused';
+            await fetch(isPaused ? '/api/hls/resume' : '/api/hls/pause', { method: 'POST' });
+            await updateQueueStatus();
+        });
+
+        document.getElementById('transcode-stop').addEventListener('click', async () => {
+            if (confirm('Stop all transcodes? This will cancel queued and active jobs.')) {
+                await fetch('/api/hls/cancel-all', { method: 'POST' });
+                await updateQueueStatus();
+                showMessage('Transcodes stopped', 'info');
             }
         });
+
+        // Load Missing - load server files that are known (rated) but not in grid
+        document.getElementById('load-missing-btn').addEventListener('click', () => {
+            const missingFiles = serverFiles.filter(f => {
+                const loaded = isFileLoaded(f.fileId) || isFileLoaded(f.fileName);
+                const known = isFileKnown(f.fileName);
+                return known && !loaded && f.url;
+            });
+            if (missingFiles.length === 0) {
+                showMessage('No known files missing from grid', 'info');
+                return;
+            }
+            missingFiles.forEach(f => PlexdApp.addStream(f.url));
+            // Update loadedFileIds for UI refresh
+            missingFiles.forEach(f => {
+                if (f.fileId) loadedFileIds.add(f.fileId.toLowerCase());
+                if (f.fileName) loadedFileIds.add(f.fileName.toLowerCase());
+            });
+            document.getElementById('server-files-list').innerHTML = renderServerFileList();
+            showMessage(`Loaded ${missingFiles.length} missing files`, 'success');
+        });
+
+        // Delete redundant originals button
+        const deleteRedundantBtn = document.getElementById('delete-redundant-btn');
+        if (deleteRedundantBtn) {
+            deleteRedundantBtn.addEventListener('click', async () => {
+                if (confirm(`Delete ${storageBreakdown.hlsAndOrig.count} redundant original files to free ${formatBytes(storageBreakdown.hlsAndOrig.size)}?`)) {
+                    const resp = await fetch('/api/files/delete-redundant', { method: 'POST' });
+                    const result = await resp.json();
+                    showMessage(`Deleted ${result.deleted} redundant files, freed ${formatBytes(result.freedBytes)}`, 'info');
+                    // Refresh the modal
+                    modal.remove();
+                    showManageStoredFilesModal();
+                }
+            });
+        }
 
         document.getElementById('manage-files-purge-server').addEventListener('click', async () => {
-            if (confirm('Purge all server-uploaded files? This will disable remote video playback until files are re-uploaded.')) {
+            if (confirm('Purge ALL server files? This cannot be undone.')) {
                 const deleted = await purgeServerFiles();
-                serverFiles.length = 0;
-                Object.keys(serverFilesBySet).forEach(k => delete serverFilesBySet[k]);
-                document.getElementById('server-files-list').innerHTML = renderServerFileList();
-                const browserSize = files.reduce((sum, f) => sum + f.size, 0);
-                modal.querySelector('.plexd-modal-subtitle').textContent =
-                    `Browser: ${files.length} file${files.length !== 1 ? 's' : ''}, ${formatBytes(browserSize)} | Server: 0 files, 0 B`;
-                document.getElementById('manage-files-purge-server').disabled = true;
-                showMessage(`Purged ${deleted} file${deleted !== 1 ? 's' : ''} from server`, 'info');
+                showMessage(`Purged ${deleted} files from server`, 'info');
+                modal.remove();
+                showManageStoredFilesModal(); // Refresh
             }
         });
+
+        const cleanupModal = () => {
+            delete PlexdApp._deleteServerFile;
+            delete PlexdApp._loadServerFile;
+            delete PlexdApp._loadServerSet;
+            delete PlexdApp._importLocalFile;
+            delete PlexdApp._adoptOrphanedFile;
+            delete PlexdApp._deleteOrphanedFile;
+            delete PlexdApp._loadAllDownloads;
+            delete PlexdApp._adoptAllOrphans;
+            delete PlexdApp._deleteStoredFile;
+            delete PlexdApp._deleteStoredSet;
+            document.removeEventListener('keydown', handleEscape, true);
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            modal.remove();
+        };
+
+        // Re-parent modal to body when fullscreen exits (so Escape still works)
+        const handleFullscreenChange = () => {
+            if (!document.fullscreenElement && modal.parentNode && modal.parentNode !== document.body) {
+                document.body.appendChild(modal);
+            }
+        };
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                delete PlexdApp._deleteStoredFile;
-                delete PlexdApp._deleteStoredSet;
-                modal.remove();
-            }
+            if (e.target === modal) cleanupModal();
         });
 
-        // Close on Escape
+        // Close on Escape - capture phase, then re-enter fullscreen after browser exits it
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
-                delete PlexdApp._deleteStoredFile;
-                delete PlexdApp._deleteStoredSet;
-                modal.remove();
-                document.removeEventListener('keydown', handleEscape);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                const fsEl = document.fullscreenElement;
+                cleanupModal();
+                // Browser will exit fullscreen despite preventDefault.
+                // Re-enter after a short delay (still within transient activation window).
+                if (fsEl) {
+                    setTimeout(() => {
+                        if (!document.fullscreenElement) {
+                            fsEl.requestFullscreen().catch(() => {});
+                        }
+                    }, 150);
+                }
             }
         };
-        document.addEventListener('keydown', handleEscape);
+        document.addEventListener('keydown', handleEscape, true); // capture phase
     }
 
     /**
@@ -4617,10 +5627,9 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>,</kbd> <kbd>.</kbd> Seek 10s</div>
                         <div class="plexd-shortcut"><kbd>&lt;</kbd> <kbd>&gt;</kbd> Seek 60s</div>
                         <div class="plexd-shortcut"><kbd>;</kbd> <kbd>'</kbd> Frame step</div>
-                        <div class="plexd-shortcut"><kbd>[</kbd> Rewind to start</div>
-                        <div class="plexd-shortcut"><kbd>{</kbd> Rewind all</div>
-                        <div class="plexd-shortcut"><kbd>/</kbd> Random seek</div>
-                        <div class="plexd-shortcut"><kbd>\\</kbd> Random seek all</div>
+                        <div class="plexd-shortcut"><kbd>\\</kbd> Rewind to start</div>
+                        <div class="plexd-shortcut"><kbd>|</kbd> Rewind all</div>
+                        <div class="plexd-shortcut"><kbd>/</kbd> Random seek · <kbd>//</kbd> All</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>Stream Management</h4>
@@ -4642,6 +5651,9 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>T</kbd> Cycle Tetris mode</div>
                         <div class="plexd-shortcut"><kbd>Shift+T</kbd> Reset pan positions</div>
                         <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
+                        <div class="plexd-shortcut"><kbd>]</kbd> / <kbd>[</kbd> Rotate CW / CCW</div>
+                        <div class="plexd-shortcut"><kbd>}</kbd> / <kbd>{</kbd> Shuffle randomly</div>
+                        <div class="plexd-shortcut"><kbd>L</kbd> Force relayout</div>
                         <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
                         <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>
                     </div>
@@ -4664,25 +5676,29 @@ const PlexdApp = (function() {
 
         document.body.appendChild(modal);
 
-        document.getElementById('shortcuts-modal-close').addEventListener('click', () => {
+        // Cleanup function for consistent modal closing
+        const cleanupModal = () => {
+            document.removeEventListener('keydown', handleEscape, true);
             modal.remove();
-        });
+        };
+
+        document.getElementById('shortcuts-modal-close').addEventListener('click', cleanupModal);
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.remove();
-            }
+            if (e.target === modal) cleanupModal();
         });
 
-        // Close on Escape
+        // Close on Escape - capture phase to intercept before fullscreen exit
         const handleEscape = (e) => {
             if (e.key === 'Escape') {
-                modal.remove();
-                document.removeEventListener('keydown', handleEscape);
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                cleanupModal();
             }
         };
-        document.addEventListener('keydown', handleEscape);
+        document.addEventListener('keydown', handleEscape, true);
     }
 
     /**
@@ -4972,7 +5988,9 @@ const PlexdApp = (function() {
      * Escape for attribute
      */
     function escapeAttr(text) {
-        return text.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        // Use JSON.stringify for safe JS string escaping (handles \, ', ", newlines, etc.)
+        const jsonEscaped = JSON.stringify(text).slice(1, -1);
+        return jsonEscaped.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
     }
 
     /**
@@ -5136,11 +6154,17 @@ const PlexdApp = (function() {
      * Load history from localStorage
      */
     function loadHistory() {
-        const saved = localStorage.getItem('plexd_history');
-        if (saved) {
-            const items = JSON.parse(saved);
-            streamHistory.length = 0;
-            streamHistory.push(...items);
+        try {
+            const saved = localStorage.getItem('plexd_history');
+            if (saved) {
+                const items = JSON.parse(saved);
+                if (Array.isArray(items)) {
+                    streamHistory.length = 0;
+                    streamHistory.push(...items);
+                }
+            }
+        } catch {
+            // Corrupted localStorage — start fresh
         }
     }
 
@@ -5154,16 +6178,61 @@ const PlexdApp = (function() {
             if (streamHistory.length === 0) {
                 historyList.innerHTML = '<div class="plexd-panel-empty">No history yet</div>';
             } else {
-                historyList.innerHTML = streamHistory.slice(0, 20).map(item => {
+                historyList.innerHTML = streamHistory.slice(0, 30).map((item, idx) => {
                     const ago = formatTimeAgo(item.timestamp);
+                    const name = getHistoryDisplayName(item.url);
+                    let domain = '';
+                    try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
+                    const isActive = PlexdStream.getAllStreams().some(s => s.url === item.url || s.sourceUrl === item.url);
                     return `
-                        <div class="plexd-history-item" onclick="PlexdApp.addStream('${escapeAttr(item.url)}')">
-                            <span class="plexd-history-url">${escapeHtml(truncateUrl(item.url, 35))}</span>
-                            <span class="plexd-history-time">${ago}</span>
+                        <div class="plexd-history-item${isActive ? ' plexd-history-active' : ''}" onclick="PlexdApp.addStream('${escapeAttr(item.url)}')">
+                            <div class="plexd-history-info">
+                                <span class="plexd-history-name">${escapeHtml(name)}</span>
+                                <span class="plexd-history-meta">${escapeHtml(domain)}${domain ? ' · ' : ''}${ago}</span>
+                            </div>
+                            <button class="plexd-history-delete" onclick="event.stopPropagation(); PlexdApp.removeHistoryItem(${idx})" title="Remove">✕</button>
                         </div>
                     `;
                 }).join('');
             }
+        }
+    }
+
+    function getHistoryDisplayName(url) {
+        if (!url) return 'Unknown';
+        if (url.startsWith('blob:')) return 'Local File';
+        if (url.startsWith('data:')) return 'Embedded Video';
+        try {
+            const urlObj = new URL(url, window.location.origin);
+            // For server files, fileId is the original filename
+            if (urlObj.pathname.startsWith('/api/files/') || urlObj.pathname.startsWith('/api/hls/')) {
+                const parts = urlObj.pathname.split('/').filter(p => p);
+                const fileId = parts[parts.length - 1];
+                if (fileId && fileId.length > 3) {
+                    return decodeURIComponent(fileId).replace(/\.[^.]+$/, '').replace(/[-_.]+/g, ' ');
+                }
+            }
+            // For external URLs, walk path segments and skip generic HLS names
+            const parts = urlObj.pathname.split('/').filter(p => p);
+            const genericNames = ['master', 'playlist', 'index', 'stream', 'video', 'chunklist', 'media', 'hls'];
+            for (let i = parts.length - 1; i >= 0; i--) {
+                const seg = decodeURIComponent(parts[i].split('?')[0]);
+                const base = seg.replace(/\.(m3u8|ts|mp4|mpd|key|webm|ogg)$/i, '');
+                if (base.length > 3 && !genericNames.includes(base.toLowerCase())) {
+                    return base.replace(/[-_.]+/g, ' ');
+                }
+            }
+            return urlObj.hostname.replace(/^www\./, '');
+        } catch {
+            return url.substring(0, 40);
+        }
+    }
+
+    function removeHistoryItem(index) {
+        if (index >= 0 && index < streamHistory.length) {
+            streamHistory.splice(index, 1);
+            saveHistory();
+            updateHistoryUI();
         }
     }
 
@@ -5204,6 +6273,8 @@ const PlexdApp = (function() {
                     selectedSetIndex = -1; // Reset selection
                 } else if (panelId === 'streams-panel') {
                     updateStreamsPanelUI();
+                } else if (panelId === 'history-panel') {
+                    updateHistoryUI();
                 }
             } else {
                 selectedSetIndex = -1; // Reset when closing
@@ -5218,6 +6289,21 @@ const PlexdApp = (function() {
     function handleSetsPanelKeyboard(e) {
         const panel = document.getElementById('saved-panel');
         if (!panel || !panel.classList.contains('plexd-panel-open')) return false;
+
+        // Escape closes the panel
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            panel.classList.remove('plexd-panel-open');
+            selectedSetIndex = -1;
+            return true;
+        }
+
+        // F opens Files modal (works even with no saved sets)
+        if (e.key === 'f' || e.key === 'F') {
+            e.preventDefault();
+            showManageStoredFilesModal();
+            return true;
+        }
 
         const items = panel.querySelectorAll('.plexd-combo-item');
         if (items.length === 0) return false;
@@ -5370,6 +6456,28 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Get a meaningful download filename from URL (skips generic HLS names)
+     */
+    function getDownloadName(url) {
+        try {
+            const urlObj = new URL(url, window.location.origin);
+            const parts = urlObj.pathname.split('/').filter(p => p);
+            const genericNames = ['master', 'playlist', 'index', 'stream', 'video', 'chunklist', 'media'];
+            // Walk path segments from end, skip generic HLS names
+            for (let i = parts.length - 1; i >= 0; i--) {
+                const seg = decodeURIComponent(parts[i].split('?')[0]);
+                const base = seg.replace(/\.(m3u8|ts|mp4|key)$/i, '');
+                if (base.length > 3 && !genericNames.includes(base.toLowerCase())) {
+                    return base + '.mp4';
+                }
+            }
+            return urlObj.hostname.replace(/\./g, '-') + '.mp4';
+        } catch {
+            return 'download.mp4';
+        }
+    }
+
+    /**
      * Select a stream and focus on it in the grid
      */
     function selectAndFocusStream(streamId) {
@@ -5451,6 +6559,85 @@ const PlexdApp = (function() {
     /**
      * Download a stream to disc
      */
+    // Track active download polls to avoid duplicate polling for the same job
+    const activeDownloadPolls = new Map(); // jobId → intervalId
+
+    /**
+     * Queue a background HLS download and poll for progress.
+     * Returns the jobId, or null on failure.
+     */
+    async function queueHlsDownload(hlsUrl, fileName) {
+        const dlUrl = `/api/proxy/hls/download?url=${encodeURIComponent(hlsUrl)}&name=${encodeURIComponent(fileName)}`;
+        const res = await fetch(dlUrl);
+        const data = await res.json();
+        if (!res.ok || !data.jobId) {
+            throw new Error(data.error || 'Failed to queue download');
+        }
+
+        const jobId = data.jobId;
+
+        // Server returned an existing job (dedup) and we're already polling it
+        if (data.deduplicated && activeDownloadPolls.has(jobId)) {
+            showMessage(`Already downloading: ${fileName}`, 'info');
+            return jobId;
+        }
+
+        showMessage(`Download queued: ${fileName}`, 'info');
+
+        // Poll for progress (bail after consecutive failures to avoid zombie intervals)
+        let pollFailures = 0;
+        const pollId = setInterval(async () => {
+            try {
+                const statusRes = await fetch(`/api/downloads/status?jobId=${encodeURIComponent(jobId)}`);
+
+                // Job vanished (server restart) or unexpected response
+                if (!statusRes.ok) {
+                    pollFailures++;
+                    if (pollFailures >= 5) {
+                        clearInterval(pollId);
+                        activeDownloadPolls.delete(jobId);
+                        showMessage(`Download lost (server restarted?): ${fileName}`, 'error');
+                    }
+                    return;
+                }
+
+                const status = await statusRes.json();
+                pollFailures = 0; // Reset on successful response
+
+                if (status.status === 'downloading') {
+                    showMessage(`Downloading: ${fileName} (${status.progress}%)`, 'info');
+                } else if (status.status === 'complete') {
+                    clearInterval(pollId);
+                    activeDownloadPolls.delete(jobId);
+                    showMessage(`Download ready: ${fileName}`, 'success');
+                    // Trigger browser download of the completed file
+                    const a = document.createElement('a');
+                    a.href = `/api/downloads/file?jobId=${encodeURIComponent(jobId)}`;
+                    a.download = fileName.replace(/\.m3u8$/, '.mp4');
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                } else if (status.status === 'failed') {
+                    clearInterval(pollId);
+                    activeDownloadPolls.delete(jobId);
+                    showMessage(`Download failed: ${fileName} — ${status.error || 'unknown error'}`, 'error');
+                }
+                // 'queued' status — just keep polling
+            } catch (e) {
+                // Network error — tolerate a few before giving up
+                pollFailures++;
+                if (pollFailures >= 5) {
+                    clearInterval(pollId);
+                    activeDownloadPolls.delete(jobId);
+                    showMessage(`Download lost (connection error): ${fileName}`, 'error');
+                }
+            }
+        }, 2000);
+
+        activeDownloadPolls.set(jobId, pollId);
+        return jobId;
+    }
+
     async function downloadStream(streamId) {
         const stream = PlexdStream.getStream(streamId);
         if (!stream) {
@@ -5459,18 +6646,50 @@ const PlexdApp = (function() {
         }
 
         const url = stream.url;
-        const fileName = stream.fileName || getStreamDisplayName(url);
-
-        // Check if it's an HLS stream
-        if (url.toLowerCase().includes('.m3u8')) {
-            showMessage('HLS streams cannot be downloaded directly', 'error');
-            return;
-        }
+        const fileId = extractServerFileId(url) || extractServerFileId(stream.serverUrl);
+        // For server files, fileId IS the original filename (e.g. "scene-1.1080p.mp4")
+        // For external HLS, use stream.fileName or derive from URL (skip generic "master"/"playlist")
+        const fileName = stream.fileName || (fileId ? fileId : getDownloadName(url));
 
         try {
+            // 1. Server-hosted file: download the original from server
+            if (fileId) {
+                showMessage(`Downloading: ${fileName}...`, 'info');
+                const downloadUrl = `/api/files/${encodeURIComponent(fileId)}`;
+                try {
+                    const response = await fetch(downloadUrl, { method: 'HEAD' });
+                    if (response.ok) {
+                        // Original file exists - download it directly
+                        const a = document.createElement('a');
+                        a.href = downloadUrl;
+                        a.download = fileName.replace(/\.m3u8$/, '.mp4');
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        showMessage(`Download started: ${fileName}`, 'success');
+                        return;
+                    }
+                } catch (e) { /* fall through */ }
+                // Original deleted - remux the HLS via background download
+                const hlsUrl = url.includes('.m3u8') ? url : (stream.serverUrl || url);
+                if (hlsUrl.includes('.m3u8')) {
+                    const absHlsUrl = new URL(hlsUrl, window.location.origin).href;
+                    await queueHlsDownload(absHlsUrl, fileName);
+                    return;
+                }
+                showMessage('Original file deleted and no HLS available', 'error');
+                return;
+            }
+
+            // 2. External HLS: background download via server (ffmpeg remuxes segments into MP4)
+            if (url.toLowerCase().includes('.m3u8')) {
+                await queueHlsDownload(url, fileName);
+                return;
+            }
+
             showMessage(`Downloading: ${fileName}...`, 'info');
 
-            // For blob URLs (dropped files), we can download directly
+            // 3. Blob URLs (dropped files) - download directly
             if (isBlobUrl(url)) {
                 const response = await fetch(url);
                 const blob = await response.blob();
@@ -5479,7 +6698,7 @@ const PlexdApp = (function() {
                 return;
             }
 
-            // For regular URLs, try to fetch (may fail due to CORS)
+            // 4. Regular URLs - try to fetch (may fail due to CORS)
             try {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Fetch failed');
@@ -5487,8 +6706,18 @@ const PlexdApp = (function() {
                 triggerDownload(blob, fileName);
                 showMessage(`Downloaded: ${fileName}`, 'success');
             } catch (fetchError) {
-                // CORS blocked - try opening in new tab as fallback
-                console.log('[Plexd] Direct download blocked, opening in new tab:', fetchError);
+                // CORS blocked - try proxying through our server
+                try {
+                    const proxyUrl = `/api/proxy/hls?url=${encodeURIComponent(url)}`;
+                    const response = await fetch(proxyUrl);
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        triggerDownload(blob, fileName);
+                        showMessage(`Downloaded: ${fileName}`, 'success');
+                        return;
+                    }
+                } catch (e) { /* fall through */ }
+                // Final fallback: open in new tab
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = fileName;
@@ -5547,27 +6776,103 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Remove duplicate streams, keeping only the first instance of each URL/file
+     * Find existing stream that matches by URL, fileName, or server fileId
+     * Used for duplicate detection when adding streams
+     */
+    function findDuplicateStream(url, fileName = null) {
+        const allStreams = PlexdStream.getAllStreams();
+        const urlKey = urlEqualityKey(url);
+        const serverFileId = extractServerFileId(url);
+
+        return allStreams.find(s => {
+            // Check by URL
+            if (urlEqualityKey(s.url) === urlKey) return true;
+
+            // Check by server fileId (handles /api/files/ vs /api/hls/ for same file)
+            if (serverFileId) {
+                const existingFileId = extractServerFileId(s.url) || extractServerFileId(s.serverUrl);
+                if (existingFileId && existingFileId.toLowerCase() === serverFileId.toLowerCase()) return true;
+                // Also check if stream fileName matches the fileId (blob URL for same file)
+                if (s.fileName && s.fileName.toLowerCase() === serverFileId.toLowerCase()) return true;
+            }
+
+            // Check by fileName (handles blob URL vs server URL for same file)
+            if (fileName) {
+                if (s.fileName && s.fileName.toLowerCase() === fileName.toLowerCase()) return true;
+                // Check if existing stream's server fileId matches our fileName
+                const existingFileId = extractServerFileId(s.url) || extractServerFileId(s.serverUrl);
+                if (existingFileId && existingFileId.toLowerCase() === fileName.toLowerCase()) return true;
+            }
+
+            return false;
+        });
+    }
+
+    /**
+     * Extract server fileId from URL patterns:
+     * - /api/files/{fileId}
+     * - /api/hls/{fileId}/playlist.m3u8
+     * Returns null if not a server file URL
+     */
+    function extractServerFileId(url) {
+        if (!url) return null;
+        // Match /api/files/{fileId} - handle both relative and absolute URLs
+        const filesMatch = url.match(/\/api\/files\/([^/?]+)/);
+        if (filesMatch) return decodeURIComponent(filesMatch[1]);
+        // Match /api/hls/{fileId}/... - handle both relative and absolute URLs
+        const hlsMatch = url.match(/\/api\/hls\/([^/?]+)/);
+        if (hlsMatch) return decodeURIComponent(hlsMatch[1]);
+        return null;
+    }
+
+    /**
+     * Check if URL is an HLS stream (transcoded version)
+     * Handles both relative (/api/hls/) and absolute URLs
+     */
+    function isHlsServerUrl(url) {
+        return url && url.includes('/api/hls/');
+    }
+
+    /**
+     * Remove duplicate streams, preferring HLS (transcoded) over originals
+     * Detects duplicates by: server fileId, fileName, or normalized URL
      */
     function removeDuplicateStreams() {
         const allStreams = PlexdStream.getAllStreams();
-        const seen = new Set();
+        // Map of key -> { stream, isHls }
+        const streamsByKey = new Map();
         const duplicates = [];
 
         allStreams.forEach(stream => {
             let key;
-            // For local files (blob URLs), use filename as the key since blob URLs are always unique
-            if (isBlobUrl(stream.url) && stream.fileName) {
+            const isHls = isHlsServerUrl(stream.url) || isHlsServerUrl(stream.serverUrl);
+
+            // Try to extract server fileId first (handles both /api/files/ and /api/hls/)
+            const fileId = extractServerFileId(stream.url) || extractServerFileId(stream.serverUrl);
+            if (fileId) {
+                key = 'server:' + fileId.toLowerCase();
+            } else if (isBlobUrl(stream.url) && stream.fileName) {
+                // For local files (blob URLs), use filename as key
                 key = 'file:' + stream.fileName.toLowerCase();
             } else {
-                // For regular URLs, normalize for comparison
+                // For other URLs, normalize for comparison
                 key = urlEqualityKey(stream.url);
             }
 
-            if (seen.has(key)) {
-                duplicates.push(stream.id);
+            const existing = streamsByKey.get(key);
+            if (existing) {
+                // Duplicate found - decide which to keep
+                // Prefer HLS version over original
+                if (isHls && !existing.isHls) {
+                    // New stream is HLS, existing is original - remove existing
+                    duplicates.push(existing.stream.id);
+                    streamsByKey.set(key, { stream, isHls });
+                } else {
+                    // Keep existing, remove new
+                    duplicates.push(stream.id);
+                }
             } else {
-                seen.add(key);
+                streamsByKey.set(key, { stream, isHls });
             }
         });
 
@@ -5707,6 +7012,7 @@ const PlexdApp = (function() {
         playAllFromQueue,
         // History
         clearHistory,
+        removeHistoryItem,
         togglePanel,
         openPanel,
         // Streams panel
@@ -5728,6 +7034,8 @@ const PlexdApp = (function() {
         cycleTetrisMode,
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
+        rotateStreams,
+        forceRelayout,
         toggleBugEyeMode,
         toggleMosaicMode,
         toggleHeader,
@@ -5743,6 +7051,8 @@ const PlexdApp = (function() {
         rewindAll,
         // File management
         showManageStoredFilesModal,
+        // Stream cleanup (called by stream.js when streams are removed)
+        stopTranscodePollForStream,
         // Help
         showShortcutsModal
     };
@@ -5789,6 +7099,7 @@ const PlexdRemote = (function() {
             channel = new BroadcastChannel('plexd-remote');
             channel.onmessage = (event) => {
                 const { action, payload } = event.data;
+                if (action === 'stateUpdate') return; // Ignore state broadcasts from ourselves
                 handleRemoteCommand(action, payload);
             };
         }
@@ -5802,41 +7113,23 @@ const PlexdRemote = (function() {
         console.log('Plexd remote control listener initialized');
     }
 
-    // Track if HTTP API is available (avoids spamming console with 404 errors)
-    let httpApiAvailable = true;
-    let httpApiCheckCount = 0;
-
     /**
      * Poll for commands from remote devices (HTTP API + localStorage fallback)
      */
     function startCommandPolling() {
         // HTTP API polling for cross-device (iPhone to MBP)
         commandPollInterval = setInterval(async () => {
-            // Only try HTTP API if it's available (or we haven't checked yet)
-            if (httpApiAvailable) {
-                try {
-                    const res = await fetch('/api/remote/command');
-                    if (res.ok) {
-                        const cmd = await res.json();
-                        if (cmd && cmd.action) {
-                            console.log('[Remote] Polled command:', cmd.action);
-                            handleRemoteCommand(cmd.action, cmd.payload);
-                        }
-                    } else if (res.status === 404 || res.status === 501) {
-                        // API not implemented on this server - disable HTTP polling
-                        httpApiCheckCount++;
-                        if (httpApiCheckCount >= 2) {
-                            httpApiAvailable = false;
-                            console.log('[Plexd] Remote API not available, using localStorage fallback only');
-                        }
-                    }
-                } catch (e) {
-                    // Network error - disable HTTP polling
-                    httpApiCheckCount++;
-                    if (httpApiCheckCount >= 2) {
-                        httpApiAvailable = false;
+            try {
+                const res = await fetch('/api/remote/command');
+                if (res.ok) {
+                    const cmd = await res.json();
+                    if (cmd && cmd.action) {
+                        console.log('[Remote] Polled command:', cmd.action);
+                        handleRemoteCommand(cmd.action, cmd.payload);
                     }
                 }
+            } catch (e) {
+                // Network error - silently continue, next poll will retry
             }
 
             // Always check localStorage fallback
@@ -6036,6 +7329,12 @@ const PlexdRemote = (function() {
                 }
                 sendState();
                 break;
+            case 'queueStream':
+                if (payload.url) {
+                    PlexdApp.addToQueue(payload.url);
+                }
+                sendState();
+                break;
 
             // UI toggles
             case 'toggleHeader':
@@ -6116,26 +7415,14 @@ const PlexdRemote = (function() {
             });
         }
 
-        // HTTP API for cross-device (iPhone to MBP) - only if available
-        if (httpApiAvailable) {
-            fetch('/api/remote/state', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(state)
-            }).then(res => {
-                if (res.status === 404 || res.status === 501) {
-                    httpApiCheckCount++;
-                    if (httpApiCheckCount >= 2) {
-                        httpApiAvailable = false;
-                    }
-                }
-            }).catch(() => {
-                httpApiCheckCount++;
-                if (httpApiCheckCount >= 2) {
-                    httpApiAvailable = false;
-                }
-            });
-        }
+        // HTTP API for cross-device (iPhone to MBP)
+        fetch('/api/remote/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(state)
+        }).catch(() => {
+            // Network error - silently continue
+        });
 
         // localStorage fallback (always use)
         try {

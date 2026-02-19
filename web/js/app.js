@@ -641,6 +641,22 @@ const PlexdApp = (function() {
     let headerVisible = false;
     window._plexdHeaderVisible = headerVisible;
 
+    // =========================================================================
+    // Theater / Advanced Mode
+    // =========================================================================
+    let theaterMode = true; // true = Theater (default), false = Advanced
+    let theaterScene = 'casting'; // 'casting' | 'lineup' | 'stage' | 'climax' | 'encore'
+    let climaxSubMode = 0; // 0=tight-wall, 1=auto-rotate, 2=collage, 3=single-focus
+    let encorePreviousScene = null; // Scene to return to when exiting Encore
+    let autoRotateTimer = null; // Interval timer for Climax auto-rotate
+    const AUTO_ROTATE_INTERVAL = 15000; // 15 seconds between hero rotations
+    let bookmarks = []; // Array of { streamId, timestamp, bookmarkedAt }
+    let stageHeroId = null; // Currently promoted hero in Stage scene
+
+    // Theater Space double-tap (random seek)
+    let lastSpaceTime = 0;
+    let spaceTimeout = null;
+
     /**
      * Initialize the application
      */
@@ -655,6 +671,10 @@ const PlexdApp = (function() {
             console.error('Plexd: Container element not found');
             return;
         }
+
+        // Theater mode is on by default — add class so CSS can target it
+        const appEl = document.querySelector('.plexd-app');
+        if (appEl) appEl.classList.add('theater-mode');
 
         // Set up event listeners
         setupEventListeners();
@@ -2081,6 +2101,232 @@ const PlexdApp = (function() {
     function forceRelayout() {
         updateLayout();
         showMessage('Layout refreshed', 'info');
+    }
+
+    // =========================================================================
+    // Wall / Tetris CSS class helpers (used by Theater scene management)
+    // =========================================================================
+
+    /**
+     * Sync wall-mode CSS classes on .plexd-app to match the wallMode variable.
+     * Does NOT change wallMode itself — call after setting wallMode.
+     */
+    function updateWallModeClasses() {
+        const app = document.querySelector('.plexd-app');
+        const wallBtn = document.getElementById('wall-btn');
+        if (app) {
+            app.classList.remove('wall-strips', 'wall-crop', 'wall-spotlight');
+            if (wallMode === 1) app.classList.add('wall-strips');
+            else if (wallMode === 2) app.classList.add('wall-crop');
+            else if (wallMode === 3) app.classList.add('wall-spotlight');
+        }
+        if (wallBtn) wallBtn.classList.toggle('active', wallMode > 0);
+    }
+
+    /**
+     * Sync tetris-mode CSS classes on .plexd-app to match the tetrisMode variable.
+     * Does NOT change tetrisMode itself — call after setting tetrisMode.
+     */
+    function updateTetrisModeClasses() {
+        const app = document.querySelector('.plexd-app');
+        const tetrisBtn = document.getElementById('tetris-btn');
+        if (app) {
+            app.classList.toggle('tetris-mode', tetrisMode > 0);
+            app.classList.remove('tetris-mode-1', 'tetris-mode-2', 'tetris-mode-3', 'tetris-mode-4');
+            if (tetrisMode > 0) {
+                app.classList.add(`tetris-mode-${tetrisMode}`);
+            }
+            app.classList.toggle('tetris-content-visible', tetrisMode === 4);
+        }
+        if (tetrisBtn) tetrisBtn.classList.toggle('active', tetrisMode > 0);
+    }
+
+    // =========================================================================
+    // Theater Mode — Scene Management
+    // =========================================================================
+
+    function getSceneName(scene) {
+        if (scene === 'climax') {
+            return 'Climax: ' + ['Tight Wall', 'Auto-Rotate', 'Collage', 'Single Focus'][climaxSubMode];
+        }
+        const names = { casting: 'Casting Call', lineup: 'Lineup', stage: 'Stage', encore: 'Encore' };
+        return names[scene] || scene;
+    }
+
+    function setTheaterScene(scene) {
+        const prev = theaterScene;
+        if (prev === 'encore') closeEncoreView();
+        if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
+        theaterScene = scene;
+        applyTheaterScene();
+        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        showMessage(getSceneName(scene), 'info');
+    }
+
+    function nextScene() {
+        const order = ['casting', 'lineup', 'stage', 'climax'];
+        const idx = order.indexOf(theaterScene);
+        const next = idx >= order.length - 1 ? order[0] : order[idx + 1];
+        setTheaterScene(next);
+    }
+
+    function prevScene() {
+        const order = ['casting', 'lineup', 'stage', 'climax'];
+        const idx = order.indexOf(theaterScene);
+        const prev = idx <= 0 ? order[order.length - 1] : order[idx - 1];
+        setTheaterScene(prev);
+    }
+
+    function toggleTheaterAdvanced() {
+        theaterMode = !theaterMode;
+        const app = document.querySelector('.plexd-app');
+        if (app) app.classList.toggle('theater-mode', theaterMode);
+
+        if (theaterMode) {
+            theaterScene = detectCurrentScene();
+            applyTheaterScene();
+        }
+        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        showMessage(theaterMode ? 'Theater Mode' : 'Advanced Mode', 'info');
+    }
+
+    function detectCurrentScene() {
+        const mode = PlexdStream.getFullscreenMode();
+        if (mode === 'true-focused' || mode === 'browser-fill') return 'stage';
+        if (wallMode === 3) return 'stage'; // Spotlight = Stage
+        if (viewMode === 'favorites' || (typeof viewMode === 'number' && viewMode >= 5)) return 'lineup';
+        if (bugEyeMode || mosaicMode) return 'climax';
+        return 'casting';
+    }
+
+    function applyTheaterScene() {
+        if (coverflowMode) toggleCoverflowMode();
+
+        switch (theaterScene) {
+            case 'casting':
+                setViewMode('all');
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 2; // Crop tiles
+                window._plexdWallMode = 2;
+                if (!faceDetectionActive) startFaceDetection();
+                break;
+
+            case 'lineup':
+                // Show only starred/high-rated
+                {
+                    const favCount = PlexdStream.getFavoriteCount();
+                    setViewMode(favCount > 0 ? 'favorites' : 'all');
+                }
+                wallMode = 0;
+                window._plexdWallMode = 0;
+                tetrisMode = 3; // Treemap
+                window._plexdTetrisMode = 3;
+                break;
+
+            case 'stage':
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 3; // Spotlight
+                window._plexdWallMode = 3;
+                if (!stageHeroId || !PlexdStream.getStream(stageHeroId)) {
+                    const streams = getFilteredStreams();
+                    stageHeroId = streams.length > 0 ? streams[0].id : null;
+                }
+                if (stageHeroId) PlexdStream.selectStream(stageHeroId);
+                break;
+
+            case 'climax':
+                applyClimaxSubMode();
+                return; // applyClimaxSubMode handles its own layout
+
+            case 'encore':
+                showEncoreView();
+                return; // Encore has its own rendering
+        }
+
+        updateWallModeClasses();
+        updateTetrisModeClasses();
+        updateLayout();
+    }
+
+    function applyClimaxSubMode() {
+        stopAutoRotate();
+        switch (climaxSubMode) {
+            case 0: // Tight Wall
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 2;
+                window._plexdWallMode = 2;
+                break;
+            case 1: // Auto-Rotate Hero
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 3;
+                window._plexdWallMode = 3;
+                startAutoRotate();
+                break;
+            case 2: // Collage — handled in updateLayout
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 0;
+                window._plexdWallMode = 0;
+                break;
+            case 3: // Single Focus
+                tetrisMode = 0;
+                window._plexdTetrisMode = 0;
+                wallMode = 0;
+                window._plexdWallMode = 0;
+                {
+                    const target = PlexdStream.getSelectedStream() || getFilteredStreams()[0];
+                    if (target) PlexdStream.enterFocusedMode(target.id);
+                }
+                return; // Fullscreen handles its own layout
+        }
+        updateWallModeClasses();
+        updateTetrisModeClasses();
+        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        updateLayout();
+    }
+
+    function startAutoRotate() {
+        stopAutoRotate();
+        autoRotateTimer = setInterval(() => {
+            if (!theaterMode || theaterScene !== 'climax' || climaxSubMode !== 1) {
+                stopAutoRotate();
+                return;
+            }
+            const streams = getFilteredStreams();
+            if (streams.length < 2) return;
+            const sel = PlexdStream.getSelectedStream();
+            const currentIdx = sel ? streams.findIndex(s => s.id === sel.id) : -1;
+            const nextIdx = (currentIdx + 1) % streams.length;
+            PlexdStream.selectStream(streams[nextIdx].id);
+            stageHeroId = streams[nextIdx].id;
+            updateLayout();
+        }, AUTO_ROTATE_INTERVAL);
+    }
+
+    function stopAutoRotate() {
+        if (autoRotateTimer) {
+            clearInterval(autoRotateTimer);
+            autoRotateTimer = null;
+        }
+    }
+
+    // Placeholder stubs for Encore (implemented in Task 11)
+    function showEncoreView() {
+        if (bookmarks.length === 0) {
+            showMessage('No bookmarks yet — press K to bookmark moments', 'info');
+            theaterScene = encorePreviousScene || 'casting';
+            return;
+        }
+        showMessage('Encore: ' + bookmarks.length + ' bookmarks', 'info');
+    }
+
+    function closeEncoreView() {
+        const overlay = document.getElementById('encore-overlay');
+        if (overlay) overlay.remove();
     }
 
     // Bug Eye mode state
@@ -7481,6 +7727,11 @@ const PlexdApp = (function() {
         toggleFaceDetection,
         rotateStreams,
         forceRelayout,
+        // Theater / Advanced mode
+        toggleTheaterAdvanced,
+        nextScene,
+        prevScene,
+        setTheaterScene,
         toggleBugEyeMode,
         toggleMosaicMode,
         toggleHeader,

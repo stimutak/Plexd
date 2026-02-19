@@ -1552,11 +1552,38 @@ const PlexdApp = (function() {
             layout = PlexdGrid.calculateLayout(container, streamsToShow);
         }
 
-        // Wall: Crop Tiles — apply zoom modifier to all cells regardless of layout
-        // Selected stream gets a bigger zoom to stand out as the "hero crop"
+        // Wall: Crop Tiles — edge-to-edge packed wall with aggressive center zoom
         if (wallMode === 2) {
             const selectedStream = PlexdStream.getSelectedStream();
             const selectedId = selectedStream ? selectedStream.id : null;
+
+            // If not stacked on Tetris (which already fills cells), force edge-to-edge grid
+            if (tetrisMode === 0 && !coverflowMode) {
+                const count = streamsToShow.length;
+                if (count > 0) {
+                    // Find optimal rows/cols that maximize 16:9 cell shape and fill
+                    let bestRows = 1, bestCols = count, bestScore = -Infinity;
+                    for (let r = 1; r <= count; r++) {
+                        const c = Math.ceil(count / r);
+                        if ((r * c) - count >= c) continue; // Skip layouts with entire empty row
+                        const cellRatio = (container.width / c) / (container.height / r);
+                        const score = (1 - Math.abs(cellRatio - 16/9) / (16/9)) * 0.6 + (count / (r * c)) * 0.4;
+                        if (score > bestScore) { bestRows = r; bestCols = c; bestScore = score; }
+                    }
+
+                    const cellW = container.width / bestCols;
+                    const cellH = container.height / bestRows;
+                    layout.cells = streamsToShow.map((stream, i) => ({
+                        streamId: stream.id,
+                        x: (i % bestCols) * cellW,
+                        y: Math.floor(i / bestCols) * cellH,
+                        width: cellW,
+                        height: cellH,
+                    }));
+                }
+            }
+
+            // Apply zoom and selection highlight to all cells
             layout.cells.forEach(cell => {
                 cell.objectFit = 'cover';
                 cell.wallCropZoom = (cell.streamId === selectedId) ? 2.2 : 1.8;
@@ -1851,6 +1878,125 @@ const PlexdApp = (function() {
             showMessage(`Wall: Crop Tiles (on ${base})`, 'info');
         } else {
             showMessage(`Wall: ${wallModeNames[wallMode]}`, 'info');
+        }
+    }
+
+    // =========================================================================
+    // Face Detection Auto-Pan (Smart Zoom)
+    // =========================================================================
+    // Uses Chrome's FaceDetector API (hardware-accelerated on M4 via Core ML)
+    // to automatically center crop on detected faces in video streams.
+
+    let faceDetector = null;
+    let faceDetectionActive = false;
+    let faceDetectionTimer = null;
+    const FACE_DETECT_INTERVAL = 4000; // ms between detection sweeps
+    const FACE_DETECT_SMOOTHING = 0.3; // Blend factor (0=keep old, 1=snap to new)
+
+    async function initFaceDetection() {
+        if (faceDetector) return true;
+        if (!('FaceDetector' in window)) {
+            console.log('[Plexd] FaceDetector API not available — enable chrome://flags/#enable-experimental-web-platform-features');
+            return false;
+        }
+        try {
+            faceDetector = new FaceDetector({ maxDetectedFaces: 5, fastMode: true });
+            console.log('[Plexd] FaceDetector initialized (hardware-accelerated)');
+            return true;
+        } catch (e) {
+            console.log('[Plexd] FaceDetector init failed:', e.message);
+            return false;
+        }
+    }
+
+    async function detectFacesForStream(stream) {
+        if (!faceDetector || !stream.video || stream.video.readyState < 2 || stream.video.paused) return;
+        try {
+            const faces = await faceDetector.detect(stream.video);
+            if (faces.length === 0) return;
+
+            // Find the bounding box that covers all detected faces
+            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+            for (const face of faces) {
+                const bb = face.boundingBox;
+                minX = Math.min(minX, bb.x);
+                minY = Math.min(minY, bb.y);
+                maxX = Math.max(maxX, bb.x + bb.width);
+                maxY = Math.max(maxY, bb.y + bb.height);
+            }
+
+            // Center of all faces as a percentage of video dimensions
+            const vw = stream.video.videoWidth;
+            const vh = stream.video.videoHeight;
+            if (vw === 0 || vh === 0) return;
+
+            const centerX = ((minX + maxX) / 2 / vw) * 100;
+            const centerY = ((minY + maxY) / 2 / vh) * 100;
+
+            // Smooth towards detected position (avoid jarring jumps)
+            const current = PlexdStream.getPanPosition(stream.id);
+            const newX = current.x + (centerX - current.x) * FACE_DETECT_SMOOTHING;
+            const newY = current.y + (centerY - current.y) * FACE_DETECT_SMOOTHING;
+
+            PlexdStream.setPanPosition(stream.id, { x: newX, y: newY });
+        } catch (e) {
+            // detect() can throw on certain frames — ignore silently
+        }
+    }
+
+    async function runFaceDetectionSweep() {
+        if (!faceDetectionActive || !faceDetector) return;
+
+        const streams = PlexdStream.getAllStreams().filter(s => !s.hidden);
+        // Stagger detection across frames to avoid CPU spike
+        for (let i = 0; i < streams.length; i++) {
+            if (!faceDetectionActive) break;
+            await detectFacesForStream(streams[i]);
+            // Yield between streams so UI stays responsive
+            if (i < streams.length - 1) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+        }
+
+        // Trigger layout refresh to apply new pan positions
+        if (faceDetectionActive) {
+            updateLayout();
+        }
+    }
+
+    function startFaceDetection() {
+        if (faceDetectionActive) return;
+        initFaceDetection().then(ok => {
+            if (!ok) {
+                showMessage('Smart Zoom unavailable — enable chrome://flags/#enable-experimental-web-platform-features', 'warning');
+                return;
+            }
+            faceDetectionActive = true;
+            const btn = document.getElementById('smart-zoom-btn');
+            if (btn) btn.classList.add('active');
+            runFaceDetectionSweep();
+            faceDetectionTimer = setInterval(runFaceDetectionSweep, FACE_DETECT_INTERVAL);
+            showMessage('Smart Zoom: ON (face detection)', 'info');
+        });
+    }
+
+    function stopFaceDetection() {
+        if (!faceDetectionActive) return;
+        faceDetectionActive = false;
+        if (faceDetectionTimer) {
+            clearInterval(faceDetectionTimer);
+            faceDetectionTimer = null;
+        }
+        const btn = document.getElementById('smart-zoom-btn');
+        if (btn) btn.classList.remove('active');
+        showMessage('Smart Zoom: OFF', 'info');
+    }
+
+    function toggleFaceDetection() {
+        if (faceDetectionActive) {
+            stopFaceDetection();
+        } else {
+            startFaceDetection();
         }
     }
 
@@ -3027,20 +3173,41 @@ const PlexdApp = (function() {
                 break;
             case 'm':
             case 'M':
-                if (selected) {
-                    PlexdStream.toggleMute(selected.id);
-                } else {
-                    const muted = PlexdStream.toggleMuteAll();
-                    showMessage(muted ? 'All streams muted' : 'All streams unmuted', 'info');
+                {
+                    const targetStream = fullscreenStream || selected;
+                    if (targetStream) {
+                        const isMuted = targetStream.video.muted;
+                        if (isMuted) {
+                            // Unmuting: enable audio focus so audio follows navigation
+                            PlexdStream.toggleMute(targetStream.id);
+                            if (!PlexdStream.getAudioFocusMode()) {
+                                PlexdStream.toggleAudioFocus();
+                                updateAudioFocusButton(true);
+                            }
+                            // Mute all others when enabling audio follow
+                            PlexdStream.muteAllExcept(targetStream.id);
+                            showMessage('Audio ON \u2014 follows selection', 'info');
+                        } else {
+                            // Muting: disable audio focus
+                            PlexdStream.toggleMute(targetStream.id);
+                            if (PlexdStream.getAudioFocusMode()) {
+                                PlexdStream.toggleAudioFocus();
+                                updateAudioFocusButton(false);
+                            }
+                            showMessage('Audio OFF', 'info');
+                        }
+                    }
                 }
                 break;
             case 'n':
             case 'N':
-                // N for audio focus (next to M for mute - audio controls cluster)
                 {
-                    const audioFocus = PlexdStream.toggleAudioFocus();
-                    updateAudioFocusButton(audioFocus);
-                    showMessage(`Audio focus: ${audioFocus ? 'ON' : 'OFF'}`, 'info');
+                    PlexdStream.muteAll();
+                    if (PlexdStream.getAudioFocusMode()) {
+                        PlexdStream.toggleAudioFocus();
+                    }
+                    updateAudioFocusButton(false);
+                    showMessage('All audio OFF', 'info');
                 }
                 break;
             case 'i':
@@ -3331,6 +3498,11 @@ const PlexdApp = (function() {
                 // W = Cycle Wall mode (Strips → Crop Tiles → Spotlight → Off)
                 // Shift+W = Cycle backward
                 cycleWallMode(e.shiftKey);
+                break;
+            case 'a':
+            case 'A':
+                // A = Toggle Smart Zoom (face detection auto-pan)
+                toggleFaceDetection();
                 break;
             case '[':
                 // [ = Rotate CCW
@@ -5811,6 +5983,7 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Shift+T</kbd> Reset pan positions</div>
                         <div class="plexd-shortcut"><kbd>O</kbd> Toggle Coverflow</div>
                         <div class="plexd-shortcut"><kbd>W</kbd> Cycle Wall mode (Strips/Crop/Spotlight)</div>
+                        <div class="plexd-shortcut"><kbd>A</kbd> Smart Zoom (face auto-pan)</div>
                         <div class="plexd-shortcut"><kbd>]</kbd> / <kbd>[</kbd> Rotate CW / CCW</div>
                         <div class="plexd-shortcut"><kbd>}</kbd> / <kbd>{</kbd> Shuffle randomly</div>
                         <div class="plexd-shortcut"><kbd>L</kbd> Force relayout</div>
@@ -7195,6 +7368,7 @@ const PlexdApp = (function() {
         toggleCoverflowMode,
         toggleSmartLayoutMode, // Legacy alias for Coverflow
         cycleWallMode,
+        toggleFaceDetection,
         rotateStreams,
         forceRelayout,
         toggleBugEyeMode,
@@ -7463,6 +7637,10 @@ const PlexdRemote = (function() {
                 break;
             case 'cycleWallMode':
                 PlexdApp.cycleWallMode();
+                sendState();
+                break;
+            case 'toggleFaceDetection':
+                PlexdApp.toggleFaceDetection();
                 sendState();
                 break;
 

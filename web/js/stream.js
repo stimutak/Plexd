@@ -20,8 +20,8 @@ const PlexdStream = (function() {
 
     // Audio focus mode - when true, audio follows stream selection
     // Unmuting any stream mutes others, and selecting a stream transfers audio to it
-    // Load from localStorage, default to true
-    let audioFocusMode = localStorage.getItem('plexd_audio_focus') !== 'false';
+    // Load from localStorage, default to false (audio off by default)
+    let audioFocusMode = localStorage.getItem('plexd_audio_focus') === 'true';
 
     // Show stream info overlay
     let showInfoOverlay = false;
@@ -3765,8 +3765,19 @@ const PlexdStream = (function() {
     function muteAll() {
         streams.forEach(stream => {
             stream.video.muted = true;
-            const muteBtn = stream.controls.querySelector('.plexd-mute-btn');
-            if (muteBtn) muteBtn.innerHTML = '&#128263;';
+            updateMuteButton(stream);
+        });
+    }
+
+    /**
+     * Mute all streams except the specified one
+     */
+    function muteAllExcept(streamId) {
+        streams.forEach((stream, id) => {
+            if (id !== streamId && stream.video) {
+                stream.video.muted = true;
+                updateMuteButton(stream);
+            }
         });
     }
 
@@ -4726,6 +4737,7 @@ const PlexdStream = (function() {
         pauseStream,
         resumeStream,
         muteAll,
+        muteAllExcept,
         togglePauseAll,
         isGloballyPaused,
         getVideoElements,

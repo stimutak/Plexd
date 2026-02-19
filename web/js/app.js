@@ -652,6 +652,7 @@ const PlexdApp = (function() {
     const AUTO_ROTATE_INTERVAL = 15000; // 15 seconds between hero rotations
     let bookmarks = []; // Array of { streamId, timestamp, bookmarkedAt }
     let stageHeroId = null; // Currently promoted hero in Stage scene
+    let castingFadeTimer = null; // Guard for Casting→Lineup fade animation
 
     // Theater Space double-tap (random seek)
     let lastSpaceTime = 0;
@@ -1483,7 +1484,7 @@ const PlexdApp = (function() {
         if (viewMode === 'favorites') {
             streamsToShow = streamsToShow.filter(s => PlexdStream.getFavorite(s.url, s.fileName));
         } else if (viewMode !== 'all') {
-            streamsToShow = streamsToShow.filter(s => PlexdStream.getRating(s.url) === viewMode);
+            streamsToShow = streamsToShow.filter(s => PlexdStream.getRating(s.url, s.fileName) === viewMode);
         }
 
         // Handle visibility and playback of streams based on view mode AND individual hidden state
@@ -1512,7 +1513,7 @@ const PlexdApp = (function() {
                 if (viewMode === 'favorites') {
                     isVisible = PlexdStream.getFavorite(stream.url, stream.fileName);
                 } else {
-                    const rating = PlexdStream.getRating(stream.url);
+                    const rating = PlexdStream.getRating(stream.url, stream.fileName);
                     isVisible = (rating === viewMode);
                 }
                 stream.wrapper.style.display = isVisible ? '' : 'none';
@@ -2193,6 +2194,7 @@ const PlexdApp = (function() {
 
     function setTheaterScene(scene) {
         const prev = theaterScene;
+        if (castingFadeTimer) { clearTimeout(castingFadeTimer); castingFadeTimer = null; }
         if (prev === 'encore') closeEncoreView();
         if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
 
@@ -2205,7 +2207,8 @@ const PlexdApp = (function() {
                 }
             });
             showMessage(getSceneName(scene), 'info');
-            setTimeout(function() {
+            castingFadeTimer = setTimeout(function() {
+                castingFadeTimer = null;
                 theaterScene = scene;
                 applyTheaterScene();
                 updateModeIndicator();
@@ -2223,6 +2226,10 @@ const PlexdApp = (function() {
     }
 
     function nextScene() {
+        if (theaterScene === 'encore') {
+            setTheaterScene(encorePreviousScene || 'casting');
+            return;
+        }
         const order = ['casting', 'lineup', 'stage', 'climax'];
         const idx = order.indexOf(theaterScene);
         const next = idx >= order.length - 1 ? order[0] : order[idx + 1];
@@ -2230,6 +2237,10 @@ const PlexdApp = (function() {
     }
 
     function prevScene() {
+        if (theaterScene === 'encore') {
+            setTheaterScene(encorePreviousScene || 'casting');
+            return;
+        }
         const order = ['casting', 'lineup', 'stage', 'climax'];
         const idx = order.indexOf(theaterScene);
         const prev = idx <= 0 ? order[order.length - 1] : order[idx - 1];
@@ -2263,6 +2274,15 @@ const PlexdApp = (function() {
 
         // Clear lineup weights when switching scenes (will be re-set if entering lineup)
         window._plexdLineupWeights = null;
+
+        // Remove Casting-only visual classes when leaving Casting
+        if (theaterScene !== 'casting') {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.wrapper) {
+                    s.wrapper.classList.remove('starred-glow', 'low-rated');
+                }
+            });
+        }
 
         switch (theaterScene) {
             case 'casting':
@@ -2442,6 +2462,8 @@ const PlexdApp = (function() {
         if (bookmarks.length === 0) {
             showMessage('No bookmarks yet — press K to bookmark moments', 'info');
             theaterScene = encorePreviousScene || 'casting';
+            applyTheaterScene();
+            updateModeIndicator();
             return;
         }
 
@@ -2495,7 +2517,14 @@ const PlexdApp = (function() {
 
     function closeEncoreView() {
         const overlay = document.getElementById('encore-overlay');
-        if (overlay) overlay.remove();
+        if (overlay) {
+            overlay.querySelectorAll('video').forEach(function(v) {
+                v.pause();
+                v.removeAttribute('src');
+                v.load();
+            });
+            overlay.remove();
+        }
     }
 
     // Bug Eye mode state
@@ -4052,7 +4081,6 @@ const PlexdApp = (function() {
                 if (theaterMode && theaterScene === 'climax') {
                     climaxSubMode = (climaxSubMode + 1) % 4;
                     applyClimaxSubMode();
-                    updateLayout();
                     showMessage(getSceneName('climax'), 'info');
                     break;
                 }
@@ -4082,7 +4110,6 @@ const PlexdApp = (function() {
                 if (theaterMode && theaterScene === 'climax') {
                     climaxSubMode = (climaxSubMode + 3) % 4; // reverse
                     applyClimaxSubMode();
-                    updateLayout();
                     showMessage(getSceneName('climax'), 'info');
                 }
                 break;

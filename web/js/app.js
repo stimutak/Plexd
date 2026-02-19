@@ -6585,9 +6585,17 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
                     </div>
                     <div class="plexd-shortcuts-section">
+                        <h4>Theater Mode</h4>
+                        <div class="plexd-shortcut"><kbd>\`</kbd> Toggle Theater / Advanced</div>
+                        <div class="plexd-shortcut"><kbd>Space</kbd> Next scene (Theater) · Play/Pause (Adv)</div>
+                        <div class="plexd-shortcut"><kbd>Shift+Space</kbd> Previous scene (Theater)</div>
+                        <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene (Theater)</div>
+                        <div class="plexd-shortcut"><kbd>J</kbd> Toggle Encore view</div>
+                        <div class="plexd-shortcut"><kbd>K</kbd> Bookmark moment</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
                         <h4>Stars & Slots</h4>
                         <div class="plexd-shortcut"><kbd>Q</kbd> Star · <kbd>QQ</kbd> Filter starred</div>
-                        <div class="plexd-shortcut"><kbd>\`</kbd> View starred only</div>
                         <div class="plexd-shortcut"><kbd>1-9</kbd> Assign to slot (tap)</div>
                         <div class="plexd-shortcut"><kbd>1-9</kbd> View slot (double-tap)</div>
                         <div class="plexd-shortcut"><kbd>0</kbd> View all streams</div>
@@ -8310,6 +8318,20 @@ const PlexdRemote = (function() {
                 break;
             case 'toggleAudioFocus':
                 PlexdApp.toggleAudioFocus();
+                sendState();
+                break;
+
+            // Theater / Advanced mode
+            case 'toggleTheaterAdvanced':
+                PlexdApp.toggleTheaterAdvanced();
+                sendState();
+                break;
+            case 'nextScene':
+                PlexdApp.nextScene();
+                sendState();
+                break;
+            case 'prevScene':
+                PlexdApp.prevScene();
                 sendState();
                 break;
 

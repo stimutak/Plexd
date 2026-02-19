@@ -3426,15 +3426,38 @@ const PlexdApp = (function() {
         switch (e.key) {
             case ' ':
                 e.preventDefault();
-                if (selected) {
-                    // Toggle selected stream
-                    if (selected.video.paused) {
-                        selected.video.play().catch(() => {});
+                if (theaterMode) {
+                    // Theater: Space = next scene, Shift+Space = prev, Space-Space = random seek
+                    const now = Date.now();
+                    const shiftHeld = e.shiftKey;
+                    if ((now - lastSpaceTime) < DOUBLE_TAP_THRESHOLD) {
+                        if (spaceTimeout) { clearTimeout(spaceTimeout); spaceTimeout = null; }
+                        lastSpaceTime = 0;
+                        // Double-tap: random seek
+                        if (theaterScene === 'stage' || theaterScene === 'climax') {
+                            randomSeekSelected();
+                        } else {
+                            randomSeekAll();
+                        }
                     } else {
-                        selected.video.pause();
+                        lastSpaceTime = now;
+                        if (spaceTimeout) clearTimeout(spaceTimeout);
+                        spaceTimeout = setTimeout(() => {
+                            spaceTimeout = null;
+                            if (shiftHeld) { prevScene(); } else { nextScene(); }
+                        }, DOUBLE_TAP_THRESHOLD);
                     }
                 } else {
-                    togglePlayPause();
+                    // Advanced: Space = play/pause (existing behavior)
+                    if (selected) {
+                        if (selected.video.paused) {
+                            selected.video.play().catch(() => {});
+                        } else {
+                            selected.video.pause();
+                        }
+                    } else {
+                        togglePlayPause();
+                    }
                 }
                 break;
             case 'm':
@@ -3482,19 +3505,8 @@ const PlexdApp = (function() {
                 showMessage(`Stream info: ${showInfo ? 'ON' : 'OFF'}`, 'info');
                 break;
             case '`':
-                // ` (backtick): View favorites (filter to favorites)
                 e.preventDefault();
-                {
-                    const fullscreenMode = PlexdStream.getFullscreenMode();
-                    if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
-                        PlexdStream.exitFocusedMode();
-                    }
-                    const count = PlexdStream.getFavoriteCount();
-                    setViewMode('favorites');
-                    if (count === 0) {
-                        showMessage('No favorites yet. Press Q to star streams.', 'info');
-                    }
-                }
+                toggleTheaterAdvanced();
                 break;
             case 'c':
             case 'C':
@@ -3735,11 +3747,13 @@ const PlexdApp = (function() {
                         // Exit browser-fill mode back to grid
                         PlexdStream.exitFocusedMode();
                     } else {
-                        // Normal mode - deselect
-                        PlexdStream.selectStream(null);
-                        // Also do a defensive cleanup in case state is stuck
-                        // This ensures any lingering fullscreen CSS is removed
-                        PlexdStream.resetFullscreenState();
+                        // Normal mode - deselect or Theater scene regression
+                        if (theaterMode && theaterScene !== 'casting') {
+                            prevScene();
+                        } else {
+                            PlexdStream.selectStream(null);
+                            PlexdStream.resetFullscreenState();
+                        }
                     }
                     if (inputEl) inputEl.blur();
                 }
@@ -3863,6 +3877,14 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'e':
+                // Theater Climax: E cycles sub-mode
+                if (theaterMode && theaterScene === 'climax') {
+                    climaxSubMode = (climaxSubMode + 1) % 4;
+                    applyClimaxSubMode();
+                    updateLayout();
+                    showMessage(getSceneName('climax'), 'info');
+                    break;
+                }
                 // e = Seek back 10s, ee = Seek back 60s
                 e.preventDefault();
                 {
@@ -3883,6 +3905,14 @@ const PlexdApp = (function() {
                             syncOverlayClones();
                         }, DOUBLE_TAP_THRESHOLD);
                     }
+                }
+                break;
+            case 'E':
+                if (theaterMode && theaterScene === 'climax') {
+                    climaxSubMode = (climaxSubMode + 3) % 4; // reverse
+                    applyClimaxSubMode();
+                    updateLayout();
+                    showMessage(getSceneName('climax'), 'info');
                 }
                 break;
             case 'r':
@@ -3964,6 +3994,40 @@ const PlexdApp = (function() {
                                 showMessage('Select a stream first', 'info');
                             }
                         }, DOUBLE_TAP_THRESHOLD);
+                    }
+                }
+                break;
+            case 'j':
+            case 'J':
+                if (!theaterMode) break;
+                e.preventDefault();
+                if (theaterScene === 'encore') {
+                    // Exit Encore, return to previous scene
+                    setTheaterScene(encorePreviousScene || 'casting');
+                    encorePreviousScene = null;
+                } else {
+                    // Enter Encore
+                    encorePreviousScene = theaterScene;
+                    setTheaterScene('encore');
+                }
+                break;
+            case 'k':
+            case 'K':
+                if (!theaterMode) break;
+                e.preventDefault();
+                {
+                    const ts = fullscreenStream || selected;
+                    if (ts && ts.video) {
+                        bookmarks.push({
+                            streamId: ts.id,
+                            timestamp: ts.video.currentTime,
+                            bookmarkedAt: Date.now()
+                        });
+                        const m = Math.floor(ts.video.currentTime / 60);
+                        const s = Math.floor(ts.video.currentTime % 60);
+                        showMessage('Bookmarked at ' + m + ':' + String(s).padStart(2, '0'), 'success');
+                    } else {
+                        showMessage('Select a stream first', 'warning');
                     }
                 }
                 break;
@@ -4102,6 +4166,29 @@ const PlexdApp = (function() {
      * In normal mode, just select next stream
      */
     function handleArrowNav(direction, fullscreenStream, selected) {
+        // Theater Stage: Left/Right rotates hero, Up/Down navigates ensemble
+        if (theaterMode && theaterScene === 'stage') {
+            const streams = getFilteredStreams();
+            if (streams.length === 0) return;
+            if (direction === 'left' || direction === 'right') {
+                // Rotate hero
+                const currentIdx = streams.findIndex(s => s.id === stageHeroId);
+                let nextIdx;
+                if (direction === 'right') {
+                    nextIdx = currentIdx >= streams.length - 1 ? 0 : currentIdx + 1;
+                } else {
+                    nextIdx = currentIdx <= 0 ? streams.length - 1 : currentIdx - 1;
+                }
+                stageHeroId = streams[nextIdx].id;
+                PlexdStream.selectStream(stageHeroId);
+                updateLayout();
+                return;
+            }
+            // Up/Down: navigate within ensemble
+            PlexdStream.selectNextStream(direction);
+            return;
+        }
+
         const mode = PlexdStream.getFullscreenMode();
 
         console.log(`[Plexd] handleArrowNav: direction=${direction}, mode=${mode}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}, selected=${selected ? selected.id : 'null'}`);

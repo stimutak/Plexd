@@ -2194,7 +2194,13 @@ const PlexdApp = (function() {
 
     function setTheaterScene(scene) {
         const prev = theaterScene;
-        if (castingFadeTimer) { clearTimeout(castingFadeTimer); castingFadeTimer = null; }
+        if (castingFadeTimer) {
+            clearTimeout(castingFadeTimer);
+            castingFadeTimer = null;
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.wrapper) s.wrapper.classList.remove('fading-out');
+            });
+        }
         if (prev === 'encore') closeEncoreView();
         if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
 
@@ -2255,6 +2261,19 @@ const PlexdApp = (function() {
         if (theaterMode) {
             theaterScene = detectCurrentScene();
             applyTheaterScene();
+        } else {
+            // Cleanup when leaving Theater mode
+            if (theaterScene === 'encore') closeEncoreView();
+            if (theaterScene === 'climax') stopAutoRotate();
+            if (castingFadeTimer) {
+                clearTimeout(castingFadeTimer);
+                castingFadeTimer = null;
+            }
+            containerEl.classList.remove('theater-climax-collage');
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.wrapper) s.wrapper.classList.remove('fading-out', 'starred-glow', 'low-rated');
+            });
+            window._plexdLineupWeights = null;
         }
         updateModeIndicator();
         showMessage(theaterMode ? 'Theater Mode' : 'Advanced Mode', 'info');
@@ -2274,6 +2293,11 @@ const PlexdApp = (function() {
 
         // Clear lineup weights when switching scenes (will be re-set if entering lineup)
         window._plexdLineupWeights = null;
+
+        // Stop face detection when leaving Casting (saves CPU)
+        if (theaterScene !== 'casting' && faceDetectionActive) {
+            stopFaceDetection();
+        }
 
         // Remove Casting-only visual classes when leaving Casting
         if (theaterScene !== 'casting') {
@@ -2487,10 +2511,13 @@ const PlexdApp = (function() {
             card.className = 'encore-card';
 
             const thumb = document.createElement('video');
-            thumb.src = stream.video.src;
-            thumb.currentTime = bm.timestamp;
             thumb.muted = true;
             thumb.playsInline = true;
+            thumb.preload = 'metadata';
+            thumb.src = stream.hls ? stream.url : stream.video.src;
+            thumb.addEventListener('loadedmetadata', function() {
+                thumb.currentTime = bm.timestamp;
+            }, { once: true });
             card.appendChild(thumb);
 
             const info = document.createElement('div');
@@ -4526,6 +4553,9 @@ const PlexdApp = (function() {
     function getFilteredStreams() {
         if (viewMode === 'all') {
             return PlexdStream.getAllStreams();
+        }
+        if (viewMode === 'favorites') {
+            return PlexdStream.getFavoriteStreams();
         }
         return PlexdStream.getStreamsByRating(viewMode);
     }

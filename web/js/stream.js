@@ -2194,7 +2194,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK`\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvV`\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -2244,12 +2244,6 @@ const PlexdStream = (function() {
                     e.preventDefault();
                     e.stopPropagation();
                     toggleTrueFullscreen(stream.id);
-                    break;
-                case 'm':
-                case 'M':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleMute(stream.id);
                     break;
             }
         });

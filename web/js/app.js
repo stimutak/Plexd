@@ -2094,11 +2094,11 @@ const PlexdApp = (function() {
 
         // In focus mode, navigate to next/prev stream instead of rotating
         const fullscreenMode = PlexdStream.getFullscreenMode();
-        const focusedId = PlexdStream.getFullscreenStream();
-        if ((fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') && focusedId) {
+        const focusedStream = PlexdStream.getFullscreenStream();
+        if ((fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') && focusedStream) {
             const nextId = reverse
-                ? PlexdStream.getPrevStreamId(focusedId, true)
-                : PlexdStream.getNextStreamId(focusedId, true);
+                ? PlexdStream.getPrevStreamId(focusedStream.id, true)
+                : PlexdStream.getNextStreamId(focusedStream.id, true);
             if (nextId) {
                 PlexdStream.enterFocusedMode(nextId);
             }
@@ -2206,6 +2206,7 @@ const PlexdApp = (function() {
 
         // Casting → Lineup: fade out non-favorite/low-rated streams first
         if (prev === 'casting' && scene === 'lineup') {
+            if (castingFadeTimer) return; // Already transitioning
             const allStreams = PlexdStream.getAllStreams();
             allStreams.forEach(function(s) {
                 if (!PlexdStream.isFavorite(s.id) && (PlexdStream.getRating(s.url, s.fileName) || 0) < 5) {
@@ -2227,6 +2228,8 @@ const PlexdApp = (function() {
 
         theaterScene = scene;
         applyTheaterScene();
+        // If scene bounced (e.g., empty Encore), don't overwrite the message
+        if (theaterScene !== scene) return;
         updateModeIndicator();
         showMessage(getSceneName(scene), 'info');
     }
@@ -2397,6 +2400,9 @@ const PlexdApp = (function() {
                 window._plexdTetrisMode = 0;
                 wallMode = 0;
                 window._plexdWallMode = 0;
+                updateWallModeClasses();
+                updateTetrisModeClasses();
+                updateModeIndicator();
                 {
                     const target = PlexdStream.getSelectedStream() || getFilteredStreams()[0];
                     if (target) PlexdStream.enterFocusedMode(target.id);
@@ -2480,8 +2486,7 @@ const PlexdApp = (function() {
 
     // Encore bookmark view — visual recall grid of bookmarked moments
     function showEncoreView() {
-        let overlay = document.getElementById('encore-overlay');
-        if (overlay) overlay.remove();
+        closeEncoreView(); // Properly cleans up any existing video elements
 
         if (bookmarks.length === 0) {
             showMessage('No bookmarks yet — press K to bookmark moments', 'info');
@@ -2514,7 +2519,7 @@ const PlexdApp = (function() {
             thumb.muted = true;
             thumb.playsInline = true;
             thumb.preload = 'metadata';
-            thumb.src = stream.hls ? stream.url : stream.video.src;
+            thumb.src = stream.hls ? (stream.sourceUrl || stream.url) : stream.video.src;
             thumb.addEventListener('loadedmetadata', function() {
                 thumb.currentTime = bm.timestamp;
             }, { once: true });
@@ -3971,6 +3976,12 @@ const PlexdApp = (function() {
                     } else if (mode === 'browser-fill') {
                         // Exit browser-fill mode back to grid
                         PlexdStream.exitFocusedMode();
+                        // If we were in Climax Single Focus, fall back to Tight Wall (submode 0)
+                        if (theaterMode && theaterScene === 'climax' && climaxSubMode === 3) {
+                            climaxSubMode = 0;
+                            applyClimaxSubMode();
+                            updateLayout();
+                        }
                     } else {
                         // Normal mode - deselect or Theater scene regression
                         if (theaterMode && theaterScene !== 'casting') {
@@ -4552,7 +4563,7 @@ const PlexdApp = (function() {
      */
     function getFilteredStreams() {
         if (viewMode === 'all') {
-            return PlexdStream.getAllStreams();
+            return PlexdStream.getAllStreams().filter(s => !s.hidden);
         }
         if (viewMode === 'favorites') {
             return PlexdStream.getFavoriteStreams();

@@ -210,8 +210,11 @@ const PlexdGrid = (function() {
                     videoWrapper.style.zIndex = '';
                 }
 
-                // Apply transform if specified (for coverflow carousel effect)
-                if (cell.transform && cell.transform !== 'none') {
+                // Apply transform if specified (for coverflow carousel effect or collage rotation)
+                if (cell.collageRotation !== undefined) {
+                    videoWrapper.style.transform = `rotate(${cell.collageRotation}deg)`;
+                    videoWrapper.style.transformOrigin = 'center center';
+                } else if (cell.transform && cell.transform !== 'none') {
                     videoWrapper.style.transform = cell.transform;
                     videoWrapper.style.transformOrigin = 'center center';
                 } else {

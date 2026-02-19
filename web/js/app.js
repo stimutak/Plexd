@@ -1593,6 +1593,37 @@ const PlexdApp = (function() {
             layout = PlexdGrid.calculateLayout(container, streamsToShow);
         }
 
+        // Climax Collage: randomized scattered layout
+        if (theaterMode && theaterScene === 'climax' && climaxSubMode === 2) {
+            const cStreams = streamsToShow;
+            if (cStreams.length > 0) {
+                // Seed-free deterministic shuffle based on stream count for stability
+                layout.cells = cStreams.map((stream, i) => {
+                    const angle = (Math.sin(i * 2.654 + cStreams.length) * 0.5) * 12; // -6 to +6 degrees
+                    const scale = 0.35 + (i % 3) * 0.1; // 35% to 55% of container
+                    const xSpread = container.width * 0.6;
+                    const ySpread = container.height * 0.6;
+                    const x = (container.width - xSpread) / 2 + (i % Math.ceil(Math.sqrt(cStreams.length))) * (xSpread / Math.ceil(Math.sqrt(cStreams.length)));
+                    const y = (container.height - ySpread) / 2 + Math.floor(i / Math.ceil(Math.sqrt(cStreams.length))) * (ySpread / Math.ceil(Math.sqrt(cStreams.length)));
+                    return {
+                        streamId: stream.id,
+                        x: x + (Math.sin(i * 1.7) * 30),
+                        y: y + (Math.cos(i * 2.3) * 30),
+                        width: container.width * scale,
+                        height: container.height * scale,
+                        objectFit: 'cover',
+                        wallCropZoom: 1.4,
+                        collageRotation: angle,
+                        opacity: 0.7 + (Math.cos(i * 1.1) * 0.15 + 0.15),
+                        zIndex: cStreams.length - i
+                    };
+                });
+            }
+            containerEl.classList.add('theater-climax-collage');
+        } else {
+            containerEl.classList.remove('theater-climax-collage');
+        }
+
         // Wall: Crop Tiles — edge-to-edge packed wall with aggressive center zoom
         if (wallMode === 2) {
             const selectedStream = PlexdStream.getSelectedStream();

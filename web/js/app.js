@@ -740,6 +740,7 @@ const PlexdApp = (function() {
         window.addEventListener('beforeunload', saveCurrentStreams);
         setInterval(saveCurrentStreams, 30000); // Every 30s as safety net
 
+        updateModeIndicator();
         console.log('Plexd initialized');
     }
 
@@ -1673,6 +1674,7 @@ const PlexdApp = (function() {
             const count = PlexdStream.getStreamsByRating(mode).length;
             showMessage(`View: ★${mode} (${count} streams)`, 'info');
         }
+        updateModeIndicator();
     }
 
     /**
@@ -1785,6 +1787,7 @@ const PlexdApp = (function() {
 
         updateLayout();
         showMessage(`Tetris: ${tetrisModeNames[tetrisMode]}`, 'info');
+        updateModeIndicator();
     }
 
     /**
@@ -1842,6 +1845,7 @@ const PlexdApp = (function() {
         } else {
             showMessage('Selector: OFF', 'info');
         }
+        updateModeIndicator();
     }
 
     /**
@@ -1919,6 +1923,7 @@ const PlexdApp = (function() {
         } else {
             showMessage(`Wall: ${wallModeNames[wallMode]}`, 'info');
         }
+        updateModeIndicator();
     }
 
     // =========================================================================
@@ -2017,6 +2022,7 @@ const PlexdApp = (function() {
             runFaceDetectionSweep();
             faceDetectionTimer = setInterval(runFaceDetectionSweep, FACE_DETECT_INTERVAL);
             showMessage('Smart Zoom: ON (face detection)', 'info');
+            updateModeIndicator();
         });
     }
 
@@ -2030,6 +2036,7 @@ const PlexdApp = (function() {
         const btn = document.getElementById('smart-zoom-btn');
         if (btn) btn.classList.remove('active');
         showMessage('Smart Zoom: OFF', 'info');
+        updateModeIndicator();
     }
 
     function toggleFaceDetection() {
@@ -2159,7 +2166,7 @@ const PlexdApp = (function() {
         if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
         theaterScene = scene;
         applyTheaterScene();
-        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        updateModeIndicator();
         showMessage(getSceneName(scene), 'info');
     }
 
@@ -2186,7 +2193,7 @@ const PlexdApp = (function() {
             theaterScene = detectCurrentScene();
             applyTheaterScene();
         }
-        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        updateModeIndicator();
         showMessage(theaterMode ? 'Theater Mode' : 'Advanced Mode', 'info');
     }
 
@@ -2210,6 +2217,7 @@ const PlexdApp = (function() {
                 wallMode = 2; // Crop tiles
                 window._plexdWallMode = 2;
                 if (!faceDetectionActive) startFaceDetection();
+                updateCastingCallVisuals();
                 break;
 
             case 'lineup':
@@ -2285,8 +2293,52 @@ const PlexdApp = (function() {
         }
         updateWallModeClasses();
         updateTetrisModeClasses();
-        if (typeof updateModeIndicator === 'function') updateModeIndicator();
+        updateModeIndicator();
         updateLayout();
+    }
+
+    function updateModeIndicator() {
+        const el = document.getElementById('mode-indicator');
+        if (!el) return;
+        el.textContent = '';
+
+        if (theaterMode) {
+            const sceneNames = {
+                casting: 'CAST', lineup: 'LINE', stage: 'STAGE',
+                climax: 'CLIMAX', encore: 'ENCORE'
+            };
+            const badge = document.createElement('span');
+            badge.className = 'badge badge-scene';
+            badge.textContent = sceneNames[theaterScene] || theaterScene;
+            el.appendChild(badge);
+        } else {
+            const modes = [];
+            if (tetrisMode > 0) modes.push('T' + tetrisMode);
+            if (wallMode > 0) modes.push('W' + wallMode);
+            if (coverflowMode) modes.push('CF');
+            if (faceDetectionActive) modes.push('A');
+            if (viewMode !== 'all') {
+                modes.push(viewMode === 'favorites' ? 'FAV' : 'R' + viewMode);
+            }
+            modes.forEach(text => {
+                const badge = document.createElement('span');
+                badge.className = 'badge';
+                badge.textContent = text;
+                el.appendChild(badge);
+            });
+        }
+    }
+
+    function updateCastingCallVisuals() {
+        if (!theaterMode || theaterScene !== 'casting') return;
+        const allStreams = PlexdStream.getAllStreams();
+        allStreams.forEach(function(stream) {
+            if (!stream.wrapper) return;
+            const isFav = PlexdStream.isFavorite(stream.id);
+            const rating = PlexdStream.getRating(stream.id);
+            stream.wrapper.classList.toggle('starred-glow', isFav);
+            stream.wrapper.classList.toggle('low-rated', rating > 0 && rating <= 3);
+        });
     }
 
     function startAutoRotate() {
@@ -3835,6 +3887,7 @@ const PlexdApp = (function() {
                 if (selected) {
                     const newRating = PlexdStream.cycleRating(selected.id);
                     showMessage(newRating ? `Rated: ★${newRating}` : 'Rating cleared', 'info');
+                    updateCastingCallVisuals();
                     // If in focus mode with filter active and new rating doesn't match, exit
                     const isFullscreen = PlexdStream.getFullscreenMode() !== 'none';
                     if (isFullscreen && viewMode !== 'all' && newRating !== viewMode) {
@@ -3869,6 +3922,7 @@ const PlexdApp = (function() {
                             if (targetStream) {
                                 const isFav = PlexdStream.toggleFavorite(targetStream.id);
                                 showMessage(isFav ? 'Starred ★' : 'Unstarred', isFav ? 'success' : 'info');
+                                updateCastingCallVisuals();
                             } else {
                                 showMessage('Select a stream first', 'warning');
                             }
@@ -4106,6 +4160,7 @@ const PlexdApp = (function() {
                             if (targetStream) {
                                 PlexdStream.setRating(targetStream.id, slotNum);
                                 showMessage(`Slot ${slotNum}`, 'info');
+                                updateCastingCallVisuals();
                                 if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
                                     PlexdStream.exitFocusedMode();
                                 }

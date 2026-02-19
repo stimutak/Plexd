@@ -2422,6 +2422,16 @@ body {
     transition: opacity 0.2s ease;
 }
 
+/* Strips selection: bright edge glow, suppress default blue outline */
+.plexd-app.wall-strips .plexd-stream.plexd-selected {
+    outline: none;
+    box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.9), 0 0 12px rgba(251, 191, 36, 0.4);
+    z-index: 12;
+}
+.plexd-app.wall-strips .plexd-stream.plexd-selected::before {
+    background: rgba(251, 191, 36, 0.06);
+}
+
 .plexd-app.wall-strips .plexd-stream:hover {
     opacity: 0.9;
     z-index: 10;
@@ -2456,13 +2466,22 @@ body {
 
 .plexd-app.wall-crop .plexd-stream {
     overflow: hidden;
-    border-radius: 4px;
+    border-radius: 0;
     transition: box-shadow 0.2s ease;
+}
+
+/* Crop mode: suppress default selection outline — we use our own highlight */
+.plexd-app.wall-crop .plexd-stream.plexd-selected {
+    outline: none;
+    box-shadow: none;
+}
+.plexd-app.wall-crop .plexd-stream.plexd-selected::before {
+    display: none;
 }
 
 /* Selected stream in Crop mode gets a highlight ring and bigger zoom */
 .plexd-wall-crop-selected {
-    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.8), 0 4px 20px rgba(0, 0, 0, 0.5);
+    box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.9), 0 0 16px rgba(239, 68, 68, 0.3) !important;
     z-index: 10;
 }
 
@@ -2743,4 +2762,42 @@ body {
     z-index: 200;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
+}
+
+/* Mode indicator badge */
+.plexd-mode-indicator {
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    z-index: 1000;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    transition: opacity 0.2s ease;
+}
+.plexd-mode-indicator:empty { display: none; }
+.plexd-mode-indicator .badge {
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.6);
+    color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(4px);
+}
+.plexd-mode-indicator .badge-scene {
+    background: rgba(236, 72, 153, 0.7);
+    color: white;
+}
+.clean-mode .plexd-mode-indicator { display: none; }
+.header-hidden .plexd-mode-indicator { opacity: 0; }
+
+/* Theater Casting Call: starred glow and low-rated dimming */
+.theater-mode .plexd-stream.starred-glow {
+    box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.8), 0 0 20px rgba(251, 191, 36, 0.3);
+    z-index: 5;
+}
+.theater-mode .plexd-stream.low-rated {
+    opacity: 0.7;
+    filter: brightness(0.85);
 }

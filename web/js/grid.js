@@ -1244,8 +1244,8 @@ const PlexdGrid = (function() {
             // Mode 2: Column-based packing (videos in vertical columns)
             return tryTetrisColumnPack(container, streamData);
         } else if (mode === 3) {
-            // Mode 3: Treemap-style recursive splitting
-            return tryTetrisSplitPack(container, streamData);
+            // Mode 3: Treemap-style recursive splitting (pass lineup weights if set)
+            return tryTetrisSplitPack(container, streamData, window._plexdLineupWeights);
         } else if (mode === 4) {
             // Mode 4: Content Visible - show ALL content, smart overlap
             return tryTetrisContentVisible(container, streamData);
@@ -1568,18 +1568,22 @@ const PlexdGrid = (function() {
      * Tetris Split Pack - Recursively splits container for optimal packing
      * Similar to treemap algorithm
      */
-    function tryTetrisSplitPack(container, streamData) {
+    function tryTetrisSplitPack(container, streamData, weights) {
         const count = streamData.length;
         if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
 
         const cells = [];
 
-        // Assign weights based on aspect ratio (wider videos get more area)
-        const totalWeight = streamData.reduce((sum, d) => sum + Math.sqrt(d.aspectRatio), 0);
-        const dataWithWeights = streamData.map(d => ({
-            ...d,
-            weight: Math.sqrt(d.aspectRatio) / totalWeight
-        }));
+        // Assign weights: use external weights if provided, otherwise aspect-ratio-based
+        const dataWithWeights = streamData.map(d => {
+            const externalWeight = weights ? (weights.get(d.stream.id) || 1) : Math.sqrt(d.aspectRatio);
+            return {
+                ...d,
+                weight: externalWeight
+            };
+        });
+        const totalWeight = dataWithWeights.reduce((sum, d) => sum + d.weight, 0);
+        dataWithWeights.forEach(d => { d.weight = d.weight / totalWeight; });
 
         // Recursive split function
         function splitLayout(rect, items) {
@@ -1864,13 +1868,12 @@ const PlexdGrid = (function() {
         const count = streams.length;
         if (count === 0) return { cells: [], rows: 0, cols: 0, mode: 'strips' };
 
-        const gap = 2; // Thin gap between strips
-        const totalGap = gap * (count - 1);
-        const colWidth = (container.width - totalGap) / count;
+        // Edge-to-edge: no gaps between strips for seamless wall effect
+        const colWidth = container.width / count;
 
         const cells = streams.map((stream, i) => ({
             streamId: stream.id,
-            x: i * (colWidth + gap),
+            x: i * colWidth,
             y: 0,
             width: colWidth,
             height: container.height,

@@ -2209,6 +2209,9 @@ const PlexdApp = (function() {
     function applyTheaterScene() {
         if (coverflowMode) toggleCoverflowMode();
 
+        // Clear lineup weights when switching scenes (will be re-set if entering lineup)
+        window._plexdLineupWeights = null;
+
         switch (theaterScene) {
             case 'casting':
                 setViewMode('all');
@@ -2230,6 +2233,19 @@ const PlexdApp = (function() {
                 window._plexdWallMode = 0;
                 tetrisMode = 3; // Treemap
                 window._plexdTetrisMode = 3;
+                // Rating-weighted layout: higher-rated streams get more area
+                {
+                    const lineupStreams = PlexdStream.getVisibleStreams();
+                    const weights = new Map();
+                    lineupStreams.forEach(s => {
+                        const rating = PlexdStream.getRating(s.id) || 0;
+                        const isFav = PlexdStream.isFavorite(s.id);
+                        // Base weight 1, bonus for higher ratings, bonus for favorites
+                        const weight = Math.max(1, (rating - 4) * 0.5) + (isFav ? 0.5 : 0);
+                        weights.set(s.id, weight);
+                    });
+                    window._plexdLineupWeights = weights;
+                }
                 break;
 
             case 'stage':

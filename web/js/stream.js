@@ -2194,7 +2194,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBlL;:wWtToO\[\]{}]$/.test(e.key) || e.key === 'Escape';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBlL;:wWtToOaA\[\]{}]$/.test(e.key) || e.key === 'Escape';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -3538,27 +3538,41 @@ const PlexdStream = (function() {
      * @param {boolean} reverse - If true, rotate left (first to last), else rotate right (last to first)
      */
     function rotateStreamOrder(reverse = false) {
-        const streamArray = Array.from(streams.entries());
-        if (streamArray.length < 2) return;
+        const allEntries = Array.from(streams.entries());
+        const visible = [];
+        const hiddenPositions = [];
+
+        allEntries.forEach(([id, stream], idx) => {
+            if (stream.hidden) {
+                hiddenPositions.push({ idx, entry: [id, stream] });
+            } else {
+                visible.push([id, stream]);
+            }
+        });
+
+        if (visible.length < 2) return;
 
         if (reverse) {
-            // Move first to end
-            const first = streamArray.shift();
-            streamArray.push(first);
+            const first = visible.shift();
+            visible.push(first);
         } else {
-            // Move last to front
-            const last = streamArray.pop();
-            streamArray.unshift(last);
+            const last = visible.pop();
+            visible.unshift(last);
         }
 
-        // Rebuild the Map in new order
-        streams.clear();
-        streamArray.forEach(([id, stream]) => streams.set(id, stream));
+        // Reconstruct: insert hidden streams back at their original positions
+        const result = [...visible];
+        hiddenPositions.forEach(({ idx, entry }) => {
+            result.splice(Math.min(idx, result.length), 0, entry);
+        });
 
-        // Also reorder DOM elements to match
+        // Rebuild Map and DOM order
+        streams.clear();
+        result.forEach(([id, stream]) => streams.set(id, stream));
+
         const container = document.getElementById('plexd-container');
         if (container) {
-            streamArray.forEach(([id, stream]) => {
+            result.forEach(([id, stream]) => {
                 if (stream.wrapper && stream.wrapper.parentElement === container) {
                     container.appendChild(stream.wrapper);
                 }
@@ -3570,23 +3584,38 @@ const PlexdStream = (function() {
      * Shuffle streams into random order (Fisher-Yates)
      */
     function shuffleStreamOrder() {
-        const streamArray = Array.from(streams.entries());
-        if (streamArray.length < 2) return;
+        const allEntries = Array.from(streams.entries());
+        const visible = [];
+        const hiddenPositions = [];
 
-        // Fisher-Yates shuffle
-        for (let i = streamArray.length - 1; i > 0; i--) {
+        allEntries.forEach(([id, stream], idx) => {
+            if (stream.hidden) {
+                hiddenPositions.push({ idx, entry: [id, stream] });
+            } else {
+                visible.push([id, stream]);
+            }
+        });
+
+        if (visible.length < 2) return;
+
+        // Fisher-Yates on visible only
+        for (let i = visible.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [streamArray[i], streamArray[j]] = [streamArray[j], streamArray[i]];
+            [visible[i], visible[j]] = [visible[j], visible[i]];
         }
 
-        // Rebuild the Map in new order
-        streams.clear();
-        streamArray.forEach(([id, stream]) => streams.set(id, stream));
+        // Reconstruct: insert hidden streams back at their original positions
+        const result = [...visible];
+        hiddenPositions.forEach(({ idx, entry }) => {
+            result.splice(Math.min(idx, result.length), 0, entry);
+        });
 
-        // Also reorder DOM elements to match
+        streams.clear();
+        result.forEach(([id, stream]) => streams.set(id, stream));
+
         const container = document.getElementById('plexd-container');
         if (container) {
-            streamArray.forEach(([id, stream]) => {
+            result.forEach(([id, stream]) => {
                 if (stream.wrapper && stream.wrapper.parentElement === container) {
                     container.appendChild(stream.wrapper);
                 }
@@ -4618,6 +4647,18 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Set pan position for a stream (used by auto-detect face centering)
+     * @param {string} streamId - Stream ID
+     * @param {Object} pos - { x, y } as percentages (0-100)
+     */
+    function setPanPosition(streamId, pos) {
+        const stream = streams.get(streamId);
+        if (stream) {
+            stream.panPosition = { x: Math.max(0, Math.min(100, pos.x)), y: Math.max(0, Math.min(100, pos.y)) };
+        }
+    }
+
+    /**
      * Reset pan position to center for a stream
      * @param {string} streamId - Stream ID
      */
@@ -4756,6 +4797,7 @@ const PlexdStream = (function() {
         clearThumbnailCache,
         // Pan position for Tetris mode
         getPanPosition,
+        setPanPosition,
         resetPanPosition,
         resetAllPanPositions
     };

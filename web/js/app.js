@@ -2200,7 +2200,7 @@ const PlexdApp = (function() {
         if (prev === 'casting' && scene === 'lineup') {
             const allStreams = PlexdStream.getAllStreams();
             allStreams.forEach(function(s) {
-                if (!PlexdStream.isFavorite(s.id) && (PlexdStream.getRating(s.id) || 0) < 5) {
+                if (!PlexdStream.isFavorite(s.id) && (PlexdStream.getRating(s.url, s.fileName) || 0) < 5) {
                     if (s.wrapper) s.wrapper.classList.add('fading-out');
                 }
             });
@@ -2290,7 +2290,7 @@ const PlexdApp = (function() {
                     const lineupStreams = PlexdStream.getVisibleStreams();
                     const weights = new Map();
                     lineupStreams.forEach(s => {
-                        const rating = PlexdStream.getRating(s.id) || 0;
+                        const rating = PlexdStream.getRating(s.url, s.fileName) || 0;
                         const isFav = PlexdStream.isFavorite(s.id);
                         // Base weight 1, bonus for higher ratings, bonus for favorites
                         const weight = Math.max(1, (rating - 4) * 0.5) + (isFav ? 0.5 : 0);
@@ -2403,7 +2403,7 @@ const PlexdApp = (function() {
         allStreams.forEach(function(stream) {
             if (!stream.wrapper) return;
             const isFav = PlexdStream.isFavorite(stream.id);
-            const rating = PlexdStream.getRating(stream.id);
+            const rating = PlexdStream.getRating(stream.url, stream.fileName);
             stream.wrapper.classList.toggle('starred-glow', isFav);
             stream.wrapper.classList.toggle('low-rated', rating > 0 && rating <= 3);
         });

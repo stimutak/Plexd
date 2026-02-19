@@ -2792,6 +2792,17 @@ body {
 .clean-mode .plexd-mode-indicator { display: none; }
 .header-hidden .plexd-mode-indicator { opacity: 0; }
 
+/* Theater scene transitions */
+.theater-mode .plexd-stream {
+    transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+}
+
+.theater-mode .plexd-stream.fading-out {
+    opacity: 0;
+    transform: scale(0.95);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
 /* Theater Casting Call: starred glow and low-rated dimming */
 .theater-mode .plexd-stream.starred-glow {
     box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.8), 0 0 20px rgba(251, 191, 36, 0.3);

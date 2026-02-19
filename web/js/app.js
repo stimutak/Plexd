@@ -2195,6 +2195,27 @@ const PlexdApp = (function() {
         const prev = theaterScene;
         if (prev === 'encore') closeEncoreView();
         if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
+
+        // Casting → Lineup: fade out non-favorite/low-rated streams first
+        if (prev === 'casting' && scene === 'lineup') {
+            const allStreams = PlexdStream.getAllStreams();
+            allStreams.forEach(function(s) {
+                if (!PlexdStream.isFavorite(s.id) && (PlexdStream.getRating(s.id) || 0) < 5) {
+                    if (s.wrapper) s.wrapper.classList.add('fading-out');
+                }
+            });
+            showMessage(getSceneName(scene), 'info');
+            setTimeout(function() {
+                theaterScene = scene;
+                applyTheaterScene();
+                updateModeIndicator();
+                allStreams.forEach(function(s) {
+                    if (s.wrapper) s.wrapper.classList.remove('fading-out');
+                });
+            }, 300);
+            return; // Don't apply scene immediately — wait for animation
+        }
+
         theaterScene = scene;
         applyTheaterScene();
         updateModeIndicator();

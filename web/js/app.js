@@ -585,37 +585,33 @@ const PlexdApp = (function() {
     // View mode cycle order: favorites -> all -> 1 -> 2 -> ... -> 9 -> favorites
     const viewModes = ['favorites', 'all', 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-    // Double-tap detection for slot keys (1-9)
-    // Single tap = assign to slot, double tap = view slot
-    let lastSlotKey = null;
-    let lastSlotKeyTime = 0;
-    let slotAssignTimeout = null;
+    // Double-tap detection: shared helper replaces per-key state variables
     const DOUBLE_TAP_THRESHOLD = 300; // ms
+    const _dtState = {}; // Double-tap state keyed by action name
 
-    // Double-tap detection for Q key
-    // Single Q = star/favorite, double QQ = filter to favorites
-    let lastQTime = 0;
-    let qTimeout = null;
-
-    // Double-tap detection for / key
-    // Single / = random seek selected, double // = random seek all
-    let lastSlashTime = 0;
-    let slashTimeout = null;
-
-    // Double-tap detection for E key
-    // Single e = seek back 10s, ee = seek back 60s
-    let lastETime = 0;
-    let eTimeout = null;
-
-    // Double-tap detection for R key
-    // Single r = seek forward 10s, rr = seek forward 60s
-    let lastRTime = 0;
-    let rTimeout = null;
-
-    // Double-tap detection for X key
-    // Single x = close stream, xx = remove all unstarred
-    let lastXTime = 0;
-    let xTimeout = null;
+    /**
+     * Shared double-tap detection helper.
+     * Delays single-tap action by DOUBLE_TAP_THRESHOLD ms to distinguish from double-tap.
+     * @param {string} key - Unique key for this action (e.g. 'q', 'e', 'slash')
+     * @param {function} onSingle - Called after threshold if no second tap
+     * @param {function} onDouble - Called immediately on second tap within threshold
+     */
+    function handleDoubleTap(key, onSingle, onDouble) {
+        var now = Date.now();
+        var s = _dtState[key] || (_dtState[key] = { last: 0, timer: null });
+        if ((now - s.last) < DOUBLE_TAP_THRESHOLD) {
+            if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+            s.last = 0;
+            onDouble();
+        } else {
+            s.last = now;
+            if (s.timer) clearTimeout(s.timer);
+            s.timer = setTimeout(function() {
+                s.timer = null;
+                onSingle();
+            }, DOUBLE_TAP_THRESHOLD);
+        }
+    }
 
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
@@ -654,9 +650,7 @@ const PlexdApp = (function() {
     let stageHeroId = null; // Currently promoted hero in Stage scene
     let castingFadeTimer = null; // Guard for Casting→Lineup fade animation
 
-    // Theater Space double-tap (random seek)
-    let lastSpaceTime = 0;
-    let spaceTimeout = null;
+    // Theater Space double-tap uses shared handleDoubleTap('space', ...)
 
     /**
      * Initialize the application
@@ -3658,25 +3652,17 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 if (theaterMode) {
                     // Theater: Space = next scene, Shift+Space = prev, Space-Space = random seek
-                    const now = Date.now();
-                    const shiftHeld = e.shiftKey;
-                    if ((now - lastSpaceTime) < DOUBLE_TAP_THRESHOLD) {
-                        if (spaceTimeout) { clearTimeout(spaceTimeout); spaceTimeout = null; }
-                        lastSpaceTime = 0;
+                    var spaceShiftHeld = e.shiftKey;
+                    handleDoubleTap('space', function() {
+                        if (spaceShiftHeld) { prevScene(); } else { nextScene(); }
+                    }, function() {
                         // Double-tap: random seek
                         if (theaterScene === 'stage' || theaterScene === 'climax') {
                             randomSeekSelected();
                         } else {
                             randomSeekAll();
                         }
-                    } else {
-                        lastSpaceTime = now;
-                        if (spaceTimeout) clearTimeout(spaceTimeout);
-                        spaceTimeout = setTimeout(() => {
-                            spaceTimeout = null;
-                            if (shiftHeld) { prevScene(); } else { nextScene(); }
-                        }, DOUBLE_TAP_THRESHOLD);
-                    }
+                    });
                 } else {
                     // Advanced: Space = play/pause (existing behavior)
                     if (selected) {
@@ -4083,36 +4069,26 @@ const PlexdApp = (function() {
             case 'Q':
                 // Q = Star/favorite, QQ = filter to favorites
                 e.preventDefault();
-                {
-                    const now = Date.now();
-                    if ((now - lastQTime) < DOUBLE_TAP_THRESHOLD) {
-                        if (qTimeout) { clearTimeout(qTimeout); qTimeout = null; }
-                        lastQTime = 0;
-                        const fullscreenMode = PlexdStream.getFullscreenMode();
-                        if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
-                            PlexdStream.exitFocusedMode();
-                        }
-                        const count = PlexdStream.getFavoriteCount();
-                        setViewMode('favorites');
-                        if (count === 0) {
-                            showMessage('No favorites yet — press Q to star streams', 'info');
-                        }
+                handleDoubleTap('q', function() {
+                    var targetStream = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (targetStream) {
+                        var isFav = PlexdStream.toggleFavorite(targetStream.id);
+                        showMessage(isFav ? 'Starred ★' : 'Unstarred', isFav ? 'success' : 'info');
+                        updateCastingCallVisuals();
                     } else {
-                        lastQTime = now;
-                        if (qTimeout) clearTimeout(qTimeout);
-                        const targetStream = fullscreenStream || selected;
-                        qTimeout = setTimeout(() => {
-                            qTimeout = null;
-                            if (targetStream) {
-                                const isFav = PlexdStream.toggleFavorite(targetStream.id);
-                                showMessage(isFav ? 'Starred ★' : 'Unstarred', isFav ? 'success' : 'info');
-                                updateCastingCallVisuals();
-                            } else {
-                                showMessage('Select a stream first', 'warning');
-                            }
-                        }, DOUBLE_TAP_THRESHOLD);
+                        showMessage('Select a stream first', 'warning');
                     }
-                }
+                }, function() {
+                    var fullscreenMode = PlexdStream.getFullscreenMode();
+                    if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
+                        PlexdStream.exitFocusedMode();
+                    }
+                    var count = PlexdStream.getFavoriteCount();
+                    setViewMode('favorites');
+                    if (count === 0) {
+                        showMessage('No favorites yet — press Q to star streams', 'info');
+                    }
+                });
                 break;
             case 'e':
                 // Theater Climax: E cycles sub-mode
@@ -4124,25 +4100,15 @@ const PlexdApp = (function() {
                 }
                 // e = Seek back 10s, ee = Seek back 60s
                 e.preventDefault();
-                {
-                    const now = Date.now();
-                    if ((now - lastETime) < DOUBLE_TAP_THRESHOLD) {
-                        if (eTimeout) { clearTimeout(eTimeout); eTimeout = null; }
-                        lastETime = 0;
-                        const ts = fullscreenStream || selected;
-                        if (ts) PlexdStream.seekRelative(ts.id, -60);
-                        syncOverlayClones();
-                    } else {
-                        lastETime = now;
-                        if (eTimeout) clearTimeout(eTimeout);
-                        const ts = fullscreenStream || selected;
-                        eTimeout = setTimeout(() => {
-                            eTimeout = null;
-                            if (ts) PlexdStream.seekRelative(ts.id, -10);
-                            syncOverlayClones();
-                        }, DOUBLE_TAP_THRESHOLD);
-                    }
-                }
+                handleDoubleTap('e', function() {
+                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (ts) PlexdStream.seekRelative(ts.id, -10);
+                    syncOverlayClones();
+                }, function() {
+                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (ts) PlexdStream.seekRelative(ts.id, -60);
+                    syncOverlayClones();
+                });
                 break;
             case 'E':
                 if (theaterMode && theaterScene === 'climax') {
@@ -4166,72 +4132,53 @@ const PlexdApp = (function() {
                 }
                 // r = Seek forward 10s, rr = Seek forward 60s
                 e.preventDefault();
-                {
-                    const now = Date.now();
-                    if ((now - lastRTime) < DOUBLE_TAP_THRESHOLD) {
-                        if (rTimeout) { clearTimeout(rTimeout); rTimeout = null; }
-                        lastRTime = 0;
-                        const ts = fullscreenStream || selected;
-                        if (ts) PlexdStream.seekRelative(ts.id, 60);
-                        syncOverlayClones();
-                    } else {
-                        lastRTime = now;
-                        if (rTimeout) clearTimeout(rTimeout);
-                        const ts = fullscreenStream || selected;
-                        rTimeout = setTimeout(() => {
-                            rTimeout = null;
-                            if (ts) PlexdStream.seekRelative(ts.id, 10);
-                            syncOverlayClones();
-                        }, DOUBLE_TAP_THRESHOLD);
-                    }
-                }
+                handleDoubleTap('r', function() {
+                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (ts) PlexdStream.seekRelative(ts.id, 10);
+                    syncOverlayClones();
+                }, function() {
+                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (ts) PlexdStream.seekRelative(ts.id, 60);
+                    syncOverlayClones();
+                });
                 break;
             case 'x':
             case 'X':
                 // x = Close stream, xx = Remove all unstarred streams
-                {
-                    const now = Date.now();
-                    if ((now - lastXTime) < DOUBLE_TAP_THRESHOLD) {
-                        // XX: Remove all unstarred streams
-                        if (xTimeout) { clearTimeout(xTimeout); xTimeout = null; }
-                        lastXTime = 0;
-                        const allStreams = PlexdStream.getAllStreams();
-                        const unstarred = allStreams.filter(s => !PlexdStream.isFavorite(s.id));
-                        if (unstarred.length === 0) {
-                            showMessage('All streams are starred', 'info');
-                        } else {
-                            unstarred.forEach(s => PlexdStream.removeStream(s.id));
-                            updateStreamCount();
-                            saveCurrentStreams();
-                            showMessage('Removed ' + unstarred.length + ' unstarred streams', 'info');
-                        }
-                    } else {
-                        lastXTime = now;
-                        if (xTimeout) clearTimeout(xTimeout);
-                        const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
-                        xTimeout = setTimeout(() => {
-                            xTimeout = null;
-                            if (targetStream) {
-                                if (fullscreenStream) {
-                                    const nextStreamId = PlexdStream.getNextStreamId(targetStream.id);
-                                    PlexdStream.removeStream(targetStream.id);
-                                    if (nextStreamId) {
-                                        PlexdStream.enterFocusedMode(nextStreamId);
-                                    } else {
-                                        PlexdStream.exitFocusedMode();
-                                    }
-                                } else {
-                                    PlexdStream.removeStreamAndFocusNext(targetStream.id);
-                                }
-                                updateStreamCount();
-                                saveCurrentStreams();
-                                showMessage('Stream closed', 'info');
+                handleDoubleTap('x', function() {
+                    var targetStream = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream() || getCoverflowSelectedStream();
+                    if (targetStream) {
+                        var fsStream = PlexdStream.getFullscreenStream();
+                        if (fsStream) {
+                            var nextStreamId = PlexdStream.getNextStreamId(targetStream.id);
+                            PlexdStream.removeStream(targetStream.id);
+                            if (nextStreamId) {
+                                PlexdStream.enterFocusedMode(nextStreamId);
                             } else {
-                                showMessage('Select a stream first', 'info');
+                                PlexdStream.exitFocusedMode();
                             }
-                        }, DOUBLE_TAP_THRESHOLD);
+                        } else {
+                            PlexdStream.removeStreamAndFocusNext(targetStream.id);
+                        }
+                        updateStreamCount();
+                        saveCurrentStreams();
+                        showMessage('Stream closed', 'info');
+                    } else {
+                        showMessage('Select a stream first', 'info');
                     }
-                }
+                }, function() {
+                    // XX: Remove all unstarred streams
+                    var allStreams = PlexdStream.getAllStreams();
+                    var unstarred = allStreams.filter(function(s) { return !PlexdStream.isFavorite(s.id); });
+                    if (unstarred.length === 0) {
+                        showMessage('All streams are starred', 'info');
+                    } else {
+                        unstarred.forEach(function(s) { PlexdStream.removeStream(s.id); });
+                        updateStreamCount();
+                        saveCurrentStreams();
+                        showMessage('Removed ' + unstarred.length + ' unstarred streams', 'info');
+                    }
+                });
                 break;
             case 'j':
             case 'J':
@@ -4254,6 +4201,14 @@ const PlexdApp = (function() {
                 {
                     const ts = fullscreenStream || selected;
                     if (ts && ts.video) {
+                        // Deduplicate: skip if same stream within 1 second of existing bookmark
+                        var isDupe = bookmarks.some(function(b) {
+                            return b.streamId === ts.id && Math.abs(b.timestamp - ts.video.currentTime) < 1;
+                        });
+                        if (isDupe) {
+                            showMessage('Already bookmarked', 'info');
+                            break;
+                        }
                         bookmarks.push({
                             streamId: ts.id,
                             timestamp: ts.video.currentTime,
@@ -4296,59 +4251,35 @@ const PlexdApp = (function() {
             case '8':
             case '9':
                 // Double-tap detection: single tap = assign, double tap = view slot
-                // Uses timeout to delay single-tap action until we know it's not a double-tap
                 if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                    const slotNum = parseInt(e.key);
-                    const now = Date.now();
-                    const isDoubleTap = (lastSlotKey === e.key && (now - lastSlotKeyTime) < DOUBLE_TAP_THRESHOLD);
-
-                    if (isDoubleTap) {
-                        // Double tap: cancel pending assign and view/filter to this slot
-                        if (slotAssignTimeout) {
-                            clearTimeout(slotAssignTimeout);
-                            slotAssignTimeout = null;
+                    var slotNum = parseInt(e.key);
+                    handleDoubleTap('slot-' + e.key, function() {
+                        // Single tap: assign rating to selected stream
+                        var fullscreenMode = PlexdStream.getFullscreenMode();
+                        var isFocusedFullscreen = fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill';
+                        var targetStream = isFocusedFullscreen
+                            ? PlexdStream.getFullscreenStream()
+                            : PlexdStream.getSelectedStream();
+                        if (targetStream) {
+                            PlexdStream.setRating(targetStream.id, slotNum);
+                            showMessage('Slot ' + slotNum, 'info');
+                            updateCastingCallVisuals();
+                            if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
+                                PlexdStream.exitFocusedMode();
+                            }
                         }
-                        lastSlotKey = null;
-                        lastSlotKeyTime = 0;
-
-                        const fullscreenMode = PlexdStream.getFullscreenMode();
+                    }, function() {
+                        // Double tap: view/filter to this slot
+                        var fullscreenMode = PlexdStream.getFullscreenMode();
                         if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
                             PlexdStream.exitFocusedMode();
                         }
-                        const count = PlexdStream.getStreamsByRating(slotNum).length;
+                        var count = PlexdStream.getStreamsByRating(slotNum).length;
                         setViewMode(slotNum);
                         if (count === 0) {
-                            showMessage(`No streams in slot ${slotNum}`, 'warning');
+                            showMessage('No streams in slot ' + slotNum, 'warning');
                         }
-                    } else {
-                        // First tap: schedule assign after threshold (will be cancelled if double-tap)
-                        lastSlotKey = e.key;
-                        lastSlotKeyTime = now;
-
-                        // Clear any previous pending assign
-                        if (slotAssignTimeout) {
-                            clearTimeout(slotAssignTimeout);
-                        }
-
-                        // Capture current state for the delayed action
-                        const fullscreenMode = PlexdStream.getFullscreenMode();
-                        const isFocusedFullscreen = fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill';
-                        const targetStream = isFocusedFullscreen
-                            ? PlexdStream.getFullscreenStream()
-                            : selected;
-
-                        slotAssignTimeout = setTimeout(() => {
-                            slotAssignTimeout = null;
-                            if (targetStream) {
-                                PlexdStream.setRating(targetStream.id, slotNum);
-                                showMessage(`Slot ${slotNum}`, 'info');
-                                updateCastingCallVisuals();
-                                if (isFocusedFullscreen && viewMode !== 'all' && slotNum !== viewMode) {
-                                    PlexdStream.exitFocusedMode();
-                                }
-                            }
-                        }, DOUBLE_TAP_THRESHOLD);
-                    }
+                    });
                 }
                 break;
             case 'l':
@@ -4360,22 +4291,11 @@ const PlexdApp = (function() {
             case '/':
                 // / : Random seek selected, // : Random seek all
                 e.preventDefault();
-                {
-                    const now = Date.now();
-                    if ((now - lastSlashTime) < DOUBLE_TAP_THRESHOLD) {
-                        // Double tap: random seek all
-                        if (slashTimeout) { clearTimeout(slashTimeout); slashTimeout = null; }
-                        lastSlashTime = 0;
-                        randomSeekAll();
-                    } else {
-                        // Single tap: delay to check for double
-                        lastSlashTime = now;
-                        slashTimeout = setTimeout(() => {
-                            slashTimeout = null;
-                            randomSeekSelected();
-                        }, DOUBLE_TAP_THRESHOLD);
-                    }
-                }
+                handleDoubleTap('slash', function() {
+                    randomSeekSelected();
+                }, function() {
+                    randomSeekAll();
+                });
                 break;
             case '\\':
                 // \ : Rewind selected stream to beginning
@@ -6660,6 +6580,9 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene (Theater)</div>
                         <div class="plexd-shortcut"><kbd>J</kbd> Toggle Encore view</div>
                         <div class="plexd-shortcut"><kbd>K</kbd> Bookmark moment</div>
+                        <div class="plexd-shortcut"><kbd>E</kbd> Cycle Climax sub-mode · <kbd>Shift+E</kbd> Reverse</div>
+                        <div class="plexd-shortcut"><kbd>Space·Space</kbd> Random seek</div>
+                        <div class="plexd-shortcut"><kbd>←</kbd><kbd>→</kbd> Rotate hero (Stage)</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>Stars & Slots</h4>

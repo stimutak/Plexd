@@ -2794,7 +2794,7 @@ body {
 
 /* Theater scene transitions */
 .theater-mode .plexd-stream {
-    transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
+    transition: opacity 0.3s ease, transform 0.3s ease;
 }
 
 .theater-mode .plexd-stream.fading-out {

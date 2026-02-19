@@ -2413,14 +2413,63 @@ const PlexdApp = (function() {
         }
     }
 
-    // Placeholder stubs for Encore (implemented in Task 11)
+    // Encore bookmark view — visual recall grid of bookmarked moments
     function showEncoreView() {
+        let overlay = document.getElementById('encore-overlay');
+        if (overlay) overlay.remove();
+
         if (bookmarks.length === 0) {
             showMessage('No bookmarks yet — press K to bookmark moments', 'info');
             theaterScene = encorePreviousScene || 'casting';
             return;
         }
-        showMessage('Encore: ' + bookmarks.length + ' bookmarks', 'info');
+
+        overlay = document.createElement('div');
+        overlay.id = 'encore-overlay';
+        overlay.className = 'plexd-encore-overlay';
+
+        const title = document.createElement('div');
+        title.className = 'encore-title';
+        title.textContent = 'Encore — ' + bookmarks.length + ' moment' + (bookmarks.length !== 1 ? 's' : '');
+        overlay.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'encore-grid';
+
+        bookmarks.slice().reverse().forEach(function(bm) {
+            const stream = PlexdStream.getStream(bm.streamId);
+            if (!stream) return;
+
+            const card = document.createElement('div');
+            card.className = 'encore-card';
+
+            const thumb = document.createElement('video');
+            thumb.src = stream.video.src;
+            thumb.currentTime = bm.timestamp;
+            thumb.muted = true;
+            thumb.playsInline = true;
+            card.appendChild(thumb);
+
+            const info = document.createElement('div');
+            info.className = 'encore-info';
+            const m = Math.floor(bm.timestamp / 60);
+            const s = Math.floor(bm.timestamp % 60);
+            info.textContent = m + ':' + String(s).padStart(2, '0');
+            card.appendChild(info);
+
+            card.addEventListener('click', function() {
+                closeEncoreView();
+                stageHeroId = bm.streamId;
+                setTheaterScene('stage');
+                const st = PlexdStream.getStream(bm.streamId);
+                if (st && st.video) st.video.currentTime = bm.timestamp;
+            });
+
+            grid.appendChild(card);
+        });
+
+        overlay.appendChild(grid);
+        document.querySelector('.plexd-app').appendChild(overlay);
     }
 
     function closeEncoreView() {

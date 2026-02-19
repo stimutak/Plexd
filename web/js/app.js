@@ -592,6 +592,11 @@ const PlexdApp = (function() {
     let slotAssignTimeout = null;
     const DOUBLE_TAP_THRESHOLD = 300; // ms
 
+    // Double-tap detection for Q key
+    // Single Q = star/favorite, double QQ = filter to favorites
+    let lastQTime = 0;
+    let qTimeout = null;
+
     // Double-tap detection for / key
     // Single / = random seek selected, double // = random seek all
     let lastSlashTime = 0;
@@ -1508,7 +1513,7 @@ const PlexdApp = (function() {
 
         if (streamsToShow.length === 0) {
             if (viewMode === 'favorites' && allStreams.length > 0) {
-                showEmptyState('No Likes', 'Press L on a selected stream to like it');
+                showEmptyState('No Stars', 'Press Q on a selected stream to star it');
             } else if (viewMode !== 'all' && allStreams.length > 0) {
                 showEmptyState(`No ★${viewMode} Streams`, `Assign streams to slot ${viewMode} to see them here`);
             } else {
@@ -3226,7 +3231,7 @@ const PlexdApp = (function() {
                     const count = PlexdStream.getFavoriteCount();
                     setViewMode('favorites');
                     if (count === 0) {
-                        showMessage('No favorites yet. Press L to like streams.', 'info');
+                        showMessage('No favorites yet. Press Q to star streams.', 'info');
                     }
                 }
                 break;
@@ -3562,6 +3567,40 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case 'q':
+            case 'Q':
+                // Q = Star/favorite, QQ = filter to favorites
+                e.preventDefault();
+                {
+                    const now = Date.now();
+                    if ((now - lastQTime) < DOUBLE_TAP_THRESHOLD) {
+                        if (qTimeout) { clearTimeout(qTimeout); qTimeout = null; }
+                        lastQTime = 0;
+                        const fullscreenMode = PlexdStream.getFullscreenMode();
+                        if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
+                            PlexdStream.exitFocusedMode();
+                        }
+                        const count = PlexdStream.getFavoriteCount();
+                        setViewMode('favorites');
+                        if (count === 0) {
+                            showMessage('No favorites yet — press Q to star streams', 'info');
+                        }
+                    } else {
+                        lastQTime = now;
+                        if (qTimeout) clearTimeout(qTimeout);
+                        const targetStream = fullscreenStream || selected;
+                        qTimeout = setTimeout(() => {
+                            qTimeout = null;
+                            if (targetStream) {
+                                const isFav = PlexdStream.toggleFavorite(targetStream.id);
+                                showMessage(isFav ? 'Starred ★' : 'Unstarred', isFav ? 'success' : 'info');
+                            } else {
+                                showMessage('Select a stream first', 'warning');
+                            }
+                        }, DOUBLE_TAP_THRESHOLD);
+                    }
+                }
+                break;
             case 'r':
             case 'R':
                 // Reload stream - useful for frozen streams or stuck loading
@@ -3689,17 +3728,9 @@ const PlexdApp = (function() {
                 break;
             case 'l':
             case 'L':
-                // L = Love/Like: Toggle favorite on selected/fullscreen stream
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        e.preventDefault();
-                        const isFav = PlexdStream.toggleFavorite(targetStream.id);
-                        showMessage(isFav ? 'Liked ★' : 'Unliked', isFav ? 'success' : 'info');
-                    } else {
-                        showMessage('Select a stream first', 'warning');
-                    }
-                }
+                // L = Force relayout (star moved to Q)
+                e.preventDefault();
+                forceRelayout();
                 break;
             case '/':
                 // / : Random seek selected, // : Random seek all
@@ -4350,7 +4381,7 @@ const PlexdApp = (function() {
     async function saveFavoritesAsCombination() {
         const streams = PlexdStream.getFavoriteStreams();
         if (streams.length === 0) {
-            showMessage('No likes to save. Press L on selected streams to like them.', 'warning');
+            showMessage('No stars to save. Press Q on selected streams to star them.', 'warning');
             return;
         }
 
@@ -5970,9 +6001,9 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
                     </div>
                     <div class="plexd-shortcuts-section">
-                        <h4>Likes & Slots</h4>
-                        <div class="plexd-shortcut"><kbd>L</kbd> Toggle like</div>
-                        <div class="plexd-shortcut"><kbd>\`</kbd> View likes only</div>
+                        <h4>Stars & Slots</h4>
+                        <div class="plexd-shortcut"><kbd>Q</kbd> Star · <kbd>QQ</kbd> Filter starred</div>
+                        <div class="plexd-shortcut"><kbd>\`</kbd> View starred only</div>
                         <div class="plexd-shortcut"><kbd>1-9</kbd> Assign to slot (tap)</div>
                         <div class="plexd-shortcut"><kbd>1-9</kbd> View slot (double-tap)</div>
                         <div class="plexd-shortcut"><kbd>0</kbd> View all streams</div>
@@ -5986,7 +6017,7 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>A</kbd> Smart Zoom (face auto-pan)</div>
                         <div class="plexd-shortcut"><kbd>]</kbd> / <kbd>[</kbd> Rotate CW / CCW</div>
                         <div class="plexd-shortcut"><kbd>}</kbd> / <kbd>{</kbd> Shuffle randomly</div>
-                        <div class="plexd-shortcut"><kbd>L</kbd> Force relayout</div>
+                        <div class="plexd-shortcut"><kbd>L</kbd> Force relayout (L = Layout)</div>
                         <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
                         <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>
                     </div>

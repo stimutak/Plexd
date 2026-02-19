@@ -602,6 +602,21 @@ const PlexdApp = (function() {
     let lastSlashTime = 0;
     let slashTimeout = null;
 
+    // Double-tap detection for E key
+    // Single e = seek back 10s, ee = seek back 60s
+    let lastETime = 0;
+    let eTimeout = null;
+
+    // Double-tap detection for R key
+    // Single r = seek forward 10s, rr = seek forward 60s
+    let lastRTime = 0;
+    let rTimeout = null;
+
+    // Double-tap detection for X key
+    // Single x = close stream, xx = remove all unstarred
+    let lastXTime = 0;
+    let xTimeout = null;
+
     // Layout modes
     // Tetris mode: Intelligent bin-packing that eliminates black bars (object-fit: cover)
     // 0 = off, 1 = row-pack (rows with varying heights), 2 = column-pack (columns with varying widths),
@@ -3601,45 +3616,108 @@ const PlexdApp = (function() {
                     }
                 }
                 break;
+            case 'e':
+                // e = Seek back 10s, ee = Seek back 60s
+                e.preventDefault();
+                {
+                    const now = Date.now();
+                    if ((now - lastETime) < DOUBLE_TAP_THRESHOLD) {
+                        if (eTimeout) { clearTimeout(eTimeout); eTimeout = null; }
+                        lastETime = 0;
+                        const ts = fullscreenStream || selected;
+                        if (ts) PlexdStream.seekRelative(ts.id, -60);
+                        syncOverlayClones();
+                    } else {
+                        lastETime = now;
+                        if (eTimeout) clearTimeout(eTimeout);
+                        const ts = fullscreenStream || selected;
+                        eTimeout = setTimeout(() => {
+                            eTimeout = null;
+                            if (ts) PlexdStream.seekRelative(ts.id, -10);
+                            syncOverlayClones();
+                        }, DOUBLE_TAP_THRESHOLD);
+                    }
+                }
+                break;
             case 'r':
             case 'R':
-                // Reload stream - useful for frozen streams or stuck loading
-                {
-                    const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
-                    if (targetStream) {
-                        PlexdStream.reloadStream(targetStream.id);
+                if (e.shiftKey) {
+                    // Shift+R = Reload stream (moved from plain R)
+                    const ts = fullscreenStream || selected || getCoverflowSelectedStream();
+                    if (ts) {
+                        PlexdStream.reloadStream(ts.id);
                         showMessage('Reloading stream...', 'info');
                     } else {
-                        showMessage('Select a stream first (use arrow keys)', 'info');
+                        showMessage('Select a stream first', 'info');
+                    }
+                    break;
+                }
+                // r = Seek forward 10s, rr = Seek forward 60s
+                e.preventDefault();
+                {
+                    const now = Date.now();
+                    if ((now - lastRTime) < DOUBLE_TAP_THRESHOLD) {
+                        if (rTimeout) { clearTimeout(rTimeout); rTimeout = null; }
+                        lastRTime = 0;
+                        const ts = fullscreenStream || selected;
+                        if (ts) PlexdStream.seekRelative(ts.id, 60);
+                        syncOverlayClones();
+                    } else {
+                        lastRTime = now;
+                        if (rTimeout) clearTimeout(rTimeout);
+                        const ts = fullscreenStream || selected;
+                        rTimeout = setTimeout(() => {
+                            rTimeout = null;
+                            if (ts) PlexdStream.seekRelative(ts.id, 10);
+                            syncOverlayClones();
+                        }, DOUBLE_TAP_THRESHOLD);
                     }
                 }
                 break;
             case 'x':
             case 'X':
-                // Close/remove stream
+                // x = Close stream, xx = Remove all unstarred streams
                 {
-                    const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
-                    if (targetStream) {
-                        if (fullscreenStream) {
-                            // In fullscreen: find next stream, remove current, fullscreen next
-                            const nextStreamId = PlexdStream.getNextStreamId(targetStream.id);
-                            PlexdStream.removeStream(targetStream.id);
-                            if (nextStreamId) {
-                                // Stay in fullscreen on the next stream
-                                PlexdStream.enterFocusedMode(nextStreamId);
-                            } else {
-                                // No more streams, exit fullscreen
-                                PlexdStream.exitFocusedMode();
-                            }
+                    const now = Date.now();
+                    if ((now - lastXTime) < DOUBLE_TAP_THRESHOLD) {
+                        // XX: Remove all unstarred streams
+                        if (xTimeout) { clearTimeout(xTimeout); xTimeout = null; }
+                        lastXTime = 0;
+                        const allStreams = PlexdStream.getAllStreams();
+                        const unstarred = allStreams.filter(s => !PlexdStream.isFavorite(s.id));
+                        if (unstarred.length === 0) {
+                            showMessage('All streams are starred', 'info');
                         } else {
-                            // In grid: remove and select next for quick elimination
-                            PlexdStream.removeStreamAndFocusNext(targetStream.id);
+                            unstarred.forEach(s => PlexdStream.removeStream(s.id));
+                            updateStreamCount();
+                            saveCurrentStreams();
+                            showMessage('Removed ' + unstarred.length + ' unstarred streams', 'info');
                         }
-                        updateStreamCount();
-                        saveCurrentStreams();
-                        showMessage('Stream closed', 'info');
                     } else {
-                        showMessage('Select a stream first (use arrow keys)', 'info');
+                        lastXTime = now;
+                        if (xTimeout) clearTimeout(xTimeout);
+                        const targetStream = fullscreenStream || selected || getCoverflowSelectedStream();
+                        xTimeout = setTimeout(() => {
+                            xTimeout = null;
+                            if (targetStream) {
+                                if (fullscreenStream) {
+                                    const nextStreamId = PlexdStream.getNextStreamId(targetStream.id);
+                                    PlexdStream.removeStream(targetStream.id);
+                                    if (nextStreamId) {
+                                        PlexdStream.enterFocusedMode(nextStreamId);
+                                    } else {
+                                        PlexdStream.exitFocusedMode();
+                                    }
+                                } else {
+                                    PlexdStream.removeStreamAndFocusNext(targetStream.id);
+                                }
+                                updateStreamCount();
+                                saveCurrentStreams();
+                                showMessage('Stream closed', 'info');
+                            } else {
+                                showMessage('Select a stream first', 'info');
+                            }
+                        }, DOUBLE_TAP_THRESHOLD);
                     }
                 }
                 break;
@@ -5986,7 +6064,8 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>M</kbd> Mute/unmute</div>
                         <div class="plexd-shortcut"><kbd>N</kbd> Solo (mute others)</div>
                         <div class="plexd-shortcut"><kbd>P</kbd> Pause all</div>
-                        <div class="plexd-shortcut"><kbd>,</kbd> <kbd>.</kbd> Seek 10s</div>
+                        <div class="plexd-shortcut"><kbd>E</kbd> / <kbd>,</kbd> Seek back 10s · <kbd>EE</kbd> 60s</div>
+                        <div class="plexd-shortcut"><kbd>R</kbd> / <kbd>.</kbd> Seek fwd 10s · <kbd>RR</kbd> 60s</div>
                         <div class="plexd-shortcut"><kbd>&lt;</kbd> <kbd>&gt;</kbd> Seek 60s</div>
                         <div class="plexd-shortcut"><kbd>;</kbd> <kbd>'</kbd> Frame step</div>
                         <div class="plexd-shortcut"><kbd>\\</kbd> Rewind to start</div>
@@ -5995,8 +6074,8 @@ const PlexdApp = (function() {
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>Stream Management</h4>
-                        <div class="plexd-shortcut"><kbd>X</kbd> Close stream</div>
-                        <div class="plexd-shortcut"><kbd>R</kbd> Reload stream</div>
+                        <div class="plexd-shortcut"><kbd>X</kbd> Close stream · <kbd>XX</kbd> Remove unstarred</div>
+                        <div class="plexd-shortcut"><kbd>Shift+R</kbd> Reload stream</div>
                         <div class="plexd-shortcut"><kbd>D</kbd> Download stream</div>
                         <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
                     </div>

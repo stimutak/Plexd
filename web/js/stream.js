@@ -2194,7 +2194,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaA\[\]{}]$/.test(e.key) || e.key === 'Escape';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxX\[\]{}]$/.test(e.key) || e.key === 'Escape';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -4260,6 +4260,15 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Check if a stream is favorited by streamId
+     */
+    function isFavorite(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return false;
+        return getFavorite(stream.url, stream.fileName);
+    }
+
+    /**
      * Get all favorite streams
      */
     function getFavoriteStreams() {
@@ -4780,6 +4789,7 @@ const PlexdStream = (function() {
         toggleFavorite,
         setFavorite,
         getFavorite,
+        isFavorite,
         getFavoriteStreams,
         getFavoriteCount,
         loadFavorites,

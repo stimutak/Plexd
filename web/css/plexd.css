@@ -19,10 +19,36 @@ html, body {
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-    background: #0a0a0a;
-    color: #fff;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
     line-height: 1.5;
+}
+
+:root {
+    --void: #06050a;
+    --bg: #0c0b10;
+    --surface: #13111a;
+    --elevated: #1b1822;
+    --hover: #23202e;
+    --subtle: #2d293a;
+    --text: #ede8e0;
+    --text-sub: rgba(237, 232, 224, 0.65);
+    --text-dim: rgba(237, 232, 224, 0.35);
+    --text-ghost: rgba(237, 232, 224, 0.15);
+    --accent: #c9566d;
+    --accent-up: #d4667a;
+    --accent-glow: rgba(201, 86, 109, 0.35);
+    --accent-soft: rgba(201, 86, 109, 0.12);
+    --gold: #c9a355;
+    --gold-glow: rgba(201, 163, 85, 0.35);
+    --ok: #5cc98e;
+    --warn: #d4a853;
+    --bad: #c95555;
+    --line: rgba(237, 232, 224, 0.07);
+    --line-up: rgba(237, 232, 224, 0.14);
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* ========================================
@@ -45,23 +71,29 @@ body {
     align-items: center;
     gap: 8px;
     padding: 6px 56px 6px 12px; /* extra right padding for hamburger menu */
-    background: #161616;
-    border-bottom: 1px solid #2a2a2a;
+    background: rgba(19, 17, 26, 0.8);
+    border-bottom: 1px solid rgba(201, 86, 109, 0.08);
+    backdrop-filter: blur(20px) saturate(1.2);
+    -webkit-backdrop-filter: blur(20px) saturate(1.2);
     flex-shrink: 0;
-    height: 40px;
+    height: 44px;
     position: relative;
     z-index: 10001;
 }
 
 .plexd-logo {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #ccc;
-    letter-spacing: -0.5px;
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    background: linear-gradient(135deg, var(--text) 60%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 .plexd-logo span {
-    color: #888;
+    -webkit-text-fill-color: var(--accent);
 }
 
 /* URL Input */
@@ -76,20 +108,20 @@ body {
     flex: 1;
     padding: 4px 8px;
     font-size: 12px;
-    border: 1px solid #333;
+    border: 1px solid var(--line-up);
     border-radius: 4px;
-    background: #0a0a0a;
-    color: #fff;
+    background: var(--void);
+    color: var(--text);
     outline: none;
     transition: border-color 0.2s;
 }
 
 .plexd-input:focus {
-    border-color: #555;
+    border-color: var(--accent);
 }
 
 .plexd-input::placeholder {
-    color: #666;
+    color: var(--text-dim);
 }
 
 /* Buttons */
@@ -104,31 +136,37 @@ body {
 }
 
 .plexd-button-primary {
-    background: #444;
+    background: linear-gradient(135deg, var(--accent) 0%, #a8445a 100%);
     color: #fff;
+    box-shadow: 0 2px 8px rgba(201, 86, 109, 0.3);
 }
 
 .plexd-button-primary:hover {
-    background: #555;
+    background: linear-gradient(135deg, var(--accent-up) 0%, var(--accent) 100%);
+    box-shadow: 0 4px 12px rgba(201, 86, 109, 0.4);
 }
 
 .plexd-button-primary:active {
-    background: #666;
+    background: linear-gradient(135deg, #a8445a 0%, var(--accent) 100%);
 }
 
 .plexd-button-secondary {
-    background: #333;
-    color: #fff;
+    background: var(--elevated);
+    color: var(--text-sub);
+    border: 1px solid var(--line);
 }
 
 .plexd-button-secondary:hover {
-    background: #444;
+    background: var(--hover);
+    color: var(--text);
+    border-color: var(--line-up);
 }
 
 /* Generic active state for toggle buttons (audio focus, clean mode, etc.) */
 .plexd-button-secondary.active {
-    background: #1d4ed8;
+    background: var(--accent);
     color: #fff;
+    border-color: var(--accent);
 }
 
 /* Stats */
@@ -138,7 +176,7 @@ body {
     gap: 16px;
     margin-left: auto;
     font-size: 13px;
-    color: #888;
+    color: var(--text-sub);
 }
 
 .plexd-stat {
@@ -149,7 +187,7 @@ body {
 
 .plexd-stat-value {
     font-weight: 600;
-    color: #fff;
+    color: var(--text);
 }
 
 /* Filter Indicator */
@@ -158,11 +196,11 @@ body {
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    background: rgba(255, 180, 0, 0.15);
-    border: 1px solid rgba(255, 180, 0, 0.4);
+    background: rgba(201, 163, 85, 0.15);
+    border: 1px solid rgba(201, 163, 85, 0.4);
     border-radius: 4px;
     font-size: 11px;
-    color: #ffb400;
+    color: var(--gold);
 }
 
 .plexd-filter-count {
@@ -180,15 +218,30 @@ body {
     overflow: hidden;
 }
 
+#plexd-container::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(ellipse at 30% 40%, rgba(201, 86, 109, 0.06) 0%, transparent 60%),
+        radial-gradient(ellipse at 70% 60%, rgba(201, 163, 85, 0.04) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+}
+
 /* ========================================
    Stream Elements
    ======================================== */
 
 .plexd-stream {
     position: absolute;
-    background: #111;
+    background: #0a090e;
     overflow: hidden;
     transition: all 0.3s ease;
+    border: 1px solid rgba(237, 232, 224, 0.06);
+    border-radius: 4px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    animation: streamEnter 0.5s var(--ease) both;
 }
 
 .plexd-video {
@@ -196,6 +249,13 @@ body {
     height: 100%;
     object-fit: contain;
     background: #000;
+}
+
+/* Crop/Contain toggle (Opt+Up selected, Opt+Down all) — overrides wall/tetris crop */
+.plexd-stream.plexd-stream-contain .plexd-video,
+.plexd-tetris-cell .plexd-stream-contain .plexd-video,
+.plexd-app.wall-strips .plexd-stream-contain .plexd-video {
+    object-fit: contain !important;
 }
 
 /* Stream Controls Overlay */
@@ -207,7 +267,9 @@ body {
     display: flex;
     flex-direction: column;
     padding: 12px;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+    background: linear-gradient(transparent 0%, rgba(6, 5, 10, 0.6) 40%, rgba(6, 5, 10, 0.95) 100%);
+    backdrop-filter: blur(12px) saturate(1.3);
+    -webkit-backdrop-filter: blur(12px) saturate(1.3);
     opacity: 0;
     transition: opacity 0.2s;
     z-index: 30; /* ensure controls stay clickable above overlays */
@@ -226,15 +288,16 @@ body {
     justify-content: center;
     border: none;
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.7);
-    color: #fff;
+    background: rgba(237, 232, 224, 0.1);
+    color: var(--text-sub);
     font-size: 14px;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background 0.2s, color 0.2s;
 }
 
 .plexd-btn:hover {
-    background: rgba(99, 102, 241, 0.8);
+    background: rgba(237, 232, 224, 0.2);
+    color: var(--text);
 }
 
 .plexd-remove-btn {
@@ -259,7 +322,7 @@ body {
     height: 8px;
     -webkit-appearance: none;
     appearance: none;
-    background: rgba(255, 255, 255, 0.3);
+    background: rgba(237, 232, 224, 0.2);
     border-radius: 4px;
     cursor: pointer;
     outline: none;
@@ -274,7 +337,7 @@ body {
     -webkit-appearance: none;
     width: 14px;
     height: 14px;
-    background: #555;
+    background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
 }
@@ -282,7 +345,7 @@ body {
 .plexd-seek-bar::-moz-range-thumb {
     width: 14px;
     height: 14px;
-    background: #555;
+    background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
     border: none;
@@ -290,7 +353,7 @@ body {
 
 .plexd-time-display {
     font-size: 11px;
-    color: #ccc;
+    color: var(--text-sub);
     white-space: nowrap;
     font-family: monospace;
 }
@@ -318,17 +381,22 @@ body {
     align-items: center;
     justify-content: center;
     text-align: center;
-    color: #666;
+    color: var(--text-dim);
+    background:
+        radial-gradient(ellipse at 50% 40%, rgba(201, 86, 109, 0.04) 0%, transparent 60%);
 }
 
 .plexd-empty-state h2 {
-    font-size: 1.5rem;
+    font-size: 1.8rem;
     margin-bottom: 8px;
-    color: #888;
+    color: var(--text-sub);
+    letter-spacing: 2px;
+    font-weight: 700;
 }
 
 .plexd-empty-state p {
     font-size: 1rem;
+    color: var(--text-dim);
 }
 
 /* ========================================
@@ -344,24 +412,27 @@ body {
     border-radius: 8px;
     font-size: 14px;
     font-weight: 500;
-    z-index: 1000;
+    z-index: 200000;
     transition: opacity 0.3s;
     pointer-events: none;
 }
 
 .plexd-message-info {
-    background: rgba(99, 102, 241, 0.9);
+    background: rgba(201, 86, 109, 0.85);
     color: #fff;
+    box-shadow: 0 4px 20px rgba(201, 86, 109, 0.3);
 }
 
 .plexd-message-success {
-    background: rgba(34, 197, 94, 0.9);
+    background: rgba(92, 201, 142, 0.85);
     color: #fff;
+    box-shadow: 0 4px 20px rgba(92, 201, 142, 0.25);
 }
 
 .plexd-message-error {
-    background: rgba(239, 68, 68, 0.9);
+    background: rgba(201, 85, 85, 0.85);
     color: #fff;
+    box-shadow: 0 4px 20px rgba(201, 85, 85, 0.3);
 }
 
 /* ========================================
@@ -409,8 +480,8 @@ body {
         padding: 6px 10px;
         font-size: 12px;
         min-height: 28px;
-        background: #2a2a2a;
-        border-color: #444;
+        background: var(--subtle);
+        border-color: var(--line-up);
     }
 
     /* Header toggle button */
@@ -419,7 +490,7 @@ body {
         height: 36px;
         font-size: 18px;
         opacity: 1 !important;
-        background: #3a3a3a;
+        background: var(--subtle);
     }
 
     /* Rating button in controls */
@@ -447,12 +518,15 @@ body {
     left: 50%;
     transform: translateX(-50%);
     padding: 8px 16px;
-    background: rgba(26, 26, 26, 0.95);
+    background: rgba(19, 17, 26, 0.95);
+    border: 1px solid var(--line);
     border-radius: 8px;
     font-size: 12px;
-    color: #888;
+    color: var(--text-sub);
     z-index: 100;
     white-space: nowrap;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
 }
 
 .plexd-shortcuts-quick {
@@ -464,29 +538,30 @@ body {
 .plexd-shortcuts kbd {
     display: inline-block;
     padding: 2px 6px;
-    background: #333;
+    background: var(--subtle);
     border-radius: 3px;
-    font-family: monospace;
-    color: #fff;
+    font-family: 'Outfit', monospace;
+    color: var(--text);
     margin-right: 4px;
+    border: 1px solid var(--line);
 }
 
 .plexd-shortcuts-more {
     margin-left: 16px;
     padding: 4px 10px;
-    background: #333;
-    border: 1px solid #444;
+    background: var(--subtle);
+    border: 1px solid var(--line-up);
     border-radius: 4px;
-    color: #aaa;
+    color: var(--text-sub);
     font-size: 11px;
     cursor: pointer;
     transition: all 0.2s ease;
 }
 
 .plexd-shortcuts-more:hover {
-    background: #444;
-    color: #fff;
-    border-color: #555;
+    background: var(--hover);
+    color: var(--text);
+    border-color: rgba(237, 232, 224, 0.2);
 }
 
 /* Shortcuts Modal */
@@ -504,17 +579,17 @@ body {
 }
 
 .plexd-shortcuts-section h4 {
-    color: #fff;
+    color: var(--text);
     font-size: 13px;
     font-weight: 600;
     margin: 0 0 8px 0;
     padding-bottom: 4px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--subtle);
 }
 
 .plexd-shortcut {
     font-size: 12px;
-    color: #999;
+    color: var(--text-sub);
     padding: 3px 0;
 }
 
@@ -522,13 +597,14 @@ body {
     display: inline-block;
     min-width: 20px;
     padding: 2px 6px;
-    background: #333;
+    background: var(--subtle);
     border-radius: 3px;
-    font-family: monospace;
+    font-family: 'Outfit', monospace;
     font-size: 11px;
-    color: #fff;
+    color: var(--text);
     text-align: center;
     margin-right: 2px;
+    border: 1px solid var(--line);
 }
 
 /* Show on desktop when not in input */
@@ -571,7 +647,7 @@ body {
 }
 
 .plexd-error-title {
-    color: #999;
+    color: var(--text-sub);
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
@@ -580,14 +656,14 @@ body {
 }
 
 .plexd-error-msg {
-    color: #ccc;
+    color: var(--text);
     font-size: 13px;
     line-height: 1.4;
     max-width: 90%;
 }
 
 .plexd-error-detail {
-    color: #666;
+    color: var(--text-dim);
     font-size: 11px;
     margin-top: 8px;
     font-family: monospace;
@@ -595,10 +671,10 @@ body {
 
 .plexd-error-retry {
     padding: 6px 14px;
-    background: #333;
-    border: 1px solid #555;
+    background: var(--subtle);
+    border: 1px solid rgba(237, 232, 224, 0.2);
     border-radius: 4px;
-    color: #fff;
+    color: var(--text);
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -606,16 +682,16 @@ body {
 }
 
 .plexd-error-retry:hover {
-    background: #444;
-    border-color: #666;
+    background: var(--hover);
+    border-color: var(--text-dim);
 }
 
 .plexd-error-close {
     padding: 6px 14px;
     background: transparent;
-    border: 1px solid #444;
+    border: 1px solid var(--line-up);
     border-radius: 4px;
-    color: #888;
+    color: var(--text-sub);
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
@@ -623,8 +699,8 @@ body {
 }
 
 .plexd-error-close:hover {
-    background: #2a2a2a;
-    color: #aaa;
+    background: var(--subtle);
+    color: var(--text-sub);
 }
 
 /* Recovering state indicator */
@@ -632,7 +708,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(59, 130, 246, 0.3);
+    background: rgba(201, 86, 109, 0.3);
     z-index: 5;
     pointer-events: none;
     animation: recovering-pulse 1.5s ease-in-out infinite;
@@ -650,7 +726,7 @@ body {
     left: 50%;
     transform: translateX(-50%);
     padding: 8px 16px;
-    background: rgba(59, 130, 246, 0.9);
+    background: rgba(201, 86, 109, 0.9);
     border-radius: 6px;
     color: #fff;
     font-size: 12px;
@@ -732,6 +808,10 @@ body {
 /* Focused mode: prevent controls/hover bleeding from streams "behind" fullscreen */
 .plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) {
     pointer-events: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    animation: none !important;
+    border-color: transparent !important;
 }
 
 .plexd-app.plexd-focused-mode .plexd-stream:not(.plexd-fullscreen) .plexd-controls {
@@ -761,17 +841,21 @@ body {
 }
 
 .plexd-stream.plexd-selected {
-    outline: 3px solid rgba(59, 130, 246, 0.95);
-    outline-offset: -3px;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
     z-index: 12;
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25), 0 10px 30px rgba(0, 0, 0, 0.45);
+    box-shadow:
+        0 0 30px rgba(201, 86, 109, 0.4),
+        0 0 60px rgba(201, 86, 109, 0.15),
+        0 10px 40px rgba(0, 0, 0, 0.5);
+    border-color: var(--accent);
 }
 
 .plexd-stream.plexd-selected::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(59, 130, 246, 0.12);
+    background: rgba(201, 86, 109, 0.12);
     pointer-events: none;
     z-index: 1;
 }
@@ -787,7 +871,7 @@ body {
     font-weight: 700;
     letter-spacing: 0.6px;
     text-transform: uppercase;
-    background: rgba(59, 130, 246, 0.92);
+    background: rgba(201, 86, 109, 0.92);
     color: #fff;
     z-index: 35;
     opacity: 0;
@@ -825,7 +909,7 @@ body {
 }
 
 .plexd-stream.plexd-drag-over {
-    outline: 3px dashed #4ade80;
+    outline: 3px dashed var(--ok);
     outline-offset: -3px;
 }
 
@@ -842,8 +926,8 @@ body {
     flex-direction: column;
     gap: 4px;
     padding: 8px 12px;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
-    color: #fff;
+    background: linear-gradient(transparent, rgba(6, 5, 10, 0.9));
+    color: var(--text);
     font-size: 12px;
     z-index: 5;
 }
@@ -851,7 +935,7 @@ body {
 .plexd-info-url {
     font-family: monospace;
     font-size: 10px;
-    color: #aaa;
+    color: var(--text-sub);
     word-break: break-all;
 }
 
@@ -862,7 +946,7 @@ body {
 
 .plexd-info-resolution {
     font-weight: 600;
-    color: #4ade80;
+    color: var(--ok);
 }
 
 .plexd-info-state {
@@ -875,8 +959,8 @@ body {
 
 .plexd-combo-section {
     padding: 8px;
-    background: #1a1a1a;
-    border-top: 1px solid #333;
+    background: var(--surface);
+    border-top: 1px solid var(--subtle);
 }
 
 .plexd-combo-header {
@@ -888,7 +972,7 @@ body {
 
 .plexd-combo-title {
     font-size: 12px;
-    color: #888;
+    color: var(--text-sub);
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
@@ -899,27 +983,27 @@ body {
     align-items: center;
     gap: 4px 6px;
     padding: 6px 8px;
-    background: #252525;
+    background: var(--hover);
     border-radius: 4px;
     margin-bottom: 4px;
 }
 
 .plexd-combo-item.plexd-combo-selected {
-    background: #3a3a3a;
-    outline: 2px solid #3b82f6;
+    background: var(--subtle);
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
 }
 
 .plexd-combo-name {
     flex: 1;
     font-size: 12px;
-    color: #fff;
+    color: var(--text);
     min-width: 60px;
 }
 
 .plexd-combo-count {
     font-size: 10px;
-    color: #666;
+    color: var(--text-dim);
     width: 100%;
     margin-top: -2px;
 }
@@ -942,56 +1026,56 @@ body {
 }
 
 .plexd-combo-update {
-    background: #3b82f6;
+    background: var(--accent);
     color: #fff;
 }
 
 .plexd-combo-update:hover {
-    background: #2563eb;
+    background: var(--accent-up);
 }
 
 .plexd-combo-add {
-    background: #10b981;
+    background: var(--ok);
     color: #fff;
 }
 
 .plexd-combo-add:hover {
-    background: #059669;
+    background: #4db87e;
 }
 
 .plexd-combo-load {
-    background: #555;
-    color: #fff;
+    background: var(--subtle);
+    color: var(--text);
 }
 
 .plexd-combo-load:hover {
-    background: #666;
+    background: var(--hover);
 }
 
 .plexd-combo-delete {
     background: transparent;
-    color: #666;
+    color: var(--text-dim);
     font-size: 14px;
     font-weight: bold;
 }
 
 .plexd-combo-delete:hover {
-    color: #ef4444;
+    color: var(--bad);
 }
 
 .plexd-combo-empty {
     font-size: 12px;
-    color: #666;
+    color: var(--text-dim);
     text-align: center;
     padding: 8px;
 }
 
 .plexd-panel-hint {
     font-size: 11px;
-    color: #666;
+    color: var(--text-dim);
     padding: 6px 12px;
-    background: #1a1a1a;
-    border-bottom: 1px solid #2a2a2a;
+    background: var(--surface);
+    border-bottom: 1px solid var(--subtle);
 }
 
 /* ========================================
@@ -1000,12 +1084,15 @@ body {
 
 .plexd-panel {
     position: fixed;
-    top: 40px;
+    top: 44px;
     right: -280px;
     width: 260px;
-    height: calc(100vh - 40px);
-    background: #161616;
-    border-left: 1px solid #2a2a2a;
+    height: calc(100vh - 44px);
+    background: rgba(19, 17, 26, 0.92);
+    border-left: 1px solid rgba(201, 86, 109, 0.1);
+    backdrop-filter: blur(20px) saturate(1.2);
+    -webkit-backdrop-filter: blur(20px) saturate(1.2);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3);
     z-index: 100;
     transition: right 0.25s ease;
     display: flex;
@@ -1023,15 +1110,15 @@ body {
     justify-content: space-between;
     gap: 6px;
     padding: 8px 10px;
-    background: #1a1a1a;
-    border-bottom: 1px solid #2a2a2a;
+    background: var(--elevated);
+    border-bottom: 1px solid var(--subtle);
 }
 
 .plexd-panel-header h3 {
     margin: 0;
     font-size: 12px;
     font-weight: 600;
-    color: #ccc;
+    color: var(--text);
     flex-shrink: 0;
 }
 
@@ -1045,7 +1132,7 @@ body {
 .plexd-panel-close {
     background: none;
     border: none;
-    color: #888;
+    color: var(--text-sub);
     font-size: 16px;
     cursor: pointer;
     padding: 0 1px;
@@ -1054,31 +1141,32 @@ body {
 }
 
 .plexd-panel-close:hover {
-    color: #fff;
+    color: var(--text);
 }
 
 .plexd-button-small {
     padding: 3px 6px;
     font-size: 10px;
-    background: #555;
-    color: #fff;
-    border: none;
+    background: var(--elevated);
+    color: var(--text-sub);
+    border: 1px solid var(--line);
     border-radius: 3px;
     cursor: pointer;
     white-space: nowrap;
 }
 
 .plexd-button-small:hover {
-    background: #666;
+    background: var(--hover);
+    color: var(--text);
 }
 
 .plexd-save-favorites-btn {
-    color: #fbbf24;
+    color: var(--gold);
 }
 
 .plexd-save-favorites-btn:hover {
-    background: #78350f;
-    color: #fcd34d;
+    background: rgba(201, 163, 85, 0.2);
+    color: var(--gold);
 }
 
 .plexd-panel-content {
@@ -1088,7 +1176,7 @@ body {
 }
 
 .plexd-panel-empty {
-    color: #666;
+    color: var(--text-dim);
     text-align: center;
     padding: 20px;
     font-size: 13px;
@@ -1100,20 +1188,20 @@ body {
     align-items: center;
     gap: 8px;
     padding: 7px 10px;
-    background: #252525;
+    background: var(--hover);
     border-radius: 4px;
     margin-bottom: 3px;
     cursor: pointer;
 }
 
 .plexd-history-item.plexd-history-active {
-    border-left: 2px solid #3b82f6;
+    border-left: 2px solid var(--accent);
     padding-left: 8px;
 }
 
 .plexd-queue-item:hover,
 .plexd-history-item:hover {
-    background: #303030;
+    background: var(--subtle);
 }
 
 .plexd-history-info {
@@ -1126,7 +1214,7 @@ body {
 
 .plexd-history-name {
     font-size: 12px;
-    color: #e0e0e0;
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1134,7 +1222,7 @@ body {
 
 .plexd-history-meta {
     font-size: 10px;
-    color: #666;
+    color: var(--text-dim);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1143,7 +1231,7 @@ body {
 .plexd-history-delete {
     background: none;
     border: none;
-    color: #555;
+    color: rgba(237, 232, 224, 0.2);
     font-size: 12px;
     cursor: pointer;
     padding: 2px 4px;
@@ -1156,12 +1244,12 @@ body {
 }
 
 .plexd-history-delete:hover {
-    color: #ef4444;
+    color: var(--bad);
 }
 
 .plexd-queue-url {
     font-size: 12px;
-    color: #ccc;
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1171,20 +1259,20 @@ body {
 .plexd-queue-item button {
     background: none;
     border: none;
-    color: #666;
+    color: var(--text-dim);
     font-size: 16px;
     cursor: pointer;
     padding: 0 4px;
 }
 
 .plexd-queue-item button:hover {
-    color: #ef4444;
+    color: var(--bad);
 }
 
 .plexd-badge {
     display: inline-block;
-    background: #555;
-    color: #fff;
+    background: var(--subtle);
+    color: var(--text);
     font-size: 10px;
     padding: 2px 6px;
     border-radius: 10px;
@@ -1208,36 +1296,36 @@ body {
     display: flex;
     align-items: center;
     padding: 8px 10px;
-    background: #252525;
+    background: var(--hover);
     border-radius: 6px;
     margin-bottom: 6px;
     transition: background 0.15s ease;
 }
 
 .plexd-stream-item:hover {
-    background: #303030;
+    background: var(--subtle);
 }
 
 .plexd-stream-item.selected {
-    background: #1e3a5f;
-    outline: 2px solid #3b82f6;
+    background: rgba(201, 86, 109, 0.15);
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
-    box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+    box-shadow: 0 0 12px rgba(201, 86, 109, 0.4);
 }
 
 .plexd-stream-item.selected .plexd-stream-name {
-    color: #fff;
+    color: var(--text);
     font-weight: 600;
 }
 
 .plexd-stream-item.local-file:not(.selected) {
-    border-left: 3px solid #10b981;
+    border-left: 3px solid var(--ok);
 }
 
 .plexd-stream-item.local-file.selected {
-    outline-color: #10b981;
-    background: #1a3a2e;
-    box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+    outline-color: var(--ok);
+    background: rgba(92, 201, 142, 0.1);
+    box-shadow: 0 0 12px rgba(92, 201, 142, 0.4);
 }
 
 .plexd-stream-info {
@@ -1248,7 +1336,7 @@ body {
 
 .plexd-stream-name {
     font-size: 12px;
-    color: #eee;
+    color: var(--text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1257,7 +1345,7 @@ body {
 
 .plexd-stream-url {
     font-size: 10px;
-    color: #888;
+    color: var(--text-sub);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1265,20 +1353,20 @@ body {
 
 .plexd-stream-status {
     font-size: 10px;
-    color: #666;
+    color: var(--text-dim);
     margin-top: 2px;
 }
 
 .plexd-stream-status.playing {
-    color: #10b981;
+    color: var(--ok);
 }
 
 .plexd-stream-status.error {
-    color: #ef4444;
+    color: var(--bad);
 }
 
 .plexd-stream-status.buffering {
-    color: #f59e0b;
+    color: var(--warn);
 }
 
 .plexd-stream-rating {
@@ -1286,15 +1374,15 @@ body {
     margin-left: 4px;
 }
 
-.plexd-stream-rating.rated-1 { color: #ef4444; }
-.plexd-stream-rating.rated-2 { color: #f97316; }
-.plexd-stream-rating.rated-3 { color: #eab308; }
-.plexd-stream-rating.rated-4 { color: #84cc16; }
-.plexd-stream-rating.rated-5 { color: #22c55e; }
-.plexd-stream-rating.rated-6 { color: #06b6d4; }
-.plexd-stream-rating.rated-7 { color: #3b82f6; }
-.plexd-stream-rating.rated-8 { color: #8b5cf6; }
-.plexd-stream-rating.rated-9 { color: #ec4899; }
+.plexd-stream-rating.rated-1 { color: #e85555; }
+.plexd-stream-rating.rated-2 { color: #e87a55; }
+.plexd-stream-rating.rated-3 { color: #e8a855; }
+.plexd-stream-rating.rated-4 { color: #b8d455; }
+.plexd-stream-rating.rated-5 { color: #55d46a; }
+.plexd-stream-rating.rated-6 { color: #55d4b0; }
+.plexd-stream-rating.rated-7 { color: #55b8d4; }
+.plexd-stream-rating.rated-8 { color: #9088e8; }
+.plexd-stream-rating.rated-9 { color: #d478c0; }
 
 .plexd-stream-actions {
     display: flex;
@@ -1305,7 +1393,7 @@ body {
 .plexd-stream-btn {
     background: none;
     border: none;
-    color: #888;
+    color: var(--text-sub);
     font-size: 14px;
     cursor: pointer;
     padding: 4px 6px;
@@ -1314,25 +1402,25 @@ body {
 }
 
 .plexd-stream-btn:hover {
-    background: #444;
-    color: #fff;
+    background: var(--hover);
+    color: var(--text);
 }
 
 .plexd-stream-btn:focus {
-    outline: 2px solid #3b82f6;
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
 }
 
 .plexd-stream-btn.download:hover {
-    color: #10b981;
+    color: var(--ok);
 }
 
 .plexd-stream-btn.reload:hover {
-    color: #3b82f6;
+    color: var(--accent);
 }
 
 .plexd-stream-btn.close:hover {
-    color: #ef4444;
+    color: var(--bad);
 }
 
 .plexd-btn-danger {
@@ -1353,13 +1441,13 @@ body {
 }
 
 .plexd-stream-type.local {
-    background: #065f46;
-    color: #34d399;
+    background: rgba(92, 201, 142, 0.15);
+    color: var(--ok);
 }
 
 .plexd-stream-type.stream {
-    background: #1e3a5f;
-    color: #60a5fa;
+    background: rgba(201, 86, 109, 0.15);
+    color: var(--accent);
 }
 
 /* Stream visibility toggle */
@@ -1387,16 +1475,16 @@ body {
 /* Hidden stream item styling */
 .plexd-stream-item.hidden-stream {
     opacity: 0.5;
-    background: #1a1a1a;
+    background: var(--surface);
 }
 
 .plexd-stream-item.hidden-stream:hover {
     opacity: 0.7;
-    background: #222;
+    background: var(--elevated);
 }
 
 .plexd-stream-item.hidden-stream .plexd-stream-name {
-    color: #888;
+    color: var(--text-sub);
 }
 
 /* ========================================
@@ -1421,31 +1509,33 @@ body {
 }
 
 .plexd-modal {
-    background: #1a1a1a;
-    border: 1px solid #333;
+    background: rgba(19, 17, 26, 0.95);
+    border: 1px solid rgba(201, 86, 109, 0.12);
     border-radius: 12px;
     padding: 24px;
     max-width: 400px;
     width: 90%;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 40px rgba(201, 86, 109, 0.06);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
 }
 
 .plexd-modal h3 {
     font-size: 18px;
     margin-bottom: 12px;
-    color: #fff;
+    color: var(--text);
 }
 
 .plexd-modal p {
     font-size: 14px;
-    color: #aaa;
+    color: var(--text-sub);
     margin-bottom: 16px;
 }
 
 .plexd-domain-list {
-    background: #0a0a0a;
+    background: var(--void);
     border-radius: 8px;
     padding: 8px;
     margin-bottom: 16px;
@@ -1456,7 +1546,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    background: #252525;
+    background: var(--hover);
     border-radius: 6px;
     margin-bottom: 6px;
 }
@@ -1467,12 +1557,12 @@ body {
 
 .plexd-domain-item span {
     font-size: 14px;
-    color: #fff;
+    color: var(--text);
 }
 
 .plexd-modal-hint {
     font-size: 12px;
-    color: #888;
+    color: var(--text-sub);
     margin-bottom: 20px;
     font-style: italic;
 }
@@ -1489,7 +1579,7 @@ body {
 }
 
 .plexd-local-files-list {
-    background: #0a0a0a;
+    background: var(--void);
     border-radius: 8px;
     padding: 8px;
     margin-bottom: 16px;
@@ -1502,7 +1592,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    background: #252525;
+    background: var(--hover);
     border-radius: 6px;
     margin-bottom: 6px;
     transition: background 0.2s ease;
@@ -1514,7 +1604,7 @@ body {
 
 .plexd-local-file-name {
     font-size: 13px;
-    color: #ccc;
+    color: var(--text);
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1524,21 +1614,21 @@ body {
 
 .plexd-local-file-status {
     font-size: 12px;
-    color: #888;
+    color: var(--text-sub);
     flex-shrink: 0;
 }
 
 .plexd-local-file-item.plexd-local-file-matched {
-    background: #1a3a1a;
-    border: 1px solid #2a5a2a;
+    background: rgba(92, 201, 142, 0.1);
+    border: 1px solid rgba(92, 201, 142, 0.25);
 }
 
 .plexd-local-file-item.plexd-local-file-matched .plexd-local-file-status {
-    color: #5a5;
+    color: var(--ok);
 }
 
 .plexd-local-files-drop {
-    border: 2px dashed #444;
+    border: 2px dashed var(--line-up);
     border-radius: 8px;
     padding: 24px;
     text-align: center;
@@ -1549,18 +1639,18 @@ body {
 
 .plexd-local-files-drop:hover,
 .plexd-local-files-drop.plexd-drop-active {
-    border-color: #666;
-    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--text-dim);
+    background: rgba(237, 232, 224, 0.05);
 }
 
 .plexd-local-files-drop .plexd-drop-text {
     font-size: 14px;
-    color: #888;
+    color: var(--text-sub);
 }
 
 /* Stored Files Modal */
 .plexd-modal-subtitle {
-    color: #888;
+    color: var(--text-sub);
     font-size: 13px;
     margin: -8px 0 16px 0;
 }
@@ -1568,7 +1658,7 @@ body {
 .plexd-stored-files-container {
     max-height: 400px;
     overflow-y: auto;
-    background: #0a0a0a;
+    background: var(--void);
     border-radius: 8px;
     padding: 8px;
     margin-bottom: 16px;
@@ -1587,14 +1677,14 @@ body {
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    background: #1a1a1a;
+    background: var(--surface);
     border-radius: 6px;
     margin-bottom: 4px;
 }
 
 .plexd-stored-set-name {
     font-weight: 500;
-    color: #fff;
+    color: var(--text);
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1603,7 +1693,7 @@ body {
 
 .plexd-stored-set-size {
     font-size: 12px;
-    color: #666;
+    color: var(--text-dim);
 }
 
 .plexd-stored-files {
@@ -1619,13 +1709,13 @@ body {
 }
 
 .plexd-stored-file:hover {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(237, 232, 224, 0.05);
 }
 
 .plexd-stored-file-name {
     flex: 1;
     font-size: 13px;
-    color: #aaa;
+    color: var(--text-sub);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1633,7 +1723,7 @@ body {
 
 .plexd-stored-file-size {
     font-size: 12px;
-    color: #666;
+    color: var(--text-dim);
     min-width: 60px;
     text-align: right;
 }
@@ -1645,7 +1735,7 @@ body {
     text-align: center;
     padding: 2px 6px;
     border-radius: 3px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(237, 232, 224, 0.05);
 }
 
 .plexd-btn-icon {
@@ -1655,7 +1745,7 @@ body {
     border: none;
     border-radius: 4px;
     background: transparent;
-    color: #888;
+    color: var(--text-sub);
     cursor: pointer;
     font-size: 14px;
     line-height: 1;
@@ -1665,7 +1755,7 @@ body {
 }
 
 .plexd-btn-icon:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(237, 232, 224, 0.1);
 }
 
 .plexd-btn-icon.plexd-btn-danger:hover {
@@ -1690,10 +1780,10 @@ body {
     right: 12px;
     width: 36px;
     height: 36px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.85);
-    border: none;
-    color: rgba(255, 255, 255, 0.7);
+    border-radius: 12px;
+    background: rgba(12, 11, 16, 0.9);
+    border: 1px solid rgba(201, 86, 109, 0.12);
+    color: var(--text-sub);
     font-size: 18px;
     cursor: pointer;
     z-index: 10002;
@@ -1701,23 +1791,25 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(16px) saturate(1.3);
+    -webkit-backdrop-filter: blur(16px) saturate(1.3);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5), 0 0 20px rgba(201, 86, 109, 0.06);
 }
 
 .plexd-header-toggle:hover {
-    background: rgba(0, 0, 0, 0.95);
-    color: #fff;
+    background: rgba(12, 11, 16, 0.95);
+    color: var(--text);
+    border-color: rgba(201, 86, 109, 0.25);
 }
 
 .plexd-header-toggle.header-visible {
-    background: rgba(50, 50, 50, 0.9);
-    color: #fff;
+    background: rgba(27, 24, 34, 0.9);
+    color: var(--accent);
+    border-color: rgba(201, 86, 109, 0.2);
 }
 
 .plexd-header-toggle.header-visible:hover {
-    background: rgba(70, 70, 70, 0.95);
+    background: rgba(35, 32, 46, 0.95);
 }
 
 /* Header hidden state */
@@ -1838,14 +1930,16 @@ body {
     padding: 0 8px;
     background: rgba(0, 0, 0, 0.8);
     border-radius: 14px;
+    border: 1px solid rgba(201, 163, 85, 0.15);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 14px;
+    font-weight: 600;
     z-index: 5;
     opacity: 0;
-    transition: opacity 0.2s, transform 0.1s;
-    color: #fbbf24;
+    transition: opacity 0.2s, transform 0.1s, box-shadow 0.2s;
+    color: var(--gold);
     cursor: pointer;
 }
 
@@ -1855,6 +1949,7 @@ body {
 
 .plexd-rating-indicator.rated {
     opacity: 1;
+    box-shadow: 0 2px 12px rgba(201, 163, 85, 0.2);
 }
 
 .plexd-stream:hover .plexd-rating-indicator {
@@ -1881,7 +1976,7 @@ body {
 }
 
 .plexd-stream.plexd-fullscreen .plexd-rating-indicator:hover {
-    background: rgba(30, 30, 30, 0.95);
+    background: rgba(27, 24, 34, 0.95);
     transform: scale(1.05);
 }
 
@@ -1904,16 +1999,16 @@ body {
     }
 }
 
-/* Rating colors by level */
-.plexd-rating-indicator.rated-1 { color: #ef4444; }
-.plexd-rating-indicator.rated-2 { color: #f97316; }
-.plexd-rating-indicator.rated-3 { color: #eab308; }
-.plexd-rating-indicator.rated-4 { color: #84cc16; }
-.plexd-rating-indicator.rated-5 { color: #22c55e; }
-.plexd-rating-indicator.rated-6 { color: #06b6d4; }
-.plexd-rating-indicator.rated-7 { color: #3b82f6; }
-.plexd-rating-indicator.rated-8 { color: #8b5cf6; }
-.plexd-rating-indicator.rated-9 { color: #ec4899; }
+/* Rating colors by level - vibrant with glows */
+.plexd-rating-indicator.rated-1 { color: #e85555; border-color: rgba(232, 85, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 85, 85, 0.2); }
+.plexd-rating-indicator.rated-2 { color: #e87a55; border-color: rgba(232, 122, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 122, 85, 0.2); }
+.plexd-rating-indicator.rated-3 { color: #e8a855; border-color: rgba(232, 168, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 168, 85, 0.2); }
+.plexd-rating-indicator.rated-4 { color: #b8d455; border-color: rgba(184, 212, 85, 0.3); box-shadow: 0 2px 12px rgba(184, 212, 85, 0.2); }
+.plexd-rating-indicator.rated-5 { color: #55d46a; border-color: rgba(85, 212, 106, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 106, 0.2); }
+.plexd-rating-indicator.rated-6 { color: #55d4b0; border-color: rgba(85, 212, 176, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 176, 0.2); }
+.plexd-rating-indicator.rated-7 { color: #55b8d4; border-color: rgba(85, 184, 212, 0.3); box-shadow: 0 2px 12px rgba(85, 184, 212, 0.2); }
+.plexd-rating-indicator.rated-8 { color: #9088e8; border-color: rgba(144, 136, 232, 0.3); box-shadow: 0 2px 12px rgba(144, 136, 232, 0.2); }
+.plexd-rating-indicator.rated-9 { color: #d478c0; border-color: rgba(212, 120, 192, 0.3); box-shadow: 0 2px 12px rgba(212, 120, 192, 0.2); }
 
 /* ========================================
    Favorites System
@@ -1933,12 +2028,13 @@ body {
     font-size: 16px;
     font-weight: 600;
     background: rgba(0, 0, 0, 0.6);
-    border-radius: 4px;
+    border: 1px solid transparent;
+    border-radius: 8px;
     opacity: 0.5;
     z-index: 20;
     pointer-events: auto;
-    transition: opacity 0.2s, transform 0.1s, color 0.2s;
-    color: #888;
+    transition: opacity 0.2s, transform 0.1s, color 0.2s, box-shadow 0.2s;
+    color: var(--text-sub);
     cursor: pointer;
 }
 
@@ -1948,7 +2044,10 @@ body {
 
 .plexd-favorite-indicator.active {
     opacity: 1;
-    color: #fbbf24;
+    color: var(--gold);
+    border-color: rgba(201, 163, 85, 0.25);
+    box-shadow: 0 2px 12px rgba(201, 163, 85, 0.2);
+    text-shadow: 0 0 8px rgba(201, 163, 85, 0.4);
 }
 
 .plexd-stream:hover .plexd-favorite-indicator {
@@ -1975,7 +2074,7 @@ body {
 }
 
 .plexd-stream.plexd-fullscreen .plexd-favorite-indicator:hover {
-    background: rgba(30, 30, 30, 0.95);
+    background: rgba(27, 24, 34, 0.95);
     transform: scale(1.05);
 }
 
@@ -2012,29 +2111,30 @@ body {
 
 /* Favorite stream visual indicator - subtle golden border */
 .plexd-stream.plexd-favorite {
-    box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.5);
+    box-shadow: inset 0 0 0 2px rgba(201, 163, 85, 0.35), 0 0 20px rgba(201, 163, 85, 0.1);
+    border-color: rgba(201, 163, 85, 0.2);
 }
 
 /* Rating button in controls */
 .plexd-btn.plexd-rating-btn {
-    color: #888;
+    color: var(--text-sub);
     min-width: 28px;
     font-size: 11px;
 }
 
 .plexd-btn.plexd-rating-btn.rated {
-    color: #fbbf24;
+    color: var(--gold);
 }
 
-.plexd-btn.plexd-rating-btn.rated-1 { color: #ef4444; }
-.plexd-btn.plexd-rating-btn.rated-2 { color: #f97316; }
-.plexd-btn.plexd-rating-btn.rated-3 { color: #eab308; }
-.plexd-btn.plexd-rating-btn.rated-4 { color: #84cc16; }
-.plexd-btn.plexd-rating-btn.rated-5 { color: #22c55e; }
-.plexd-btn.plexd-rating-btn.rated-6 { color: #06b6d4; }
-.plexd-btn.plexd-rating-btn.rated-7 { color: #3b82f6; }
-.plexd-btn.plexd-rating-btn.rated-8 { color: #8b5cf6; }
-.plexd-btn.plexd-rating-btn.rated-9 { color: #ec4899; }
+.plexd-btn.plexd-rating-btn.rated-1 { color: #e85555; }
+.plexd-btn.plexd-rating-btn.rated-2 { color: #e87a55; }
+.plexd-btn.plexd-rating-btn.rated-3 { color: #e8a855; }
+.plexd-btn.plexd-rating-btn.rated-4 { color: #b8d455; }
+.plexd-btn.plexd-rating-btn.rated-5 { color: #55d46a; }
+.plexd-btn.plexd-rating-btn.rated-6 { color: #55d4b0; }
+.plexd-btn.plexd-rating-btn.rated-7 { color: #55b8d4; }
+.plexd-btn.plexd-rating-btn.rated-8 { color: #9088e8; }
+.plexd-btn.plexd-rating-btn.rated-9 { color: #d478c0; }
 
 /* View toggle buttons in header */
 .plexd-view-toggle {
@@ -2046,47 +2146,51 @@ body {
 .plexd-view-btn {
     padding: 2px 6px;
     font-size: 10px;
-    border: 1px solid #333;
-    background: #222;
-    color: #666;
-    border-radius: 3px;
+    font-weight: 500;
+    border: 1px solid var(--line);
+    background: var(--elevated);
+    color: var(--text-dim);
+    border-radius: 4px;
     cursor: pointer;
     transition: all 0.15s;
 }
 
 .plexd-view-btn:hover {
-    background: #333;
-    color: #aaa;
+    background: var(--hover);
+    color: var(--text-sub);
 }
 
 .plexd-view-btn.active {
-    background: #444;
-    border-color: #555;
-    color: #fff;
+    background: var(--hover);
+    border-color: var(--line-up);
+    color: var(--text);
+    font-weight: 600;
+    box-shadow: 0 0 8px rgba(237, 232, 224, 0.05);
 }
 
 /* Favorites view button */
-.plexd-view-btn.view-favorites { color: #fbbf24; }
+.plexd-view-btn.view-favorites { color: var(--gold); }
 .plexd-view-btn.view-favorites.active {
-    background: #78350f;
-    border-color: #92400e;
-    color: #fcd34d;
+    background: rgba(201, 163, 85, 0.2);
+    border-color: rgba(201, 163, 85, 0.35);
+    color: var(--gold);
+    box-shadow: 0 0 8px rgba(201, 163, 85, 0.15);
 }
 
 /* Rating-specific view button colors when active */
-.plexd-view-btn.rating-1.active { background: #7f1d1d; border-color: #991b1b; color: #fca5a5; }
-.plexd-view-btn.rating-2.active { background: #7c2d12; border-color: #9a3412; color: #fdba74; }
-.plexd-view-btn.rating-3.active { background: #713f12; border-color: #854d0e; color: #fde047; }
-.plexd-view-btn.rating-4.active { background: #365314; border-color: #3f6212; color: #bef264; }
-.plexd-view-btn.rating-5.active { background: #14532d; border-color: #166534; color: #86efac; }
-.plexd-view-btn.rating-6.active { background: #164e63; border-color: #155e75; color: #a5f3fc; }
-.plexd-view-btn.rating-7.active { background: #1e3a8a; border-color: #1d4ed8; color: #bfdbfe; }
-.plexd-view-btn.rating-8.active { background: #4c1d95; border-color: #6d28d9; color: #ddd6fe; }
-.plexd-view-btn.rating-9.active { background: #831843; border-color: #be185d; color: #fbcfe8; }
+.plexd-view-btn.rating-1.active { background: rgba(232, 85, 85, 0.2); border-color: rgba(232, 85, 85, 0.35); color: #e85555; box-shadow: 0 0 8px rgba(232, 85, 85, 0.15); }
+.plexd-view-btn.rating-2.active { background: rgba(232, 122, 85, 0.2); border-color: rgba(232, 122, 85, 0.35); color: #e87a55; box-shadow: 0 0 8px rgba(232, 122, 85, 0.15); }
+.plexd-view-btn.rating-3.active { background: rgba(232, 168, 85, 0.2); border-color: rgba(232, 168, 85, 0.35); color: #e8a855; box-shadow: 0 0 8px rgba(232, 168, 85, 0.15); }
+.plexd-view-btn.rating-4.active { background: rgba(184, 212, 85, 0.2); border-color: rgba(184, 212, 85, 0.35); color: #b8d455; box-shadow: 0 0 8px rgba(184, 212, 85, 0.15); }
+.plexd-view-btn.rating-5.active { background: rgba(85, 212, 106, 0.2); border-color: rgba(85, 212, 106, 0.35); color: #55d46a; box-shadow: 0 0 8px rgba(85, 212, 106, 0.15); }
+.plexd-view-btn.rating-6.active { background: rgba(85, 212, 176, 0.2); border-color: rgba(85, 212, 176, 0.35); color: #55d4b0; box-shadow: 0 0 8px rgba(85, 212, 176, 0.15); }
+.plexd-view-btn.rating-7.active { background: rgba(85, 184, 212, 0.2); border-color: rgba(85, 184, 212, 0.35); color: #55b8d4; box-shadow: 0 0 8px rgba(85, 184, 212, 0.15); }
+.plexd-view-btn.rating-8.active { background: rgba(144, 136, 232, 0.2); border-color: rgba(144, 136, 232, 0.35); color: #9088e8; box-shadow: 0 0 8px rgba(144, 136, 232, 0.15); }
+.plexd-view-btn.rating-9.active { background: rgba(212, 120, 192, 0.2); border-color: rgba(212, 120, 192, 0.35); color: #d478c0; box-shadow: 0 0 8px rgba(212, 120, 192, 0.15); }
 
 .plexd-view-btn .badge {
     display: inline-block;
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(237, 232, 224, 0.15);
     padding: 1px 4px;
     border-radius: 8px;
     font-size: 9px;
@@ -2100,17 +2204,17 @@ body {
     display: none;
 }
 
-/* Rated stream border indicators */
+/* Rated stream border indicators with glow */
 .plexd-stream.plexd-rated { outline-offset: -2px; }
-.plexd-stream.plexd-rated-1 { outline: 2px solid rgba(239, 68, 68, 0.5); }
-.plexd-stream.plexd-rated-2 { outline: 2px solid rgba(249, 115, 22, 0.5); }
-.plexd-stream.plexd-rated-3 { outline: 2px solid rgba(234, 179, 8, 0.5); }
-.plexd-stream.plexd-rated-4 { outline: 2px solid rgba(132, 204, 22, 0.5); }
-.plexd-stream.plexd-rated-5 { outline: 2px solid rgba(34, 197, 94, 0.5); }
-.plexd-stream.plexd-rated-6 { outline: 2px solid rgba(6, 182, 212, 0.5); }
-.plexd-stream.plexd-rated-7 { outline: 2px solid rgba(59, 130, 246, 0.5); }
-.plexd-stream.plexd-rated-8 { outline: 2px solid rgba(139, 92, 246, 0.5); }
-.plexd-stream.plexd-rated-9 { outline: 2px solid rgba(236, 72, 153, 0.5); }
+.plexd-stream.plexd-rated-1 { outline: 2px solid rgba(232, 85, 85, 0.5); box-shadow: 0 0 16px rgba(232, 85, 85, 0.12); }
+.plexd-stream.plexd-rated-2 { outline: 2px solid rgba(232, 122, 85, 0.5); box-shadow: 0 0 16px rgba(232, 122, 85, 0.12); }
+.plexd-stream.plexd-rated-3 { outline: 2px solid rgba(232, 168, 85, 0.5); box-shadow: 0 0 16px rgba(232, 168, 85, 0.12); }
+.plexd-stream.plexd-rated-4 { outline: 2px solid rgba(184, 212, 85, 0.5); box-shadow: 0 0 16px rgba(184, 212, 85, 0.12); }
+.plexd-stream.plexd-rated-5 { outline: 2px solid rgba(85, 212, 106, 0.5); box-shadow: 0 0 16px rgba(85, 212, 106, 0.12); }
+.plexd-stream.plexd-rated-6 { outline: 2px solid rgba(85, 212, 176, 0.5); box-shadow: 0 0 16px rgba(85, 212, 176, 0.12); }
+.plexd-stream.plexd-rated-7 { outline: 2px solid rgba(85, 184, 212, 0.5); box-shadow: 0 0 16px rgba(85, 184, 212, 0.12); }
+.plexd-stream.plexd-rated-8 { outline: 2px solid rgba(144, 136, 232, 0.5); box-shadow: 0 0 16px rgba(144, 136, 232, 0.12); }
+.plexd-stream.plexd-rated-9 { outline: 2px solid rgba(212, 120, 192, 0.5); box-shadow: 0 0 16px rgba(212, 120, 192, 0.12); }
 
 /* ========================================
    Layout Mode Buttons
@@ -2118,7 +2222,7 @@ body {
 
 .plexd-tetris-btn,
 .plexd-coverflow-btn {
-    background: #333;
+    background: var(--subtle);
 }
 
 .plexd-tetris-btn.active {
@@ -2296,13 +2400,13 @@ body {
 
 /* Navigation hint at bottom */
 .plexd-app.coverflow-mode #plexd-container::after {
-    content: '← → Navigate • Enter to Focus';
+    content: '\2190 \2192 Navigate \2022 Enter to Focus';
     position: absolute;
     bottom: 12px;
     left: 50%;
     transform: translateX(-50%);
     background: rgba(0, 0, 0, 0.7);
-    color: rgba(255, 255, 255, 0.8);
+    color: rgba(237, 232, 224, 0.8);
     padding: 6px 16px;
     border-radius: 20px;
     font-size: 12px;
@@ -2386,7 +2490,7 @@ body {
 
 /* Wall button styling */
 .plexd-wall-btn {
-    background: #333;
+    background: var(--subtle);
 }
 
 .plexd-wall-btn.active {
@@ -2531,7 +2635,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 3000;
+    z-index: 130000;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
@@ -2549,8 +2653,8 @@ body {
     align-items: center;
     gap: 16px;
     padding: 48px 64px;
-    background: rgba(34, 197, 94, 0.15);
-    border: 3px dashed rgba(34, 197, 94, 0.6);
+    background: rgba(92, 201, 142, 0.12);
+    border: 3px dashed rgba(92, 201, 142, 0.5);
     border-radius: 24px;
     transform: scale(0.9);
     transition: transform 0.2s ease;
@@ -2568,12 +2672,12 @@ body {
 .plexd-drop-text {
     font-size: 24px;
     font-weight: 600;
-    color: #fff;
+    color: var(--text);
 }
 
 .plexd-drop-hint {
     font-size: 14px;
-    color: #888;
+    color: var(--text-sub);
 }
 
 /* ========================================
@@ -2586,11 +2690,11 @@ body {
     bottom: 24px;
     left: 24px;
     padding: 10px 16px;
-    background: rgba(239, 68, 68, 0.9);
+    background: rgba(201, 85, 85, 0.9);
     border-radius: 8px;
     font-size: 12px;
     color: #fff;
-    z-index: 9999;
+    z-index: 200000;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s;
@@ -2602,7 +2706,7 @@ body {
 
 /* Visual indicator when app container has proper focus for shortcuts */
 .plexd-app:focus-visible {
-    outline: 2px solid rgba(59, 130, 246, 0.5);
+    outline: 2px solid rgba(201, 86, 109, 0.5);
     outline-offset: -2px;
 }
 
@@ -2613,7 +2717,7 @@ body {
 
 /* Stream wrapper focus indicator */
 .plexd-stream:focus {
-    outline: 2px solid rgba(59, 130, 246, 0.7);
+    outline: 2px solid rgba(201, 86, 109, 0.7);
     outline-offset: 2px;
 }
 
@@ -2626,9 +2730,9 @@ body {
    ======================================== */
 
 .plexd-bugeye-overlay {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 150000;
     pointer-events: none;
     background: rgba(0, 0, 0, 0.3);
     opacity: 0;
@@ -2647,8 +2751,8 @@ body {
     height: 36px;
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.7);
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    color: #fff;
+    border: 2px solid rgba(237, 232, 224, 0.2);
+    color: var(--text);
     font-size: 20px;
     cursor: pointer;
     z-index: 100;
@@ -2660,8 +2764,8 @@ body {
 }
 
 .plexd-bugeye-close:hover {
-    background: #f59e0b;
-    border-color: #f59e0b;
+    background: var(--accent);
+    border-color: var(--accent);
     transform: scale(1.1);
 }
 
@@ -2670,7 +2774,7 @@ body {
     border-radius: 12px;
     overflow: hidden;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(237, 232, 224, 0.1);
     animation: bugeyeFadeIn 0.4s ease-out forwards;
 }
 
@@ -2695,7 +2799,7 @@ body {
 /* Bug Eye mode indicator */
 .plexd-app.bugeye-mode #plexd-container::before {
     content: 'BUG EYE';
-    position: absolute;
+    position: fixed;
     top: 8px;
     left: 50%;
     transform: translateX(-50%);
@@ -2705,7 +2809,7 @@ body {
     border-radius: 16px;
     font-size: 11px;
     font-weight: 700;
-    z-index: 200;
+    z-index: 200000;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(245, 158, 11, 0.4);
     animation: bugeyeLabelPulse 2s ease-in-out infinite;
@@ -2721,9 +2825,9 @@ body {
    ======================================== */
 
 .plexd-mosaic-overlay {
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 45;
+    z-index: 140000;
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.3s ease;
@@ -2734,7 +2838,7 @@ body {
 }
 
 .plexd-mosaic-cell {
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(237, 232, 224, 0.15);
     transition: transform 0.3s ease;
 }
 
@@ -2749,7 +2853,7 @@ body {
 /* Mosaic mode indicator */
 .plexd-app.mosaic-mode #plexd-container::before {
     content: 'MOSAIC';
-    position: absolute;
+    position: fixed;
     top: 8px;
     left: 50%;
     transform: translateX(-50%);
@@ -2759,7 +2863,7 @@ body {
     border-radius: 16px;
     font-size: 11px;
     font-weight: 700;
-    z-index: 200;
+    z-index: 200000;
     letter-spacing: 1px;
     box-shadow: 0 2px 8px rgba(6, 182, 212, 0.4);
 }
@@ -2769,11 +2873,11 @@ body {
     position: fixed;
     top: 8px;
     right: 8px;
-    z-index: 1000;
+    z-index: 200000;
     display: flex;
     gap: 6px;
     pointer-events: none;
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: 'Outfit', 'SF Mono', 'Fira Code', monospace;
     font-size: 11px;
     transition: opacity 0.2s ease;
 }
@@ -2782,7 +2886,7 @@ body {
     padding: 2px 6px;
     border-radius: 3px;
     background: rgba(0, 0, 0, 0.6);
-    color: rgba(255, 255, 255, 0.8);
+    color: rgba(237, 232, 224, 0.8);
     backdrop-filter: blur(4px);
 }
 .plexd-mode-indicator .badge-scene {
@@ -2805,7 +2909,7 @@ body {
 
 /* Theater Casting Call: starred glow and low-rated dimming */
 .theater-mode .plexd-stream.starred-glow {
-    box-shadow: inset 0 0 0 2px rgba(251, 191, 36, 0.8), 0 0 20px rgba(251, 191, 36, 0.3);
+    box-shadow: inset 0 0 0 2px rgba(201, 163, 85, 0.8), 0 0 20px rgba(201, 163, 85, 0.3);
     z-index: 5;
 }
 .theater-mode .plexd-stream.low-rated {
@@ -2830,7 +2934,7 @@ body {
 .plexd-encore-overlay {
     position: fixed;
     inset: 0;
-    z-index: 500;
+    z-index: 160000;
     background: rgba(0, 0, 0, 0.92);
     padding: 40px;
     overflow-y: auto;
@@ -2838,7 +2942,7 @@ body {
 
 .encore-title {
     font-size: 18px;
-    color: #fff;
+    color: var(--text);
     margin-bottom: 20px;
     font-weight: 600;
 }
@@ -2860,7 +2964,7 @@ body {
 
 .encore-card:hover {
     transform: scale(1.05);
-    box-shadow: 0 0 20px rgba(236, 72, 153, 0.5);
+    box-shadow: 0 0 20px rgba(201, 86, 109, 0.5);
 }
 
 .encore-card video {
@@ -2878,4 +2982,24 @@ body {
     background: rgba(0, 0, 0, 0.7);
     color: white;
     font-size: 12px;
+}
+
+/* ========================================
+   Animations
+   ======================================== */
+
+@keyframes streamEnter {
+    0% {
+        opacity: 0;
+        transform: scale(0.9);
+        filter: blur(8px) brightness(1.5);
+    }
+    60% {
+        filter: blur(0px) brightness(1.1);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0px) brightness(1);
+    }
 }

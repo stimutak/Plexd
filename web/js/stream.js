@@ -566,6 +566,11 @@ const PlexdStream = (function() {
         const savedTime = video.currentTime || 0;
         console.log(`[${stream.id}] Recovery attempt ${attempt} at ${savedTime.toFixed(1)}s`);
 
+        // Reset health monitoring so watchdog doesn't immediately re-trigger
+        stream.health.stallStartTime = null;
+        stream.health.bufferEmptyStartTime = null;
+        stream.health.lastTimeUpdate = Date.now();
+
         // Remove any existing error overlay
         const errorOverlay = stream.wrapper.querySelector('.plexd-error-overlay');
         if (errorOverlay) {
@@ -2194,7 +2199,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvV`\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvV`\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -2483,11 +2488,15 @@ const PlexdStream = (function() {
 
         video.addEventListener('playing', () => {
             stream.state = 'playing';
+            stream.error = null;
             // Reset health indicators on playback resumption
             stream.health.stallStartTime = null;
             stream.health.consecutiveStalls = 0;
             stream.recovery.isRecovering = false;
             delete stream.wrapper.dataset.recovering;
+            // Remove error overlay — video recovered successfully
+            const errOverlay = stream.wrapper.querySelector('.plexd-error-overlay');
+            if (errOverlay) errOverlay.remove();
             // Only start the stable-playback clock once after recovery, not on every
             // playing event (buffering/rebuffering fires playing repeatedly)
             if (stream.recovery.retryCount > 0 && !stream.health.playbackResumedAt) {
@@ -2801,6 +2810,12 @@ const PlexdStream = (function() {
         // Clear any recovering marker so UI doesn't get "stuck"
         delete stream.wrapper.dataset.recovering;
         stream.recovery.isRecovering = false;
+        // Reset health so watchdog doesn't immediately trigger recovery
+        stream.health.stallStartTime = null;
+        stream.health.bufferEmptyStartTime = null;
+        stream.health.lastTimeUpdate = Date.now();
+        stream.health.consecutiveStalls = 0;
+        stream.health.playbackResumedAt = null;
         updateStreamInfo(stream);
 
         // Store current position for restoration after reload
@@ -2810,6 +2825,12 @@ const PlexdStream = (function() {
 
         // Force a HARD reload.
         // (The previous "smart" early returns often failed to recover partially-stalled streams/files.)
+
+        // Clear any pending retry timer — prevents phantom recovery on reloaded stream
+        if (stream.recovery.retryTimer) {
+            clearTimeout(stream.recovery.retryTimer);
+            stream.recovery.retryTimer = null;
+        }
 
         // Reset recovery state for manual reload attempts
         stream.recovery.retryCount = 0;
@@ -4370,8 +4391,8 @@ const PlexdStream = (function() {
         const now = Date.now();
 
         streams.forEach((stream) => {
-            // Skip if already in error/recovering state
-            if (stream.state === 'error' || stream.recovery.isRecovering) {
+            // Skip if already in error/recovering/loading state
+            if (stream.state === 'error' || stream.state === 'loading' || stream.recovery.isRecovering) {
                 return;
             }
 

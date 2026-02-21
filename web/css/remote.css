@@ -1,25 +1,28 @@
 /**
  * Plexd Remote - Redesigned for iPhone
- * Simplified UI with no hidden interactions
+ * Warm plum-tinted design system
  */
 
 /* ============================================
    CSS Variables
    ============================================ */
 :root {
-    --bg-primary: #000;
-    --bg-secondary: #111;
-    --bg-tertiary: #1a1a1a;
-    --bg-elevated: #222;
-    --bg-card: #181818;
+    --bg: #0c0b10;
+    --bg-secondary: #13111a;
+    --bg-tertiary: #1b1822;
+    --bg-elevated: #23202e;
+    --text: #ede8e0;
+    --text-secondary: rgba(237, 232, 224, 0.65);
+    --text-tertiary: rgba(237, 232, 224, 0.35);
+    --accent: #c9566d;
+    --accent-active: #b04a5f;
+    --border: rgba(237, 232, 224, 0.07);
+    --border-light: rgba(237, 232, 224, 0.14);
+    --shadow: rgba(0, 0, 0, 0.3);
+    --gold: #c9a355;
+    --safe-top: env(safe-area-inset-top);
+    --safe-bottom: env(safe-area-inset-bottom);
 
-    --text-primary: #fff;
-    --text-secondary: rgba(255, 255, 255, 0.7);
-    --text-tertiary: rgba(255, 255, 255, 0.4);
-    --text-muted: rgba(255, 255, 255, 0.25);
-
-    --accent: #0a84ff;
-    --accent-soft: rgba(10, 132, 255, 0.2);
     --success: #30d158;
     --success-soft: rgba(48, 209, 88, 0.2);
     --warning: #ffd60a;
@@ -36,8 +39,6 @@
     --rating-8: #40c8e0;
     --rating-9: #64d2ff;
 
-    --safe-top: env(safe-area-inset-top, 0px);
-    --safe-bottom: env(safe-area-inset-bottom, 0px);
     --safe-left: env(safe-area-inset-left, 0px);
     --safe-right: env(safe-area-inset-right, 0px);
 
@@ -74,9 +75,9 @@ html, body {
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-    background: var(--bg-primary);
-    color: var(--text-primary);
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
     line-height: 1.4;
     -webkit-font-smoothing: antialiased;
 }
@@ -104,8 +105,18 @@ button {
     overflow: hidden;
 }
 
+.app::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse at 50% 30%, rgba(201, 86, 109, 0.04) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+}
+
 /* ============================================
-   Header - Minimal
+   Header - Glass Effect
    ============================================ */
 .header {
     flex-shrink: 0;
@@ -115,14 +126,19 @@ button {
     padding: 8px 16px;
     padding-top: calc(8px + var(--safe-top));
     background: var(--bg-secondary);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    position: relative;
+    z-index: 1;
 }
 
 .logo {
     font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    color: var(--text-primary);
+    font-weight: 800;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text);
 }
 
 .header-btn {
@@ -138,7 +154,7 @@ button {
 
 .header-btn:active {
     transform: scale(0.92);
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(237, 232, 224, 0.1);
 }
 
 .header-btn svg {
@@ -187,6 +203,8 @@ button {
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+    position: relative;
+    z-index: 1;
 }
 
 /* ============================================
@@ -208,7 +226,7 @@ button {
     width: 80px;
     height: 80px;
     margin-bottom: 24px;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
 }
 
 .empty-icon svg {
@@ -237,6 +255,8 @@ button {
     padding: 12px;
     padding-bottom: calc(12px + var(--safe-bottom));
     gap: 12px;
+    position: relative;
+    z-index: 1;
 }
 
 .remote-ui.hidden { display: none; }
@@ -253,7 +273,7 @@ button {
     position: relative;
     width: 100%;
     aspect-ratio: 16 / 9;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-lg);
     overflow: hidden;
     touch-action: pan-x;
@@ -267,7 +287,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text-muted);
+    color: var(--text-tertiary);
 }
 
 .hero-placeholder svg {
@@ -400,7 +420,7 @@ button {
     border-radius: var(--radius-lg);
     font-size: 14px;
     font-weight: 500;
-    color: var(--text-primary);
+    color: var(--text);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.3s ease;
@@ -457,7 +477,7 @@ button {
     position: relative;
     width: 100%;
     height: 32px;
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(237, 232, 224, 0.06);
     border-radius: 8px;
     cursor: pointer;
     touch-action: none;
@@ -473,7 +493,7 @@ button {
     top: 0;
     left: 0;
     height: 100%;
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(237, 232, 224, 0.2);
     border-radius: 8px;
     pointer-events: none;
     transition: width 0.1s linear;
@@ -485,9 +505,9 @@ button {
     transform: translate(-50%, -50%);
     width: 18px;
     height: 18px;
-    background: var(--text-primary);
+    background: var(--text);
     border-radius: 50%;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 2px 8px var(--shadow);
     pointer-events: none;
     transition: left 0.1s linear;
 }
@@ -514,7 +534,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     transition: all var(--transition-fast);
@@ -522,8 +542,8 @@ button {
 
 .transport-btn:active {
     transform: scale(0.92);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
+    background: var(--bg-elevated);
+    color: var(--text);
 }
 
 .transport-btn svg {
@@ -536,11 +556,11 @@ button {
     width: 64px;
     height: 56px;
     background: var(--accent);
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 .transport-btn-play:active {
-    background: #0070e0;
+    background: var(--accent-active);
 }
 
 .transport-btn-play svg {
@@ -571,7 +591,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-md);
     font-size: 16px;
     font-weight: 700;
@@ -585,7 +605,7 @@ button {
 
 /* Favorite button */
 .rating-btn-fav {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
 }
 
 .rating-btn-fav svg {
@@ -594,17 +614,17 @@ button {
 }
 
 .rating-btn-fav.active {
-    background: #ff2d55;
+    background: var(--gold);
     color: white;
 }
 
 .rating-btn-fav.active svg {
-    filter: drop-shadow(0 0 4px rgba(255, 45, 85, 0.5));
+    filter: drop-shadow(0 0 4px rgba(201, 163, 85, 0.5));
 }
 
 /* Clear button */
 .rating-btn-clear {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
 }
 
 .rating-btn-clear svg {
@@ -614,7 +634,7 @@ button {
 
 /* Active rating - highlighted with color */
 .rating-btn.active {
-    color: var(--text-primary);
+    color: var(--text);
     transform: scale(1.1);
     box-shadow: 0 0 0 2px currentColor;
 }
@@ -623,12 +643,12 @@ button {
 .rating-btn[data-rating="1"].active { background: var(--rating-1); }
 .rating-btn[data-rating="2"].active { background: var(--rating-2); }
 .rating-btn[data-rating="3"].active { background: var(--rating-3); }
-.rating-btn[data-rating="4"].active { background: var(--rating-4); color: var(--bg-primary); }
-.rating-btn[data-rating="5"].active { background: var(--rating-5); color: var(--bg-primary); }
-.rating-btn[data-rating="6"].active { background: var(--rating-6); color: var(--bg-primary); }
-.rating-btn[data-rating="7"].active { background: var(--rating-7); color: var(--bg-primary); }
-.rating-btn[data-rating="8"].active { background: var(--rating-8); color: var(--bg-primary); }
-.rating-btn[data-rating="9"].active { background: var(--rating-9); color: var(--bg-primary); }
+.rating-btn[data-rating="4"].active { background: var(--rating-4); color: var(--bg); }
+.rating-btn[data-rating="5"].active { background: var(--rating-5); color: var(--bg); }
+.rating-btn[data-rating="6"].active { background: var(--rating-6); color: var(--bg); }
+.rating-btn[data-rating="7"].active { background: var(--rating-7); color: var(--bg); }
+.rating-btn[data-rating="8"].active { background: var(--rating-8); color: var(--bg); }
+.rating-btn[data-rating="9"].active { background: var(--rating-9); color: var(--bg); }
 
 /* Animation for rating set */
 @keyframes pop {
@@ -669,7 +689,7 @@ button {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-full);
     font-size: 13px;
     font-weight: 600;
@@ -683,20 +703,20 @@ button {
 
 .filter-tab.active {
     background: var(--accent);
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 /* Filter tab colors when active */
-.filter-tab[data-filter="0"].active { background: var(--bg-tertiary); color: var(--text-secondary); }
+.filter-tab[data-filter="0"].active { background: var(--bg-elevated); color: var(--text-secondary); }
 .filter-tab[data-filter="1"].active { background: var(--rating-1); }
 .filter-tab[data-filter="2"].active { background: var(--rating-2); }
 .filter-tab[data-filter="3"].active { background: var(--rating-3); }
-.filter-tab[data-filter="4"].active { background: var(--rating-4); color: var(--bg-primary); }
-.filter-tab[data-filter="5"].active { background: var(--rating-5); color: var(--bg-primary); }
-.filter-tab[data-filter="6"].active { background: var(--rating-6); color: var(--bg-primary); }
-.filter-tab[data-filter="7"].active { background: var(--rating-7); color: var(--bg-primary); }
-.filter-tab[data-filter="8"].active { background: var(--rating-8); color: var(--bg-primary); }
-.filter-tab[data-filter="9"].active { background: var(--rating-9); color: var(--bg-primary); }
+.filter-tab[data-filter="4"].active { background: var(--rating-4); color: var(--bg); }
+.filter-tab[data-filter="5"].active { background: var(--rating-5); color: var(--bg); }
+.filter-tab[data-filter="6"].active { background: var(--rating-6); color: var(--bg); }
+.filter-tab[data-filter="7"].active { background: var(--rating-7); color: var(--bg); }
+.filter-tab[data-filter="8"].active { background: var(--rating-8); color: var(--bg); }
+.filter-tab[data-filter="9"].active { background: var(--rating-9); color: var(--bg); }
 
 /* Show count badge on filter tabs */
 .filter-count {
@@ -716,11 +736,11 @@ button {
 
 /* Favorites filter tab */
 .filter-tab[data-filter="fav"] {
-    color: #ff2d55;
+    color: var(--gold);
 }
 
 .filter-tab[data-filter="fav"].active {
-    background: #ff2d55;
+    background: var(--gold);
     color: white;
 }
 
@@ -748,7 +768,7 @@ button {
     flex-shrink: 0;
     width: 80px;
     height: 52px;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-sm);
     overflow: hidden;
     cursor: pointer;
@@ -763,7 +783,7 @@ button {
 
 .thumb-item.selected {
     border-color: var(--accent);
-    box-shadow: 0 0 12px rgba(10, 132, 255, 0.4);
+    box-shadow: 0 0 12px rgba(201, 86, 109, 0.4);
 }
 
 .thumb-img {
@@ -777,7 +797,7 @@ button {
     top: 2px;
     left: 2px;
     font-size: 12px;
-    color: #ff2d55;
+    color: var(--gold);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
@@ -807,12 +827,12 @@ button {
 .thumb-rating[data-rating="7"] { color: var(--rating-7); }
 .thumb-rating[data-rating="8"] { color: var(--rating-8); }
 .thumb-rating[data-rating="9"] { color: var(--rating-9); }
-.thumb-rating[data-rating="0"] { color: var(--text-muted); }
+.thumb-rating[data-rating="0"] { color: var(--text-tertiary); }
 
 .thumb-placeholder {
     width: 100%;
     height: 100%;
-    background: var(--bg-tertiary);
+    background: var(--bg-elevated);
 }
 
 .thumbs-empty {
@@ -845,7 +865,7 @@ button {
     justify-content: center;
     gap: 4px;
     height: 56px;
-    background: var(--bg-card);
+    background: var(--bg-tertiary);
     border-radius: var(--radius-md);
     color: var(--text-secondary);
     font-size: 10px;
@@ -855,8 +875,8 @@ button {
 
 .toolbar-btn:active {
     transform: scale(0.92);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
+    background: var(--bg-elevated);
+    color: var(--text);
 }
 
 .toolbar-btn svg {
@@ -874,7 +894,7 @@ button {
 /* Active states for toolbar buttons */
 .toolbar-btn.active {
     background: var(--accent);
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 .toolbar-btn.audio-focus-active {
@@ -912,8 +932,8 @@ button {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .sheet-content {
@@ -930,7 +950,7 @@ button {
 .sheet-handle {
     width: 36px;
     height: 5px;
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(237, 232, 224, 0.2);
     border-radius: 3px;
     margin: 0 auto 12px;
 }
@@ -943,7 +963,7 @@ button {
 .sheet-header h3 {
     font-size: 15px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 .sheet-options {
@@ -962,7 +982,7 @@ button {
 }
 
 .sheet-option:active {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(237, 232, 224, 0.1);
 }
 
 .sheet-option svg {
@@ -974,7 +994,7 @@ button {
 
 .sheet-option span {
     font-size: 16px;
-    color: var(--text-primary);
+    color: var(--text);
 }
 
 .sheet-option.active svg { color: var(--accent); }
@@ -987,7 +1007,7 @@ button {
 
 .sheet-divider {
     height: 1px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--border);
     margin: 8px 0;
 }
 
@@ -1015,7 +1035,7 @@ button {
 .viewer-overlay {
     position: fixed;
     inset: 0;
-    background: #000;
+    background: var(--bg);
     z-index: 9999;
     display: flex;
     flex-direction: column;
@@ -1033,7 +1053,7 @@ button {
     width: 100%;
     height: 100%;
     object-fit: contain;
-    background: #000;
+    background: var(--bg);
 }
 
 .viewer-controls {
@@ -1062,13 +1082,13 @@ button {
     gap: 12px;
     padding: 12px 16px;
     padding-top: calc(12px + var(--safe-top));
-    background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);
+    background: linear-gradient(to bottom, rgba(12, 11, 16, 0.6) 0%, transparent 100%);
 }
 
 .viewer-close {
     width: 40px;
     height: 40px;
-    background: rgba(255,255,255,0.1);
+    background: rgba(237, 232, 224, 0.1);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1078,18 +1098,18 @@ button {
 .viewer-close svg {
     width: 20px;
     height: 20px;
-    fill: rgba(255,255,255,0.9);
+    fill: rgba(237, 232, 224, 0.9);
 }
 
 .viewer-close:active {
-    background: rgba(255,255,255,0.2);
+    background: rgba(237, 232, 224, 0.2);
 }
 
 .viewer-title {
     flex: 1;
     font-size: 15px;
     font-weight: 500;
-    color: rgba(255,255,255,0.9);
+    color: rgba(237, 232, 224, 0.9);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1097,29 +1117,29 @@ button {
 
 .viewer-counter {
     font-size: 13px;
-    color: rgba(255,255,255,0.5);
+    color: rgba(237, 232, 224, 0.5);
     padding: 4px 10px;
-    background: rgba(255,255,255,0.1);
+    background: rgba(237, 232, 224, 0.1);
     border-radius: var(--radius-full);
 }
 
 .viewer-bottom {
     padding: 16px;
     padding-bottom: calc(16px + var(--safe-bottom));
-    background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);
+    background: linear-gradient(to top, rgba(12, 11, 16, 0.6) 0%, transparent 100%);
 }
 
 .viewer-time {
     display: block;
     font-size: 12px;
-    color: rgba(255,255,255,0.6);
+    color: rgba(237, 232, 224, 0.6);
     margin-bottom: 8px;
     text-align: center;
 }
 
 .viewer-progress {
     height: 4px;
-    background: rgba(255,255,255,0.2);
+    background: rgba(237, 232, 224, 0.2);
     border-radius: 2px;
     margin-bottom: 16px;
     overflow: hidden;
@@ -1127,7 +1147,7 @@ button {
 
 .viewer-progress-fill {
     height: 100%;
-    background: rgba(255,255,255,0.8);
+    background: rgba(237, 232, 224, 0.8);
     border-radius: 2px;
     width: 0%;
     transition: width 0.1s ease;
@@ -1143,7 +1163,7 @@ button {
 .viewer-btn {
     width: 48px;
     height: 48px;
-    background: rgba(255,255,255,0.1);
+    background: rgba(237, 232, 224, 0.1);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1154,12 +1174,12 @@ button {
 .viewer-btn svg {
     width: 22px;
     height: 22px;
-    fill: rgba(255,255,255,0.9);
+    fill: rgba(237, 232, 224, 0.9);
 }
 
 .viewer-btn:active {
     transform: scale(0.92);
-    background: rgba(255,255,255,0.2);
+    background: rgba(237, 232, 224, 0.2);
 }
 
 .viewer-btn-play {
@@ -1169,7 +1189,7 @@ button {
 }
 
 .viewer-btn-play:active {
-    background: #0070e0;
+    background: var(--accent-active);
 }
 
 .viewer-btn-play .icon-pause { display: none; }
@@ -1182,14 +1202,14 @@ button {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: rgba(0,0,0,0.8);
+    background: rgba(12, 11, 16, 0.8);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     padding: 16px 28px;
     border-radius: var(--radius-xl);
     font-size: 16px;
     font-weight: 600;
-    color: white;
+    color: var(--text);
     opacity: 0;
     transition: opacity 0.2s ease;
     pointer-events: none;
@@ -1250,7 +1270,7 @@ button {
     .app {
         max-width: 500px;
         margin: 0 auto;
-        box-shadow: 0 0 80px rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 80px var(--shadow);
     }
 
     .sheet {

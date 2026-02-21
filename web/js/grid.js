@@ -91,29 +91,35 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Build the actual layout with positions and sizes
+     * Build the actual layout with positions and sizes.
+     * Last row gets wider cells when it has fewer streams than cols
+     * (eliminates black gaps for odd counts like 3, 5, 7).
      */
     function buildGridLayout(container, streams, grid) {
         const { rows, cols } = grid;
-        const cellWidth = container.width / cols;
         const cellHeight = container.height / rows;
         const cells = [];
 
         let streamIndex = 0;
         for (let row = 0; row < rows && streamIndex < streams.length; row++) {
-            for (let col = 0; col < cols && streamIndex < streams.length; col++) {
+            // How many streams go in this row?
+            const remainingStreams = streams.length - streamIndex;
+            const streamsInRow = (row === rows - 1) ? remainingStreams : Math.min(cols, remainingStreams);
+            const rowCellWidth = container.width / streamsInRow;
+
+            for (let col = 0; col < streamsInRow; col++) {
                 const stream = streams[streamIndex];
                 const aspectRatio = stream.aspectRatio || 16/9;
 
                 // Fit video within cell while maintaining aspect ratio
                 const fit = fitToContainer(
-                    { width: cellWidth, height: cellHeight },
+                    { width: rowCellWidth, height: cellHeight },
                     aspectRatio
                 );
 
                 cells.push({
                     streamId: stream.id,
-                    x: col * cellWidth + (cellWidth - fit.width) / 2,
+                    x: col * rowCellWidth + (rowCellWidth - fit.width) / 2,
                     y: row * cellHeight + (cellHeight - fit.height) / 2,
                     width: fit.width,
                     height: fit.height,
@@ -129,7 +135,7 @@ const PlexdGrid = (function() {
             cells,
             rows,
             cols,
-            cellWidth,
+            cellWidth: container.width / cols,
             cellHeight,
             efficiency: calculateEfficiency(container, cells)
         };

@@ -2059,6 +2059,9 @@ const PlexdApp = (function() {
             clearInterval(faceDetectionTimer);
             faceDetectionTimer = null;
         }
+        // Reset all pan positions back to center so videos aren't stuck panned
+        PlexdStream.resetAllPanPositions();
+        updateLayout();
         const btn = document.getElementById('smart-zoom-btn');
         if (btn) btn.classList.remove('active');
         showMessage('Smart Zoom: OFF', 'info');
@@ -2425,6 +2428,8 @@ const PlexdApp = (function() {
             el.appendChild(badge);
         } else {
             const modes = [];
+            if (bugEyeMode) modes.push('BUG');
+            if (mosaicMode) modes.push('MOS');
             if (tetrisMode > 0) modes.push('T' + tetrisMode);
             if (wallMode > 0) modes.push('W' + wallMode);
             if (coverflowMode) modes.push('CF');
@@ -2443,9 +2448,13 @@ const PlexdApp = (function() {
 
     function updateCastingCallVisuals() {
         if (!theaterMode || theaterScene !== 'casting') return;
+        // Skip updating non-focused streams while in focused mode — prevents
+        // starred-glow / low-rated visuals from bleeding through the fullscreen overlay
+        const fsStream = PlexdStream.getFullscreenStream();
         const allStreams = PlexdStream.getAllStreams();
         allStreams.forEach(function(stream) {
             if (!stream.wrapper) return;
+            if (fsStream && stream.id !== fsStream.id) return;
             const isFav = PlexdStream.isFavorite(stream.id);
             const rating = PlexdStream.getRating(stream.url, stream.fileName);
             stream.wrapper.classList.toggle('starred-glow', isFav);
@@ -2566,6 +2575,7 @@ const PlexdApp = (function() {
     function toggleBugEyeMode(forceOff = false) {
         if (forceOff || bugEyeMode) {
             destroyBugEyeOverlay();
+            updateModeIndicator();
             showMessage('Bug Eye: OFF', 'info');
             return;
         }
@@ -2588,6 +2598,7 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.add('bugeye-mode');
         createBugEyeOverlay(targetStream);
+        updateModeIndicator();
         showMessage('Bug Eye: ON (B=off)', 'info');
     }
 
@@ -2789,6 +2800,7 @@ const PlexdApp = (function() {
             const app = document.querySelector('.plexd-app');
             if (app) app.classList.remove('mosaic-mode');
             destroyMosaicOverlay();
+            updateModeIndicator();
             showMessage('Mosaic: OFF', 'info');
             return;
         }
@@ -2811,6 +2823,7 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.add('mosaic-mode');
         createMosaicOverlay(targetStream);
+        updateModeIndicator();
         showMessage('Mosaic: ON (Esc to exit)', 'info');
     }
 
@@ -3647,33 +3660,102 @@ const PlexdApp = (function() {
         const selected = PlexdStream.getSelectedStream();
         const fullscreenStream = PlexdStream.getFullscreenStream();
 
-        switch (e.key) {
-            case ' ':
-                e.preventDefault();
-                if (theaterMode) {
-                    // Theater: Space = next scene, Shift+Space = prev, Space-Space = random seek
-                    var spaceShiftHeld = e.shiftKey;
-                    handleDoubleTap('space', function() {
-                        if (spaceShiftHeld) { prevScene(); } else { nextScene(); }
+        // Alt/Option + key combos (check before switch to avoid fall-through issues)
+        if (e.altKey) {
+            switch (e.key) {
+                case 'ArrowRight':
+                    // Opt+Right = cycle view mode forward (was V)
+                    e.preventDefault();
+                    if (PlexdStream.getFullscreenMode() !== 'none') {
+                        PlexdStream.exitFocusedMode();
+                    }
+                    cycleViewMode(false);
+                    return;
+                case 'ArrowLeft':
+                    // Opt+Left = cycle view mode backward (was Shift+V)
+                    e.preventDefault();
+                    if (PlexdStream.getFullscreenMode() !== 'none') {
+                        PlexdStream.exitFocusedMode();
+                    }
+                    cycleViewMode(true);
+                    return;
+                case 'ArrowUp':
+                    // Opt+Up = toggle crop/contain on selected stream
+                    e.preventDefault();
+                    {
+                        var targetForCrop = fullscreenStream || selected;
+                        if (targetForCrop && targetForCrop.wrapper) {
+                            targetForCrop.wrapper.classList.toggle('plexd-stream-contain');
+                            var isContain = targetForCrop.wrapper.classList.contains('plexd-stream-contain');
+                            showMessage(isContain ? 'Contain (full frame)' : 'Crop (fill)', 'info');
+                        }
+                    }
+                    return;
+                case 'ArrowDown':
+                    // Opt+Down = toggle crop/contain on ALL streams
+                    e.preventDefault();
+                    {
+                        var allS = PlexdStream.getAllStreams();
+                        var anyContain = allS.some(function(s) { return s.wrapper && s.wrapper.classList.contains('plexd-stream-contain'); });
+                        allS.forEach(function(s) {
+                            if (s.wrapper) {
+                                if (anyContain) {
+                                    s.wrapper.classList.remove('plexd-stream-contain');
+                                } else {
+                                    s.wrapper.classList.add('plexd-stream-contain');
+                                }
+                            }
+                        });
+                        showMessage(anyContain ? 'All: Crop (fill)' : 'All: Contain (full frame)', 'info');
+                    }
+                    return;
+                case '/':
+                    // Opt+/ = reload selected stream, double-tap = reload all
+                    e.preventDefault();
+                    handleDoubleTap('opt-slash', function() {
+                        var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                        if (ts) {
+                            PlexdStream.reloadStream(ts.id);
+                            showMessage('Reloading stream...', 'info');
+                        } else {
+                            showMessage('Select a stream first', 'info');
+                        }
                     }, function() {
-                        // Double-tap: random seek
+                        reloadAllStreams();
+                    });
+                    return;
+            }
+        }
+
+        switch (e.key) {
+            case 'Tab':
+                // Tab = Theater scene advance, Shift+Tab = previous scene
+                if (theaterMode) {
+                    e.preventDefault();
+                    var tabShiftHeld = e.shiftKey;
+                    handleDoubleTap('tab', function() {
+                        if (tabShiftHeld) { prevScene(); } else { nextScene(); }
+                    }, function() {
+                        // Double-tap Tab: random seek (context-dependent)
                         if (theaterScene === 'stage' || theaterScene === 'climax') {
                             randomSeekSelected();
                         } else {
                             randomSeekAll();
                         }
                     });
-                } else {
-                    // Advanced: Space = play/pause (existing behavior)
-                    if (selected) {
-                        if (selected.video.paused) {
-                            selected.video.play().catch(() => {});
-                        } else {
-                            selected.video.pause();
-                        }
+                }
+                break;
+            case ' ':
+                // Space = play/pause in BOTH modes
+                e.preventDefault();
+                if (selected) {
+                    if (selected.video.paused) {
+                        selected.video.play().catch(function() {});
                     } else {
-                        togglePlayPause();
+                        selected.video.pause();
                     }
+                } else {
+                    togglePlayPause();
                 }
                 break;
             case 'm':
@@ -4120,14 +4202,19 @@ const PlexdApp = (function() {
             case 'r':
             case 'R':
                 if (e.shiftKey) {
-                    // Shift+R = Reload stream (moved from plain R)
-                    const ts = fullscreenStream || selected || getCoverflowSelectedStream();
-                    if (ts) {
-                        PlexdStream.reloadStream(ts.id);
-                        showMessage('Reloading stream...', 'info');
-                    } else {
-                        showMessage('Select a stream first', 'info');
-                    }
+                    // Shift+R = Reload stream, Shift+R+R = Reload ALL streams
+                    e.preventDefault();
+                    handleDoubleTap('shift-r', function() {
+                        var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream() || getCoverflowSelectedStream();
+                        if (ts) {
+                            PlexdStream.reloadStream(ts.id);
+                            showMessage('Reloading stream...', 'info');
+                        } else {
+                            showMessage('Select a stream first', 'info');
+                        }
+                    }, function() {
+                        reloadAllStreams();
+                    });
                     break;
                 }
                 // r = Seek forward 10s, rr = Seek forward 60s
@@ -6568,7 +6655,7 @@ const PlexdApp = (function() {
                     <div class="plexd-shortcuts-section">
                         <h4>Stream Management</h4>
                         <div class="plexd-shortcut"><kbd>X</kbd> Close stream · <kbd>XX</kbd> Remove unstarred</div>
-                        <div class="plexd-shortcut"><kbd>Shift+R</kbd> Reload stream</div>
+                        <div class="plexd-shortcut"><kbd>Shift+R</kbd> Reload stream · <kbd>Shift+RR</kbd> Reload all</div>
                         <div class="plexd-shortcut"><kbd>D</kbd> Download stream</div>
                         <div class="plexd-shortcut"><kbd>=</kbd> Remove duplicates</div>
                     </div>

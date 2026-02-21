@@ -14,6 +14,97 @@
 
 ---
 
+## Phase 0: Ergonomic Fixes (Pre-Moments)
+
+These changes improve the core workflow before Moments work begins. All modifications target arrow-key-centric one-hand operation.
+
+### Task 0A: Keyboard Remapping — Arrow-Centric Workflow
+
+Remap keys so all important actions are reachable with fingers anchored around arrow keys.
+
+**Files:**
+- Modify: `web/js/app.js` (handleKeyboard, ~line 3638-4350)
+- Modify: `web/js/stream.js` (propagateKeys regex, line 2202)
+
+**Changes:**
+
+| Action | Old Key | New Key | Notes |
+|--------|---------|---------|-------|
+| Play/pause | Space (Advanced) | Space (both modes) | Space is ALWAYS play/pause |
+| Scene advance (Theater) | Space | Tab | Tab advances scene, Shift+Tab goes back |
+| View mode cycle fwd | V | Opt+Right | Near arrows |
+| View mode cycle back | Shift+V | Opt+Left | Near arrows |
+| Reload selected stream | Shift+R | Opt+/ | Single tap via handleDoubleTap |
+| Reload ALL streams | N/A | Opt+/ double-tap | Double tap Opt+/ |
+
+**Implementation:**
+
+1. In `handleKeyboard()`, change Space handler in Theater mode from scene-advance to play/pause (same as Advanced)
+2. Add Tab key handler for Theater scene advance (Tab = forward, Shift+Tab = backward)
+3. Add `e.altKey && e.key === 'ArrowRight'` for view mode cycle forward
+4. Add `e.altKey && e.key === 'ArrowLeft'` for view mode cycle backward
+5. Add `e.altKey && e.key === '/'` with `handleDoubleTap('opt-slash', singleReload, reloadAll)`
+6. Remove Shift+R reload binding
+7. **CRITICAL:** Add Tab to propagateKeys regex in stream.js:2202 so it works in fullscreen
+8. V / Shift+V still work as aliases (don't break them)
+
+**Verify:** Load streams, test all remapped keys in both Theater and Advanced mode. Test in true fullscreen.
+
+```bash
+git commit -m "feat: remap keys for arrow-centric workflow — Space=play, Tab=scene, Opt+arrows=view"
+```
+
+---
+
+### Task 0B: Optimized Grid for Odd Clip Counts
+
+When 3 clips are loaded, the 2x2 grid leaves a black 4th cell. Fix to use full screen.
+
+**Files:**
+- Modify: `web/js/grid.js` (findOptimalGrid or calculateLayout)
+
+**Implementation:**
+
+In `findOptimalGrid()`, when the optimal grid has more cells than streams (e.g., 2x2 for 3 streams), allow the last row to have fewer columns. The last stream in the last row should span remaining columns.
+
+Alternatively, for small counts (2-3), use specific layouts:
+- 2 clips: side-by-side (1x2) or stacked (2x1), pick by aspect ratio
+- 3 clips: one large on left (2 rows tall), two stacked on right — or top row 2, bottom row 1 spanning full width
+
+The key rule: **no empty cells**. Every cell should contain a video.
+
+**Verify:** Load exactly 3 streams. Grid should fill the screen with no black gap.
+
+```bash
+git commit -m "fix: eliminate empty grid cells for odd stream counts (3, 5, 7)"
+```
+
+---
+
+### Task 0C: Crop Mode Toggle
+
+Add a quick key to toggle between `object-fit: cover` (crop, may miss action) and `object-fit: contain` (letterboxed, sees everything).
+
+**Files:**
+- Modify: `web/js/stream.js` or `web/js/app.js` (add toggle)
+- Modify: `web/css/plexd.css` (contain mode class)
+
+**Implementation:**
+
+Add a CSS class `.plexd-stream-contain` that sets `video { object-fit: contain; }` on the stream wrapper. Toggle it on the selected stream (or all streams if double-tapped).
+
+Key: Use an available key near arrows — suggest **Opt+Up** (toggle selected) and **Opt+Down** (toggle all). Or bind to an existing key that makes sense.
+
+Add `.plexd-stream-contain .plexd-video { object-fit: contain; }` to plexd.css.
+
+**Verify:** In crop mode (Wall mode 2), press the toggle key — video should switch to letterboxed showing full frame. Press again — back to crop.
+
+```bash
+git commit -m "feat: add crop/contain toggle — Opt+Up for selected, Opt+Down for all"
+```
+
+---
+
 ## Phase 1: Foundation — Moment Data Model & Creation
 
 ### Task 1: Moment Store Module

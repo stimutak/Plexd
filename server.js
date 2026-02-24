@@ -29,6 +29,7 @@ const HLS_DIR = path.join(UPLOADS_DIR, 'hls');
 const FILE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MIN_DISK_SPACE_MB = 500; // Minimum free space required for transcoding
 const TRANSCODE_POLL_MS = 5000; // Polling interval for transcode status
+const VIDEO_RANGE_CAP = 4 * 1024 * 1024; // 4MB max per video range response — prevents HTTP/1.1 connection starvation
 
 // Default local folder to scan for videos (user's Downloads)
 const os = require('os');
@@ -46,6 +47,9 @@ if (!fs.existsSync(HLS_DIR)) {
 // Track active transcoding jobs: { fileId: { progress, status, process } }
 const transcodingJobs = {};
 
+// HLS transcoding disabled — originals stream fine on LAN, HLS segments waste disk space
+const HLS_TRANSCODE_ENABLED = false;
+
 // Transcoding queue - limit concurrent jobs to avoid CPU overload
 const transcodeQueue = [];
 const activeTranscodes = new Set();
@@ -62,6 +66,115 @@ const DOWNLOADS_DIR = path.join(UPLOADS_DIR, 'downloads');
 // Ensure downloads directory exists
 if (!fs.existsSync(DOWNLOADS_DIR)) {
     fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+}
+
+// Moment clip extraction queue (mirrors download queue pattern)
+const MOMENTS_DIR = path.join(UPLOADS_DIR, 'moments');
+const extractJobs = {};           // { jobId: { momentId, status, progress, outputPath, process, pid, error, startedAt, completedAt } }
+const extractQueue = [];          // FIFO queue of jobIds
+const activeExtracts = new Set();
+const MAX_CONCURRENT_EXTRACTS = 2; // Clips are short, don't saturate encoder
+
+// Moments persistence
+const MOMENTS_JSON = path.join(MOMENTS_DIR, 'moments.json');
+const MOMENTS_THUMBS = path.join(MOMENTS_DIR, 'thumbnails');
+
+// Ensure moments directories exist
+if (!fs.existsSync(MOMENTS_DIR)) {
+    fs.mkdirSync(MOMENTS_DIR, { recursive: true });
+}
+if (!fs.existsSync(MOMENTS_THUMBS)) {
+    fs.mkdirSync(MOMENTS_THUMBS, { recursive: true });
+}
+
+// Load moments database from JSON
+let momentsDb = [];
+try { momentsDb = JSON.parse(fs.readFileSync(MOMENTS_JSON, 'utf-8')); } catch (e) { momentsDb = []; }
+
+function saveMomentsDb() {
+    fs.writeFileSync(MOMENTS_JSON, JSON.stringify(momentsDb, null, 2));
+}
+
+// Validate momentId (no path separators or traversal)
+function isValidMomentId(id) {
+    return typeof id === 'string' && id.length > 0 && !id.includes('/') && !id.includes('\\') && !id.includes('..');
+}
+
+// Strip large fields from moment for list responses
+function stripLargeFields(m) {
+    const copy = {};
+    const keys = Object.keys(m);
+    for (let i = 0; i < keys.length; i++) {
+        if (keys[i] !== 'thumbnailDataUrl' && keys[i] !== 'aiEmbedding') {
+            copy[keys[i]] = m[keys[i]];
+        }
+    }
+    return copy;
+}
+
+// Restore thumbnailDataUrl from saved file on disk
+function restoreThumbnail(m) {
+    if (m.thumbnailPath) {
+        const thumbPath = path.join(MOMENTS_THUMBS, m.thumbnailPath);
+        if (fs.existsSync(thumbPath)) {
+            try {
+                const data = fs.readFileSync(thumbPath);
+                m.thumbnailDataUrl = 'data:image/jpeg;base64,' + data.toString('base64');
+            } catch (e) { /* ignore */ }
+        }
+    }
+    return m;
+}
+
+// Save thumbnail data URL to file, return filename
+function saveThumbnailFile(id, dataUrl) {
+    if (!dataUrl || !dataUrl.startsWith('data:')) return null;
+    try {
+        const match = dataUrl.match(/^data:image\/[^;]+;base64,(.+)$/);
+        if (!match) return null;
+        const buffer = Buffer.from(match[1], 'base64');
+        const filename = id + '.jpg';
+        fs.writeFileSync(path.join(MOMENTS_THUMBS, filename), buffer);
+        return filename;
+    } catch (e) {
+        console.error('[Moments] Failed to save thumbnail:', e.message);
+        return null;
+    }
+}
+
+// Upsert a single moment into momentsDb
+function upsertMoment(incoming) {
+    if (!incoming || !incoming.id) return null;
+    if (!isValidMomentId(incoming.id)) return null;
+
+    // Handle thumbnail
+    if (incoming.thumbnailDataUrl && incoming.thumbnailDataUrl.startsWith('data:')) {
+        const thumbFile = saveThumbnailFile(incoming.id, incoming.thumbnailDataUrl);
+        if (thumbFile) {
+            incoming.thumbnailPath = thumbFile;
+        }
+        delete incoming.thumbnailDataUrl;
+    }
+    // Strip aiEmbedding from storage
+    delete incoming.aiEmbedding;
+
+    const existingIdx = momentsDb.findIndex(m => m.id === incoming.id);
+    if (existingIdx !== -1) {
+        // Merge: incoming wins, but preserve server-only fields
+        const existing = momentsDb[existingIdx];
+        const merged = Object.assign({}, existing, incoming);
+        if (existing.thumbnailPath && !incoming.thumbnailPath) {
+            merged.thumbnailPath = existing.thumbnailPath;
+        }
+        if (existing.extractedPath) {
+            merged.extractedPath = existing.extractedPath;
+        }
+        momentsDb[existingIdx] = merged;
+        return merged;
+    } else {
+        momentsDb.push(incoming);
+        return incoming;
+    }
 }
 
 // Check if ffmpeg is available
@@ -134,7 +247,7 @@ function findExistingFile(fileName, size) {
 
 // Queue a file for HLS transcoding
 function startHLSTranscode(fileId) {
-    if (!ffmpegAvailable) return;
+    if (!HLS_TRANSCODE_ENABLED || !ffmpegAvailable) return;
 
     const meta = fileMetadata[fileId];
     if (!meta || !meta.contentType?.startsWith('video/')) return;
@@ -339,6 +452,146 @@ function processDownloadQueue() {
     }
 }
 
+// Process the extraction queue (mirrors processDownloadQueue)
+function processExtractQueue() {
+    while (activeExtracts.size < MAX_CONCURRENT_EXTRACTS && extractQueue.length > 0) {
+        const jobId = extractQueue.shift();
+        runExtract(jobId);
+    }
+}
+
+// Run a moment clip extraction (mirrors runDownload pattern)
+function runExtract(jobId, useSoftwareEncoder = false) {
+    const job = extractJobs[jobId];
+    if (!job) return;
+
+    // Resolve input source: prefer local server file over remote URL
+    let inputSource = job.sourceUrl;
+    if (job.sourceFileId) {
+        const hlsPath = path.join(HLS_DIR, job.sourceFileId, 'playlist.m3u8');
+        const rawPath = path.join(UPLOADS_DIR, job.sourceFileId);
+        if (fs.existsSync(hlsPath)) inputSource = hlsPath;
+        else if (fs.existsSync(rawPath)) inputSource = rawPath;
+    }
+
+    const partPath = job.outputPath + '.part';
+
+    // Check disk space
+    const freeMB = getFreeDiskSpaceMB();
+    if (freeMB < MIN_DISK_SPACE_MB) {
+        console.error(`[Server] Low disk space (${freeMB}MB free), skipping extraction: ${job.momentId}`);
+        job.status = 'failed';
+        job.error = 'Low disk space';
+        activeExtracts.delete(jobId);
+        processExtractQueue();
+        return;
+    }
+
+    activeExtracts.add(jobId);
+    job.status = 'extracting';
+    job.startedAt = Date.now();
+
+    const duration = job.end - job.start;
+    // Use H.264 for extracted clips — universally playable in <video> elements.
+    // (HEVC is used for HLS transcodes served via hls.js, but raw MP4 clips
+    // need H.264 for Chrome/Firefox compatibility.)
+    const encoder = useSoftwareEncoder ? 'libx264' : 'h264_videotoolbox';
+    console.log(`[Server] Starting extraction (${encoder}): ${job.momentId} [${job.start.toFixed(1)}s - ${job.end.toFixed(1)}s = ${duration.toFixed(1)}s]`);
+
+    const ffmpegArgs = useSoftwareEncoder ? [
+        '-ss', String(job.start),
+        '-i', inputSource,
+        '-t', String(duration),
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
+        '-movflags', '+faststart',
+        '-f', 'mp4', '-y', partPath
+    ] : [
+        '-ss', String(job.start),
+        '-i', inputSource,
+        '-t', String(duration),
+        '-c:v', 'h264_videotoolbox', '-b:v', '5M',
+        '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
+        '-movflags', '+faststart',
+        '-f', 'mp4', '-y', partPath
+    ];
+
+    const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    job.process = ffmpeg;
+    job.pid = ffmpeg.pid;
+
+    let clipDuration = 0;
+    let stderrOutput = '';
+    let stderrBuffer = '';
+
+    ffmpeg.stderr.on('data', (data) => {
+        stderrBuffer += data.toString();
+        stderrOutput += data.toString();
+        const lines = stderrBuffer.split(/\r?\n|\r/);
+        stderrBuffer = lines.pop(); // Keep incomplete trailing fragment
+        for (const line of lines) {
+            const durationMatch = line.match(/Duration: (\d+):(\d+):(\d+)/);
+            if (durationMatch) {
+                clipDuration = parseInt(durationMatch[1]) * 3600 +
+                               parseInt(durationMatch[2]) * 60 +
+                               parseInt(durationMatch[3]);
+            }
+            const timeMatch = line.match(/time=(\d+):(\d+):(\d+)/);
+            if (timeMatch && clipDuration > 0 && extractJobs[jobId]) {
+                const current = parseInt(timeMatch[1]) * 3600 +
+                                parseInt(timeMatch[2]) * 60 +
+                                parseInt(timeMatch[3]);
+                extractJobs[jobId].progress = Math.round((current / clipDuration) * 100);
+            }
+        }
+    });
+
+    ffmpeg.on('close', (code) => {
+        activeExtracts.delete(jobId);
+        if (!extractJobs[jobId]) { processExtractQueue(); return; } // cancelled
+
+        if (code === 0 && fs.existsSync(partPath)) {
+            fs.renameSync(partPath, job.outputPath);
+            const sizeMB = (fs.statSync(job.outputPath).size / 1048576).toFixed(1);
+            console.log(`[Server] Extraction complete: ${job.momentId} (${sizeMB}MB)`);
+            job.status = 'complete';
+            job.progress = 100;
+            job.completedAt = Date.now();
+            delete job.process;
+        } else if (!useSoftwareEncoder && (
+            stderrOutput.includes('videotoolbox') ||
+            stderrOutput.includes('Encoder not found') ||
+            stderrOutput.includes('Unknown encoder')
+        )) {
+            console.log(`[Server] Hardware encoder failed, retrying with libx264: ${job.momentId}`);
+            try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) {}
+            runExtract(jobId, true);
+            return;
+        } else {
+            console.error(`[Server] Extraction failed: ${job.momentId} (code ${code})`);
+            job.status = 'failed';
+            job.error = `ffmpeg exited with code ${code}`;
+            delete job.process;
+            try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) {}
+        }
+        processExtractQueue();
+    });
+
+    ffmpeg.on('error', (err) => {
+        console.error(`[Server] ffmpeg error (extraction): ${err.message}`);
+        activeExtracts.delete(jobId);
+        if (extractJobs[jobId]) {
+            extractJobs[jobId].status = 'failed';
+            extractJobs[jobId].error = err.message;
+            delete extractJobs[jobId].process;
+        }
+        processExtractQueue();
+    });
+}
+
 // Run a background HLS download (mirrors runTranscode pattern)
 function runDownload(jobId) {
     const job = downloadJobs[jobId];
@@ -466,6 +719,17 @@ try {
     }
 } catch (e) { /* ignore */ }
 
+// Clean up stale extraction .part files from unclean shutdown
+try {
+    const partFiles = fs.readdirSync(MOMENTS_DIR).filter(f => f.endsWith('.part'));
+    if (partFiles.length > 0) {
+        partFiles.forEach(f => {
+            try { fs.unlinkSync(path.join(MOMENTS_DIR, f)); } catch (e) { /* ignore */ }
+        });
+        console.log(`[Server] Cleaned up ${partFiles.length} stale extraction partial file(s)`);
+    }
+} catch (e) { /* ignore */ }
+
 // Clean up completed downloads older than 24h
 function cleanupExpiredDownloads() {
     const now = Date.now();
@@ -485,6 +749,26 @@ function cleanupExpiredDownloads() {
     if (cleaned > 0) console.log(`[Server] Cleaned up ${cleaned} expired download job(s)`);
 }
 setInterval(cleanupExpiredDownloads, 60 * 60 * 1000);
+
+// Clean up expired extraction jobs (mirrors cleanupExpiredDownloads)
+function cleanupExpiredExtracts() {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [jobId, job] of Object.entries(extractJobs)) {
+        // Clean up completed job metadata older than 24h (files are persistent, just free memory)
+        if (job.status === 'complete' && job.completedAt && (now - job.completedAt) > FILE_EXPIRY_MS) {
+            delete extractJobs[jobId];
+            cleaned++;
+        }
+        // Clean up failed jobs older than 1h
+        if (job.status === 'failed' && job.startedAt && (now - job.startedAt) > 60 * 60 * 1000) {
+            delete extractJobs[jobId];
+            cleaned++;
+        }
+    }
+    if (cleaned > 0) console.log(`[Server] Cleaned up ${cleaned} expired extraction job(s)`);
+}
+setInterval(cleanupExpiredExtracts, 60 * 60 * 1000);
 
 // In-memory state for remote control relay
 let currentState = { streams: [], timestamp: 0 };
@@ -725,6 +1009,44 @@ const MIME_TYPES = {
     '.ts': 'video/mp2t'
 };
 
+/**
+ * Serve a file with byte-range support + optional range cap for video.
+ * The cap prevents HTTP/1.1 connection starvation: Chrome holds video connections
+ * open for the entire playback duration (backpressure throttles to playback rate).
+ * By capping each response at VIDEO_RANGE_CAP (4MB), connections free in ~4ms on
+ * localhost, letting all streams share the 6-connection pool fairly.
+ * Chrome automatically makes follow-up range requests as its buffer drains.
+ */
+function serveFileWithRange(req, res, filePath, stat, contentType) {
+    const range = req.headers.range;
+    const isVideo = contentType.startsWith('video/');
+    if (range && stat.size > 0) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = Math.min(parseInt(parts[0], 10) || 0, stat.size - 1);
+        let end = parts[1] ? Math.min(parseInt(parts[1], 10), stat.size - 1) : stat.size - 1;
+        if (end < start) end = start;
+        // Cap video responses so connections cycle fast
+        if (isVideo && (end - start + 1) > VIDEO_RANGE_CAP) {
+            end = start + VIDEO_RANGE_CAP - 1;
+        }
+        const chunkSize = end - start + 1;
+        res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunkSize,
+            'Content-Type': contentType
+        });
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+        res.writeHead(200, {
+            'Content-Length': stat.size,
+            'Content-Type': contentType,
+            'Accept-Ranges': 'bytes'
+        });
+        fs.createReadStream(filePath).pipe(res);
+    }
+}
+
 const server = http.createServer((req, res) => {
     // Enable CORS for all requests (including Chrome extension Private Network Access)
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -844,6 +1166,53 @@ const server = http.createServer((req, res) => {
             activeTranscodes: activeTranscodes.size,
             queueLength: transcodeQueue.length
         }));
+        return;
+    }
+
+    // Reconcile HLS metadata: mark orphaned completions as ready, clean empty stubs
+    if (pathname === '/api/hls/reconcile' && req.method === 'POST') {
+        let marked = 0, cleaned = 0, freedBytes = 0;
+        // Scan all HLS subdirectories
+        if (fs.existsSync(HLS_DIR)) {
+            const hlsDirs = fs.readdirSync(HLS_DIR, { withFileTypes: true });
+            for (const entry of hlsDirs) {
+                if (!entry.isDirectory()) continue;
+                const fileId = entry.name;
+                const hlsSubDir = path.join(HLS_DIR, fileId);
+                if (isHLSComplete(fileId)) {
+                    // Complete transcode — ensure metadata is marked ready
+                    const meta = fileMetadata[fileId];
+                    if (meta && !meta.hlsReady) {
+                        meta.hlsReady = true;
+                        meta.hlsPath = `/api/hls/${encodeURIComponent(fileId)}/playlist.m3u8`;
+                        marked++;
+                        console.log(`[Reconcile] Marked as hlsReady: ${meta.fileName || fileId}`);
+                    }
+                } else {
+                    // No valid playlist — check if empty stub
+                    const contents = fs.readdirSync(hlsSubDir);
+                    if (contents.length === 0) {
+                        fs.rmdirSync(hlsSubDir);
+                        cleaned++;
+                        console.log(`[Reconcile] Removed empty stub: ${fileId}`);
+                    } else {
+                        // Partial transcode — remove incomplete files
+                        let dirSize = 0;
+                        for (const f of contents) {
+                            const fp = path.join(hlsSubDir, f);
+                            try { dirSize += fs.statSync(fp).size; fs.unlinkSync(fp); } catch(e) {}
+                        }
+                        try { fs.rmdirSync(hlsSubDir); } catch(e) {}
+                        freedBytes += dirSize;
+                        cleaned++;
+                        console.log(`[Reconcile] Removed partial transcode: ${fileId} (${(dirSize/1024/1024).toFixed(1)}MB)`);
+                    }
+                }
+            }
+        }
+        if (marked > 0) saveMetadata();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ marked, cleaned, freedMB: Math.round(freedBytes / 1024 / 1024) }));
         return;
     }
 
@@ -1414,29 +1783,7 @@ const server = http.createServer((req, res) => {
             const ext = path.extname(filePath).toLowerCase();
             const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-            // Handle range requests for video streaming
-            const range = req.headers.range;
-            if (range) {
-                const parts = range.replace(/bytes=/, '').split('-');
-                const start = parseInt(parts[0], 10);
-                const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
-                const chunkSize = end - start + 1;
-
-                res.writeHead(206, {
-                    'Content-Range': `bytes ${start}-${end}/${stats.size}`,
-                    'Accept-Ranges': 'bytes',
-                    'Content-Length': chunkSize,
-                    'Content-Type': contentType
-                });
-                fs.createReadStream(filePath, { start, end }).pipe(res);
-            } else {
-                res.writeHead(200, {
-                    'Content-Length': stats.size,
-                    'Content-Type': contentType,
-                    'Accept-Ranges': 'bytes'
-                });
-                fs.createReadStream(filePath).pipe(res);
-            }
+            serveFileWithRange(req, res, filePath, stats, contentType);
         } catch (e) {
             console.error(`[Server] Local file error: ${e.message}`);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1520,31 +1867,7 @@ const server = http.createServer((req, res) => {
         }
 
         const stat = fs.statSync(filePath);
-        const range = req.headers.range;
-
-        // Support range requests for video seeking
-        if (range) {
-            const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-            const chunkSize = end - start + 1;
-
-            res.writeHead(206, {
-                'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-                'Accept-Ranges': 'bytes',
-                'Content-Length': chunkSize,
-                'Content-Type': meta.contentType
-            });
-
-            fs.createReadStream(filePath, { start, end }).pipe(res);
-        } else {
-            res.writeHead(200, {
-                'Content-Length': stat.size,
-                'Content-Type': meta.contentType,
-                'Accept-Ranges': 'bytes'
-            });
-            fs.createReadStream(filePath).pipe(res);
-        }
+        serveFileWithRange(req, res, filePath, stat, meta.contentType);
         return;
     }
 
@@ -1810,6 +2133,325 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // === Moments CRUD API ===
+
+    // GET /api/moments — List all moments (with optional filters)
+    if (pathname === '/api/moments' && req.method === 'GET') {
+        const params = url.searchParams;
+        let result = momentsDb.slice();
+
+        // Filters
+        const sessionFilter = params.get('session');
+        if (sessionFilter) {
+            result = result.filter(m => m.sessionId === sessionFilter);
+        }
+        const minRating = params.get('minRating');
+        if (minRating) {
+            const min = parseInt(minRating, 10);
+            if (isFinite(min)) {
+                result = result.filter(m => (m.rating || 0) >= min);
+            }
+        }
+        const lovedFilter = params.get('loved');
+        if (lovedFilter === 'true' || lovedFilter === '1') {
+            result = result.filter(m => m.loved);
+        }
+        const sourceFilter = params.get('source');
+        if (sourceFilter) {
+            result = result.filter(m => m.sourceUrl === sourceFilter);
+        }
+
+        // Strip large fields
+        const stripped = result.map(stripLargeFields);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(stripped));
+        return;
+    }
+
+    // POST /api/moments — Upsert a single moment
+    if (pathname === '/api/moments' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body);
+                if (!data.id) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing moment id' }));
+                    return;
+                }
+                if (!isValidMomentId(data.id)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid moment id' }));
+                    return;
+                }
+                const saved = upsertMoment(data);
+                saveMomentsDb();
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(stripLargeFields(saved)));
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            }
+        });
+        return;
+    }
+
+    // POST /api/moments/sync — Bulk sync
+    if (pathname === '/api/moments/sync' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body);
+                const incoming = data.moments;
+                if (!Array.isArray(incoming)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Expected { moments: [...] }' }));
+                    return;
+                }
+                let synced = 0;
+                for (let i = 0; i < incoming.length; i++) {
+                    if (incoming[i] && incoming[i].id && isValidMomentId(incoming[i].id)) {
+                        upsertMoment(incoming[i]);
+                        synced++;
+                    }
+                }
+                saveMomentsDb();
+                // Return full list (stripped)
+                const stripped = momentsDb.map(stripLargeFields);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ synced, moments: stripped }));
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            }
+        });
+        return;
+    }
+
+    // GET /api/moments/:id — Get single moment (with thumbnail restored)
+    if (pathname.startsWith('/api/moments/') && req.method === 'GET' &&
+        !pathname.includes('/clip') && !pathname.includes('/extract') && !pathname.includes('/status') && !pathname.includes('/sync')) {
+        const momentId = pathname.slice('/api/moments/'.length);
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            return;
+        }
+        const found = momentsDb.find(m => m.id === momentId);
+        if (!found) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Moment not found' }));
+            return;
+        }
+        // Return copy with thumbnail restored
+        const copy = Object.assign({}, found);
+        restoreThumbnail(copy);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(copy));
+        return;
+    }
+
+    // DELETE /api/moments/:id — Delete a moment
+    if (pathname.startsWith('/api/moments/') && req.method === 'DELETE' &&
+        !pathname.includes('/clip')) {
+        const momentId = pathname.slice('/api/moments/'.length);
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            return;
+        }
+        const idx = momentsDb.findIndex(m => m.id === momentId);
+        if (idx === -1) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Moment not found' }));
+            return;
+        }
+        const removed = momentsDb.splice(idx, 1)[0];
+
+        // Clean up thumbnail file
+        if (removed.thumbnailPath) {
+            const thumbPath = path.join(MOMENTS_THUMBS, removed.thumbnailPath);
+            try { if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath); } catch (e) { /* ignore */ }
+        }
+
+        // Clean up extracted clip
+        const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+        try { if (fs.existsSync(clipPath)) fs.unlinkSync(clipPath); } catch (e) { /* ignore */ }
+        const partPath = clipPath + '.part';
+        try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) { /* ignore */ }
+
+        saveMomentsDb();
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, deleted: momentId }));
+        return;
+    }
+
+    // === Moment Clip Extraction API ===
+
+    if (pathname === '/api/moments/extract' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk);
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body);
+                const { momentId, sourceUrl, start, end, sourceFileId } = data;
+
+                if (!ffmpegAvailable) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'ffmpeg not available' }));
+                    return;
+                }
+                if (!momentId || !sourceUrl) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing momentId or sourceUrl' }));
+                    return;
+                }
+                // Reject momentIds with path separators
+                if (momentId.includes('/') || momentId.includes('\\') || momentId.includes('..')) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid momentId' }));
+                    return;
+                }
+                const startF = parseFloat(start);
+                const endF = parseFloat(end);
+                if (!isFinite(startF) || !isFinite(endF) || startF < 0 || startF >= endF) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid time range' }));
+                    return;
+                }
+
+                // Idempotency: check for existing queued/active job for this momentId
+                const existingJobId = Object.keys(extractJobs).find(
+                    id => extractJobs[id].momentId === momentId &&
+                          (extractJobs[id].status === 'queued' || extractJobs[id].status === 'extracting')
+                );
+                if (existingJobId) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ jobId: existingJobId, status: extractJobs[existingJobId].status, deduplicated: true }));
+                    return;
+                }
+
+                const jobId = `ext_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+                const outputPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+
+                extractJobs[jobId] = {
+                    status: 'queued', progress: 0,
+                    momentId, sourceUrl, sourceFileId: sourceFileId || null,
+                    start: startF, end: endF,
+                    outputPath, process: null, pid: null,
+                    error: null, startedAt: null, completedAt: null
+                };
+
+                extractQueue.push(jobId);
+                processExtractQueue();
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ jobId, status: 'queued', momentId }));
+            } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            }
+        });
+        return;
+    }
+
+    if (pathname === '/api/moments/status' && req.method === 'GET') {
+        const momentId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('momentId');
+        if (!momentId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing momentId' }));
+            return;
+        }
+
+        // Check in-memory jobs first
+        const jobId = Object.keys(extractJobs).find(id => extractJobs[id].momentId === momentId);
+        if (jobId) {
+            const job = extractJobs[jobId];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                status: job.status, progress: job.progress, jobId,
+                extractedUrl: job.status === 'complete' ? `/api/moments/${momentId}/clip.mp4` : null,
+                error: job.error || null
+            }));
+            return;
+        }
+
+        // Check disk (server may have restarted after successful extraction)
+        const filePath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+        if (fs.existsSync(filePath)) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                status: 'complete', progress: 100,
+                extractedUrl: `/api/moments/${momentId}/clip.mp4`
+            }));
+            return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'none' }));
+        return;
+    }
+
+    if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip.mp4') && req.method === 'GET') {
+        const momentId = pathname.slice('/api/moments/'.length, -'/clip.mp4'.length);
+        const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+
+        // Directory traversal guard
+        if (!clipPath.startsWith(MOMENTS_DIR)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Forbidden' }));
+            return;
+        }
+
+        if (!fs.existsSync(clipPath)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Clip not yet extracted' }));
+            return;
+        }
+
+        const stat = fs.statSync(clipPath);
+        serveFileWithRange(req, res, clipPath, stat, 'video/mp4');
+        return;
+    }
+
+    if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip') && req.method === 'DELETE') {
+        const momentId = pathname.slice('/api/moments/'.length, -'/clip'.length);
+
+        // Directory traversal guard
+        const clipCheck = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+        if (!clipCheck.startsWith(MOMENTS_DIR)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Forbidden' }));
+            return;
+        }
+
+        // Cancel any active/queued job
+        const jobId = Object.keys(extractJobs).find(id => extractJobs[id].momentId === momentId);
+        if (jobId) {
+            const job = extractJobs[jobId];
+            if (job.process) { try { job.process.kill(); } catch (e) {} }
+            // Remove from queue if still queued
+            const qIdx = extractQueue.indexOf(jobId);
+            if (qIdx !== -1) extractQueue.splice(qIdx, 1);
+            activeExtracts.delete(jobId);
+            delete extractJobs[jobId];
+        }
+
+        // Delete files
+        const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+        const partPath = clipPath + '.part';
+        try { if (fs.existsSync(clipPath)) fs.unlinkSync(clipPath); } catch (e) {}
+        try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) {}
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+    }
+
     // Static file serving
     let filePath = pathname === '/' ? '/index.html' : pathname;
     filePath = path.join(WEB_ROOT, filePath);
@@ -1845,7 +2487,7 @@ const server = http.createServer((req, res) => {
 function gracefulShutdown(signal) {
     console.log(`\n[Server] Received ${signal}, shutting down...`);
 
-    // Kill active ffmpeg processes (transcodes + downloads)
+    // Kill active ffmpeg processes (transcodes, downloads + extractions)
     let killed = 0;
     for (const fileId of activeTranscodes) {
         try {
@@ -1859,6 +2501,15 @@ function gracefulShutdown(signal) {
     for (const jobId of activeDownloads) {
         try {
             const job = downloadJobs[jobId];
+            if (job?.process) {
+                job.process.kill('SIGTERM');
+                killed++;
+            }
+        } catch (e) { /* ignore */ }
+    }
+    for (const jobId of activeExtracts) {
+        try {
+            const job = extractJobs[jobId];
             if (job?.process) {
                 job.process.kill('SIGTERM');
                 killed++;

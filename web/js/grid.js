@@ -91,29 +91,35 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Build the actual layout with positions and sizes
+     * Build the actual layout with positions and sizes.
+     * Last row gets wider cells when it has fewer streams than cols
+     * (eliminates black gaps for odd counts like 3, 5, 7).
      */
     function buildGridLayout(container, streams, grid) {
         const { rows, cols } = grid;
-        const cellWidth = container.width / cols;
         const cellHeight = container.height / rows;
         const cells = [];
 
         let streamIndex = 0;
         for (let row = 0; row < rows && streamIndex < streams.length; row++) {
-            for (let col = 0; col < cols && streamIndex < streams.length; col++) {
+            // How many streams go in this row?
+            const remainingStreams = streams.length - streamIndex;
+            const streamsInRow = (row === rows - 1) ? remainingStreams : Math.min(cols, remainingStreams);
+            const rowCellWidth = container.width / streamsInRow;
+
+            for (let col = 0; col < streamsInRow; col++) {
                 const stream = streams[streamIndex];
                 const aspectRatio = stream.aspectRatio || 16/9;
 
                 // Fit video within cell while maintaining aspect ratio
                 const fit = fitToContainer(
-                    { width: cellWidth, height: cellHeight },
+                    { width: rowCellWidth, height: cellHeight },
                     aspectRatio
                 );
 
                 cells.push({
                     streamId: stream.id,
-                    x: col * cellWidth + (cellWidth - fit.width) / 2,
+                    x: col * rowCellWidth + (rowCellWidth - fit.width) / 2,
                     y: row * cellHeight + (cellHeight - fit.height) / 2,
                     width: fit.width,
                     height: fit.height,
@@ -129,7 +135,7 @@ const PlexdGrid = (function() {
             cells,
             rows,
             cols,
-            cellWidth,
+            cellWidth: container.width / cols,
             cellHeight,
             efficiency: calculateEfficiency(container, cells)
         };
@@ -210,8 +216,11 @@ const PlexdGrid = (function() {
                     videoWrapper.style.zIndex = '';
                 }
 
-                // Apply transform if specified (for coverflow carousel effect)
-                if (cell.transform && cell.transform !== 'none') {
+                // Apply transform if specified (for coverflow carousel effect or collage rotation)
+                if (cell.collageRotation !== undefined) {
+                    videoWrapper.style.transform = `rotate(${cell.collageRotation}deg)`;
+                    videoWrapper.style.transformOrigin = 'center center';
+                } else if (cell.transform && cell.transform !== 'none') {
                     videoWrapper.style.transform = cell.transform;
                     videoWrapper.style.transformOrigin = 'center center';
                 } else {
@@ -243,7 +252,7 @@ const PlexdGrid = (function() {
                     videoWrapper.style.pointerEvents = '';
                 }
 
-                // Apply object-fit to the video element (for Tetris mode)
+                // Apply object-fit to the video element (for Tetris/Wall modes)
                 const video = videoWrapper.querySelector('video');
                 if (video) {
                     if (cell.objectFit === 'cover') {
@@ -259,6 +268,33 @@ const PlexdGrid = (function() {
                         video.style.objectPosition = ''; // Reset when not in cover mode
                         videoWrapper.classList.remove('plexd-tetris-cell');
                     }
+
+                    // Wall: Crop Tiles zoom — scale video inside overflow:hidden wrapper
+                    if (cell.wallCropZoom) {
+                        video.style.transform = `scale(${cell.wallCropZoom})`;
+                        video.style.transformOrigin = typeof PlexdStream !== 'undefined' && PlexdStream.getPanPosition
+                            ? (() => { const p = PlexdStream.getPanPosition(cell.streamId); return `${p.x}% ${p.y}%`; })()
+                            : 'center center';
+                        videoWrapper.classList.add('plexd-wall-crop');
+                    } else {
+                        video.style.transform = '';
+                        video.style.transformOrigin = '';
+                        videoWrapper.classList.remove('plexd-wall-crop');
+                    }
+                }
+
+                // Spotlight hero marker
+                if (cell.isSpotlightHero) {
+                    videoWrapper.classList.add('plexd-spotlight-hero');
+                } else {
+                    videoWrapper.classList.remove('plexd-spotlight-hero');
+                }
+
+                // Crop Tiles selected highlight
+                if (cell.isWallCropSelected) {
+                    videoWrapper.classList.add('plexd-wall-crop-selected');
+                } else {
+                    videoWrapper.classList.remove('plexd-wall-crop-selected');
                 }
             }
         });
@@ -1217,8 +1253,8 @@ const PlexdGrid = (function() {
             // Mode 2: Column-based packing (videos in vertical columns)
             return tryTetrisColumnPack(container, streamData);
         } else if (mode === 3) {
-            // Mode 3: Treemap-style recursive splitting
-            return tryTetrisSplitPack(container, streamData);
+            // Mode 3: Treemap-style recursive splitting (pass lineup weights if set)
+            return tryTetrisSplitPack(container, streamData, window._plexdLineupWeights);
         } else if (mode === 4) {
             // Mode 4: Content Visible - show ALL content, smart overlap
             return tryTetrisContentVisible(container, streamData);
@@ -1541,18 +1577,22 @@ const PlexdGrid = (function() {
      * Tetris Split Pack - Recursively splits container for optimal packing
      * Similar to treemap algorithm
      */
-    function tryTetrisSplitPack(container, streamData) {
+    function tryTetrisSplitPack(container, streamData, weights) {
         const count = streamData.length;
         if (count === 0) return { cells: [], rows: 0, cols: 0, efficiency: 0, mode: 'tetris' };
 
         const cells = [];
 
-        // Assign weights based on aspect ratio (wider videos get more area)
-        const totalWeight = streamData.reduce((sum, d) => sum + Math.sqrt(d.aspectRatio), 0);
-        const dataWithWeights = streamData.map(d => ({
-            ...d,
-            weight: Math.sqrt(d.aspectRatio) / totalWeight
-        }));
+        // Assign weights: use external weights if provided, otherwise aspect-ratio-based
+        const dataWithWeights = streamData.map(d => {
+            const externalWeight = weights ? (weights.get(d.stream.id) || 1) : Math.sqrt(d.aspectRatio);
+            return {
+                ...d,
+                weight: externalWeight
+            };
+        });
+        const totalWeight = dataWithWeights.reduce((sum, d) => sum + d.weight, 0);
+        dataWithWeights.forEach(d => { d.weight = d.weight / totalWeight; });
 
         // Recursive split function
         function splitLayout(rect, items) {
@@ -1825,11 +1865,126 @@ const PlexdGrid = (function() {
         };
     }
 
+    // =========================================================================
+    // Wall Mode Layouts — Strips and Spotlight
+    // =========================================================================
+
+    /**
+     * Strips layout — equal-width vertical columns, full container height.
+     * Each stream fills a narrow column with object-fit: cover for center crop.
+     */
+    function calculateStripsLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, mode: 'strips' };
+
+        // Edge-to-edge: no gaps between strips for seamless wall effect
+        const colWidth = container.width / count;
+
+        const cells = streams.map((stream, i) => ({
+            streamId: stream.id,
+            x: i * colWidth,
+            y: 0,
+            width: colWidth,
+            height: container.height,
+            objectFit: 'cover'
+        }));
+
+        return { cells, rows: 1, cols: count, mode: 'strips' };
+    }
+
+    /**
+     * Spotlight layout — hero stream at ~65% of screen, rest as thumbnails.
+     * First stream in array is the hero. Thumbnails fill right side and bottom.
+     */
+    function calculateSpotlightLayout(container, streams) {
+        const count = streams.length;
+        if (count === 0) return { cells: [], rows: 0, cols: 0, mode: 'spotlight' };
+
+        if (count === 1) {
+            return {
+                cells: [{
+                    streamId: streams[0].id,
+                    x: 0, y: 0,
+                    width: container.width,
+                    height: container.height,
+                    objectFit: 'cover',
+                    isSpotlightHero: true
+                }],
+                rows: 1, cols: 1, mode: 'spotlight'
+            };
+        }
+
+        const gap = 3;
+        const thumbCount = count - 1;
+
+        // Hero takes left ~65%, full height
+        // Thumbnails fill a column on the right, plus overflow to bottom row
+        const heroRatio = thumbCount <= 4 ? 0.70 : thumbCount <= 8 ? 0.65 : 0.60;
+        const heroWidth = Math.floor(container.width * heroRatio) - gap;
+        const sideWidth = container.width - heroWidth - gap;
+
+        // How many thumbs fit on the right column vs bottom row?
+        // Right column: stack vertically along the hero's height
+        const maxSideThumbs = Math.min(thumbCount, Math.max(2, Math.floor(container.height / 120)));
+        const sideThumbs = Math.min(thumbCount, maxSideThumbs);
+        const bottomThumbs = thumbCount - sideThumbs;
+
+        const cells = [];
+
+        // Hero cell
+        const heroHeight = bottomThumbs > 0
+            ? Math.floor(container.height * 0.78) - gap
+            : container.height;
+        cells.push({
+            streamId: streams[0].id,
+            x: 0, y: 0,
+            width: heroWidth,
+            height: heroHeight,
+            objectFit: 'cover',
+            isSpotlightHero: true
+        });
+
+        // Right-side thumbnails
+        const sideThumbHeight = (heroHeight - gap * (sideThumbs - 1)) / sideThumbs;
+        for (let i = 0; i < sideThumbs; i++) {
+            cells.push({
+                streamId: streams[1 + i].id,
+                x: heroWidth + gap,
+                y: i * (sideThumbHeight + gap),
+                width: sideWidth,
+                height: sideThumbHeight,
+                objectFit: 'cover'
+            });
+        }
+
+        // Bottom-row thumbnails (if any overflow)
+        if (bottomThumbs > 0) {
+            const bottomY = heroHeight + gap;
+            const bottomHeight = container.height - bottomY;
+            // Bottom row spans full width
+            const bottomThumbWidth = (container.width - gap * (bottomThumbs - 1)) / bottomThumbs;
+            for (let i = 0; i < bottomThumbs; i++) {
+                cells.push({
+                    streamId: streams[1 + sideThumbs + i].id,
+                    x: i * (bottomThumbWidth + gap),
+                    y: bottomY,
+                    width: bottomThumbWidth,
+                    height: bottomHeight,
+                    objectFit: 'cover'
+                });
+            }
+        }
+
+        return { cells, rows: bottomThumbs > 0 ? 2 : 1, cols: count, mode: 'spotlight' };
+    }
+
     // Public API
     return {
         calculateLayout,
         calculateCoverflowLayout,
         calculateTetrisLayout,
+        calculateStripsLayout,
+        calculateSpotlightLayout,
         applyLayout,
         onContainerResize,
         fitToContainer,

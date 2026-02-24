@@ -6,7 +6,7 @@
  * 1. No hidden tap zones - all controls are visible buttons
  * 2. One gesture system - swipe left/right for navigation only
  * 3. Always-visible rating - no mode switching
- * 4. Progressive disclosure - advanced features in "More" sheet
+ * 4. Progressive disclosure - advanced features in tabbed toolbar (Play/Mode/Moments/More)
  */
 
 const PlexdRemote = (function() {
@@ -40,7 +40,7 @@ const PlexdRemote = (function() {
     const STATE_KEY = 'plexd_remote_state';
     const POLL_INTERVAL = 300;
     const CONNECTION_TIMEOUT = 2000;
-    const SELECTION_GRACE_PERIOD = 1000;
+    const SELECTION_GRACE_PERIOD = 2500;
     const SWIPE_THRESHOLD = 50;
 
     // ============================================
@@ -113,27 +113,40 @@ const PlexdRemote = (function() {
         el.thumbsSection = $('thumbs-section');
         el.thumbsStrip = $('thumbs-strip');
 
-        // Toolbar buttons
+        // Toolbar tabs
+        el.toolbarTabs = $('toolbar-tabs');
+
+        // Play panel buttons
         el.btnRandom = $('btn-random');
         el.btnFocus = $('btn-focus');
         el.btnAudioFocus = $('btn-audio-focus');
         el.btnPauseAll = $('btn-pause-all');
         el.btnLayout = $('btn-layout');
         el.layoutLabel = $('layout-label');
-        el.btnMore = $('btn-more');
+        el.btnCrop = $('btn-crop');
 
-        // Sheet
-        el.moreSheet = $('more-sheet');
-        el.sheetBackdrop = el.moreSheet?.querySelector('.sheet-backdrop');
-        el.sheetCancel = $('sheet-cancel');
-        el.optMute = $('opt-mute');
-        el.optMuteAll = $('opt-mute-all');
-        el.optRandomAll = $('opt-random-all');
-        el.optMosaic = $('opt-mosaic');
-        el.optBugeye = $('opt-bugeye');
-        el.optCoverflow = $('opt-coverflow');
-        el.optInfo = $('opt-info');
-        el.optCopyUrl = $('opt-copy-url');
+        // Mode panel buttons
+        el.btnTheater = $('btn-theater');
+        el.btnSceneCasting = $('btn-scene-casting');
+        el.btnSceneLineup = $('btn-scene-lineup');
+        el.btnSceneStage = $('btn-scene-stage');
+        el.btnSceneClimax = $('btn-scene-climax');
+        el.btnSceneEncore = $('btn-scene-encore');
+
+        // Moments panel buttons
+        el.btnMomentCapture = $('btn-moment-capture');
+        el.btnMomentCaptureAll = $('btn-moment-capture-all');
+        el.btnMomentBrowse = $('btn-moment-browse');
+        el.btnMomentPlay = $('btn-moment-play');
+        el.momentCountBadge = $('moment-count-badge');
+
+        // More panel buttons
+        el.btnMuteAll = $('btn-mute-all');
+        el.btnRandomAll = $('btn-random-all');
+        el.btnCopyUrl = $('btn-copy-url');
+        el.btnInfo = $('btn-info');
+        el.btnBugeye = $('btn-bugeye');
+        el.btnMosaic = $('btn-mosaic');
 
         // Fullscreen viewer
         el.viewerOverlay = $('viewer-overlay');
@@ -239,7 +252,8 @@ const PlexdRemote = (function() {
         if (!selectedStreamId && streams.length > 0) {
             selectedStreamId = state.selectedStreamId || streams[0].id;
             updateCurrentIndex();
-        } else if (!withinGracePeriod && state.selectedStreamId) {
+        } else if (!withinGracePeriod && state.selectedStreamId && state.selectedStreamId !== selectedStreamId) {
+            // Only override local selection if grace period expired AND Mac selected something different
             selectedStreamId = state.selectedStreamId;
             updateCurrentIndex();
         }
@@ -533,6 +547,24 @@ const PlexdRemote = (function() {
         if (el.btnFocus && state) {
             el.btnFocus.classList.toggle('active', !!state.fullscreenStreamId);
         }
+
+        // Theater mode state
+        if (el.btnTheater) {
+            el.btnTheater.classList.toggle('active', state.theaterMode || false);
+        }
+
+        // Scene buttons: disable when not in theater, highlight current
+        document.querySelectorAll('.toolbar-btn-scene').forEach(btn => {
+            const isTheater = state.theaterMode || false;
+            btn.classList.toggle('disabled', !isTheater);
+            btn.classList.toggle('current', isTheater && state.theaterScene === btn.dataset.scene);
+        });
+
+        // Moment count badge
+        if (el.momentCountBadge) {
+            const count = state.momentCount || 0;
+            el.momentCountBadge.textContent = count > 0 ? count : '';
+        }
     }
 
     function renderHero() {
@@ -817,9 +849,97 @@ const PlexdRemote = (function() {
             haptic.medium();
         });
 
-        el.btnMore?.addEventListener('click', () => {
-            openSheet();
+        el.btnCrop?.addEventListener('click', () => {
+            send('toggleCrop');
+            haptic.medium();
+        });
+
+        // Tab switching
+        el.toolbarTabs?.addEventListener('click', (e) => {
+            const tab = e.target.closest('.toolbar-tab');
+            if (!tab) return;
+            const tabName = tab.dataset.tab;
+            if (!tabName) return;
+
+            // Update tab active states
+            el.toolbarTabs.querySelectorAll('.toolbar-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            // Update panel visibility
+            document.querySelectorAll('.toolbar-panel').forEach(p => p.classList.remove('active'));
+            const panel = document.querySelector(`.toolbar-panel[data-panel="${tabName}"]`);
+            if (panel) panel.classList.add('active');
+
             haptic.light();
+        });
+
+        // Mode panel — Theater toggle
+        el.btnTheater?.addEventListener('click', () => {
+            send('key', { key: '`' });
+            haptic.medium();
+        });
+
+        // Mode panel — Scene buttons
+        ['casting', 'lineup', 'stage', 'climax', 'encore'].forEach(scene => {
+            const btn = $('btn-scene-' + scene);
+            btn?.addEventListener('click', () => {
+                send('theater-scene', { scene });
+                haptic.medium();
+            });
+        });
+
+        // Moments panel
+        el.btnMomentCapture?.addEventListener('click', () => {
+            send('key', { key: 'k' });
+            haptic.success();
+        });
+
+        el.btnMomentCaptureAll?.addEventListener('click', () => {
+            send('key', { key: 'k', shift: true });
+            haptic.success();
+        });
+
+        el.btnMomentBrowse?.addEventListener('click', () => {
+            send('key', { key: 'j' });
+            haptic.medium();
+        });
+
+        el.btnMomentPlay?.addEventListener('click', () => {
+            send('moment-play');
+            haptic.medium();
+        });
+
+        // More panel
+        el.btnMuteAll?.addEventListener('click', () => {
+            send('toggleMuteAll');
+            haptic.medium();
+        });
+
+        el.btnRandomAll?.addEventListener('click', () => {
+            send('randomSeekAll');
+            haptic.medium();
+        });
+
+        el.btnCopyUrl?.addEventListener('click', () => {
+            const stream = getCurrentStream();
+            if (stream?.url) {
+                navigator.clipboard.writeText(stream.url).then(() => haptic.success()).catch(() => haptic.light());
+            }
+        });
+
+        el.btnInfo?.addEventListener('click', () => {
+            send('toggleStreamInfo');
+            haptic.light();
+        });
+
+        el.btnBugeye?.addEventListener('click', () => {
+            send('toggleBugEyeMode');
+            haptic.medium();
+        });
+
+        el.btnMosaic?.addEventListener('click', () => {
+            send('toggleMosaicMode');
+            haptic.medium();
         });
 
         // Favorite button
@@ -875,68 +995,6 @@ const PlexdRemote = (function() {
 
         // Progress bar
         setupProgressBar();
-
-        // Sheet
-        el.sheetBackdrop?.addEventListener('click', closeSheet);
-        el.sheetCancel?.addEventListener('click', closeSheet);
-
-        el.optMute?.addEventListener('click', () => {
-            if (selectedStreamId) {
-                send('toggleMute', { streamId: selectedStreamId });
-                haptic.light();
-            }
-            closeSheet();
-        });
-
-        el.optMuteAll?.addEventListener('click', () => {
-            send('toggleMuteAll');
-            haptic.medium();
-            closeSheet();
-        });
-
-        el.optRandomAll?.addEventListener('click', () => {
-            send('randomSeekAll');
-            haptic.medium();
-            closeSheet();
-        });
-
-        el.optMosaic?.addEventListener('click', () => {
-            send('toggleMosaicMode');
-            currentLayout = 'mosaic';
-            if (el.layoutLabel) el.layoutLabel.textContent = 'Mosaic';
-            haptic.medium();
-            closeSheet();
-        });
-
-        el.optBugeye?.addEventListener('click', () => {
-            send('toggleBugEyeMode');
-            haptic.medium();
-            closeSheet();
-        });
-
-        el.optCoverflow?.addEventListener('click', () => {
-            send('toggleCoverflowMode');
-            haptic.medium();
-            closeSheet();
-        });
-
-        el.optInfo?.addEventListener('click', () => {
-            send('toggleStreamInfo');
-            haptic.light();
-            closeSheet();
-        });
-
-        el.optCopyUrl?.addEventListener('click', () => {
-            const stream = getCurrentStream();
-            if (stream?.url) {
-                navigator.clipboard.writeText(stream.url).then(() => {
-                    haptic.success();
-                }).catch(() => {
-                    haptic.light();
-                });
-            }
-            closeSheet();
-        });
 
         // Viewer controls
         setupViewerEvents();
@@ -1268,24 +1326,6 @@ const PlexdRemote = (function() {
                 send('seek', { streamId: selectedStreamId, time: seekTime });
             }
         });
-    }
-
-    function openSheet() {
-        if (!el.moreSheet) return;
-
-        // Update sheet option states
-        const stream = getCurrentStream();
-        if (el.optMute) {
-            const isMuted = stream?.muted || false;
-            el.optMute.classList.toggle('muted', isMuted);
-        }
-
-        el.moreSheet.classList.remove('hidden');
-    }
-
-    function closeSheet() {
-        if (!el.moreSheet) return;
-        el.moreSheet.classList.add('hidden');
     }
 
     // ============================================

@@ -218,6 +218,7 @@ All zones are single-tap. No double-tap required.
 - Over-engineering simple solutions
 - Adding dependencies without clear justification
 - Speculative features not in current requirements
+- **Transitioning layout properties in CSS** (`left`, `top`, `width`, `height`) — these trigger expensive reflows on every frame. Use `transform` and `opacity` only for animations/transitions (GPU-composited, no reflow)
 
 ## When Adding New Code
 
@@ -234,6 +235,7 @@ All zones are single-tap. No double-tap required.
 - Sub-100ms layout recalculation
 - Smooth playback without frame drops
 - Minimal memory footprint per stream
+- CSS transitions must use GPU-composited properties only (`opacity`, `transform`) — never animate `left`/`top`/`width`/`height`
 
 ## Browser/Platform Support
 
@@ -362,7 +364,7 @@ Example: "Always search with Grep before creating utility functions"
 
 **Critical Pattern:** In true fullscreen mode, keyboard events need special handling:
 
-1. **stream.js `propagateKeys`** - Keys that need app-level handling must be in this regex. They get dispatched to document via synthetic event.
+1. **stream.js `propagateKeys`** - Keys that need app-level handling must be in this regex. They get dispatched to document via synthetic event. **CRITICAL: Every new key binding added to app.js `handleKeyboard()` MUST also be added to the `propagateKeys` regex in stream.js, or that key will be dead in true fullscreen mode.** This was the #1 bug source in the Theater mode implementation (3 critical bugs from missing keys).
 
 2. **Capture-phase handlers** - Use `addEventListener(..., true)` for highest priority. Essential for Bug Eye/Mosaic to close before fullscreen exit.
 
@@ -375,6 +377,33 @@ Example: "Always search with Grep before creating utility functions"
        /* turn on */
    }
    ```
+
+### Double-Tap Pattern
+
+Use the shared `handleDoubleTap(key, onSingle, onDouble)` helper in app.js for any key that needs single/double-tap differentiation. **Do NOT create new `lastXTime`/`xTimeout` state variables** — the helper manages state internally via `_dtState`.
+
+```javascript
+handleDoubleTap('q', function() {
+    // Single tap (fires after 300ms delay)
+    // IMPORTANT: Query fresh state here, not in enclosing scope
+    var target = PlexdStream.getSelectedStream();
+    if (target) PlexdStream.toggleFavorite(target.id);
+}, function() {
+    // Double tap (fires immediately on second tap)
+    setViewMode('favorites');
+});
+```
+
+**Key rule:** Variable captures (like `selected`, `fullscreenStream`) must happen INSIDE the callbacks, not before `handleDoubleTap()`, because the single-tap callback fires 300ms later.
+
+### Stream API Return Types
+
+- `PlexdStream.getFullscreenStream()` → returns a **stream object** (with `.id`, `.url`, `.video`), NOT a string ID
+- `PlexdStream.getSelectedStream()` → returns a **stream object** or `null`
+- `PlexdStream.getAllStreams()` → returns array of stream objects (includes hidden streams!)
+- `getFilteredStreams()` → returns array of visible, mode-filtered streams (excludes hidden)
+
+**Common mistake:** Passing a stream object where a string ID is expected (e.g., `getPrevStreamId()`, `getNextStreamId()`). Always use `.id` when calling ID-based functions.
 
 ### State Variable Tracking
 
@@ -391,6 +420,33 @@ For panels with selectable items:
 3. Handle Enter to activate selection
 4. Reset index when panel opens/closes
 5. Call navigation handler early in main `handleKeyboard()`
+
+### Moments System
+
+**Architecture:** Offline-first with server sync. localStorage is the source of truth, with 30-second dirty-checking sync to the server (`/api/moments/sync`). Thumbnails stored as JPEG files on disk.
+
+**Key globals:**
+- `PlexdMoments` — Data store IIFE (moments.js). CRUD + filter/sort/reorder + server sync.
+- `momentBrowserState` — UI state object in app.js. Tracks open/mode/selectedIndex/filters/sort.
+
+**Moment Browser modes (6):** Grid, Wall, Player, Collage, Discovery, Cascade. Cycled with E/Shift+E or Tab/Shift+Tab.
+
+**Canvas mirror pattern:** Moments play by mirroring already-loaded `<video>` elements onto `<canvas>` via rAF loop — zero extra network connections. Each mode manages its own rAF loop and MUST clean up via `stop*Mirrors()` on mode switch or browser close.
+
+**Key bindings:**
+- `K` — Capture moment from selected/fullscreen stream (peak ±5s)
+- `Shift+K` — Capture from ALL visible streams
+- `J` — Toggle Moment Browser overlay
+- `E` / `Shift+E` — Cycle browser modes (also Tab/Shift+Tab)
+- `/` — Random moment in browser
+
+**Set integration:** Saved sets (`plexd_combinations`) include `momentIds` array linking to associated moments.
+
+**Server API:**
+- `GET /api/moments` — List (with filters)
+- `POST /api/moments` — Upsert single moment
+- `POST /api/moments/sync` — Bulk sync (dirty moments)
+- `DELETE /api/moments/:id` — Remove moment + thumbnail
 
 ### HLS Transcoding System
 
@@ -448,3 +504,29 @@ Located at `~/Applications/Plexd Chrome.app` (AppleScript app, native ARM64+x86_
 - Launches Chrome with `--user-data-dir=.chrome-profile` (persistent profile)
 - Loads extension via `--load-extension`
 - Opens `http://localhost:8080/?autoload=last`
+
+### Theater & Advanced Mode
+
+Two viewing modes toggled by **Backtick** (`` ` ``):
+
+**Advanced Mode** (default) — Full power-user toolkit. All keys work normally.
+
+**Theater Mode** — Guided 5-scene cinematic experience:
+
+| Scene | Key | Purpose |
+|-------|-----|---------|
+| Casting Call | Auto on enter | Mosaic overview, streams fade in, Space advances |
+| Lineup | Auto after Casting | Grid view, arrow keys rotate hero, Space advances |
+| Stage | Auto after Lineup | Focused playback, transport controls, rating |
+| Climax | C | Sub-modes: Tight Wall (0) → Focus (1) → Bug Eye (2) → Single Focus (3), cycle with E/Shift+E |
+| Encore | N | Plays bookmarked highlights in fullscreen overlay |
+
+**State machine** — `theaterMode` (bool) + `theaterScene` (string). Scene transitions via `applyTheaterScene()` which calls scene-specific `enterXxx()` / `exitXxx()` functions.
+
+**Key routing** — `handleKeyboard()` checks `theaterMode` first. Each scene has a handler block that returns early for scene-specific keys, falling through to shared handlers (rating, help, Escape).
+
+**Mode badge** — Visual indicator showing current mode/scene, updated by `updateModeIndicator()`.
+
+**Encore cleanup** — Always use `closeEncoreView()` to tear down the video overlay. Never use raw `.remove()` on Encore elements — this leaks media resources (paused video continues buffering).
+
+**Climax sub-modes** — Tracked by `climaxSubMode` (0-3). When Escape exits Single Focus (mode 3), fall back to Tight Wall (mode 0), don't leave Climax entirely.

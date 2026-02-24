@@ -847,15 +847,86 @@ button {
 }
 
 /* ============================================
-   Quick Toolbar - 6 buttons
+   Tabbed Toolbar
    ============================================ */
 .toolbar {
     display: flex;
-    gap: 6px;
+    flex-direction: column;
+    gap: 8px;
     padding: 4px 0;
+}
+
+/* Tab Bar */
+.toolbar-tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: 2px;
+}
+
+.toolbar-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 34px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    transition: all var(--transition-fast);
+    position: relative;
+}
+
+.toolbar-tab svg {
+    width: 16px;
+    height: 16px;
+}
+
+.toolbar-tab:active {
+    transform: scale(0.96);
+}
+
+.toolbar-tab.active {
+    background: var(--bg-elevated);
+    color: var(--text);
+    box-shadow: 0 1px 3px var(--shadow);
+}
+
+/* Moment count badge */
+.toolbar-tab-badge {
+    font-size: 9px;
+    font-weight: 700;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    background: var(--accent);
+    color: var(--text);
+    border-radius: var(--radius-full);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.toolbar-tab-badge:not(:empty) {
+    display: flex;
+}
+
+/* Button Panels */
+.toolbar-panel {
+    display: none;
+    gap: 6px;
     justify-content: center;
 }
 
+.toolbar-panel.active {
+    display: flex;
+}
+
+/* Toolbar Buttons */
 .toolbar-btn {
     flex: 1;
     max-width: 64px;
@@ -897,6 +968,19 @@ button {
     color: var(--text);
 }
 
+/* Scene buttons disabled when not in Theater mode */
+.toolbar-btn-scene.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+/* Current scene highlight */
+.toolbar-btn-scene.current {
+    background: var(--accent);
+    color: var(--text);
+    box-shadow: 0 0 8px rgba(201, 86, 109, 0.3);
+}
+
 .toolbar-btn.audio-focus-active {
     background: var(--success-soft);
     color: var(--success);
@@ -904,129 +988,6 @@ button {
 
 .toolbar-btn.audio-focus-active svg {
     color: var(--success);
-}
-
-/* ============================================
-   Bottom Sheet
-   ============================================ */
-.sheet {
-    position: fixed;
-    inset: 0;
-    z-index: 400;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    transition: opacity var(--transition-normal);
-}
-
-.sheet.hidden {
-    opacity: 0;
-    pointer-events: none;
-}
-
-.sheet.hidden .sheet-content {
-    transform: translateY(100%);
-}
-
-.sheet-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-}
-
-.sheet-content {
-    position: relative;
-    background: var(--bg-secondary);
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    padding: 8px 16px;
-    padding-bottom: calc(16px + var(--safe-bottom));
-    transition: transform 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
-    max-height: 70vh;
-    overflow-y: auto;
-}
-
-.sheet-handle {
-    width: 36px;
-    height: 5px;
-    background: rgba(237, 232, 224, 0.2);
-    border-radius: 3px;
-    margin: 0 auto 12px;
-}
-
-.sheet-header {
-    padding: 8px 0 16px;
-    text-align: center;
-}
-
-.sheet-header h3 {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-}
-
-.sheet-options {
-    display: flex;
-    flex-direction: column;
-}
-
-.sheet-option {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 12px;
-    border-radius: var(--radius-md);
-    transition: background var(--transition-fast);
-    text-align: left;
-}
-
-.sheet-option:active {
-    background: rgba(237, 232, 224, 0.1);
-}
-
-.sheet-option svg {
-    width: 22px;
-    height: 22px;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-}
-
-.sheet-option span {
-    font-size: 16px;
-    color: var(--text);
-}
-
-.sheet-option.active svg { color: var(--accent); }
-.sheet-option.active span { color: var(--accent); }
-
-/* Mute toggle in sheet */
-.sheet-option .icon-muted { display: none; }
-.sheet-option.muted .icon-unmuted { display: none; }
-.sheet-option.muted .icon-muted { display: block; }
-
-.sheet-divider {
-    height: 1px;
-    background: var(--border);
-    margin: 8px 0;
-}
-
-.sheet-cancel {
-    display: block;
-    width: 100%;
-    padding: 14px;
-    margin-top: 12px;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--accent);
-    text-align: center;
-    transition: background var(--transition-fast);
-}
-
-.sheet-cancel:active {
-    background: var(--bg-elevated);
 }
 
 /* ============================================
@@ -1258,9 +1219,6 @@ button {
         flex: 1 1 100%;
     }
 
-    .actions-row {
-        flex: 1 1 100%;
-    }
 }
 
 /* ============================================
@@ -1271,12 +1229,6 @@ button {
         max-width: 500px;
         margin: 0 auto;
         box-shadow: 0 0 80px var(--shadow);
-    }
-
-    .sheet {
-        max-width: 500px;
-        left: 50%;
-        transform: translateX(-50%);
     }
 
     .rating-btn {

@@ -642,11 +642,13 @@ const PlexdApp = (function() {
     // =========================================================================
     let theaterMode = true; // true = Theater (default), false = Advanced
     let theaterScene = 'casting'; // 'casting' | 'lineup' | 'stage' | 'climax' | 'encore'
+    window._plexdTheaterMode = theaterMode;
+    window._plexdTheaterScene = theaterScene;
     let climaxSubMode = 0; // 0=tight-wall, 1=auto-rotate, 2=collage, 3=single-focus
     let encorePreviousScene = null; // Scene to return to when exiting Encore
     let autoRotateTimer = null; // Interval timer for Climax auto-rotate
     const AUTO_ROTATE_INTERVAL = 15000; // 15 seconds between hero rotations
-    let bookmarks = []; // Array of { streamId, timestamp, bookmarkedAt }
+    // Bookmarks migrated to PlexdMoments store (moments.js)
     let stageHeroId = null; // Currently promoted hero in Stage scene
     let castingFadeTimer = null; // Guard for Casting→Lineup fade animation
 
@@ -732,10 +734,89 @@ const PlexdApp = (function() {
         handleAutoload();
 
         // Auto-save session state on page close and periodically
-        window.addEventListener('beforeunload', saveCurrentStreams);
+        window.addEventListener('beforeunload', function() {
+            saveCurrentStreams();
+            // Kill all video connections so page reload isn't blocked
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.hls) { try { s.hls.destroy(); } catch(_){} }
+                try { s.video.pause(); s.video.src = ''; s.video.load(); } catch(_){}
+            });
+        });
         setInterval(saveCurrentStreams, 30000); // Every 30s as safety net
 
+        // Wire moment updates to UI
+        PlexdMoments.onUpdate(function() {
+            updateMomentBadges();
+            PlexdStream.getAllStreams().forEach(function(s) {
+                PlexdStream.updateMomentDots(s.id);
+            });
+            if (theaterMode && theaterScene === 'stage') updateStageMomentStrip();
+        });
+        updateMomentBadges();
+
+        // Resume extraction polling / queue unextracted moments
+        setTimeout(function() {
+            PlexdMoments.getAllMoments().forEach(function(mom) {
+                if (!mom.extracted && mom.sourceUrl && !mom.sourceUrl.startsWith('blob:')) {
+                    fetch('/api/moments/status?momentId=' + encodeURIComponent(mom.id))
+                        .then(function(r) { return r.json(); })
+                        .then(function(data) {
+                            if (data.status === 'complete' && data.extractedUrl) {
+                                PlexdMoments.updateMoment(mom.id, { extracted: true, extractedPath: data.extractedUrl });
+                            } else if (data.status === 'queued' || data.status === 'extracting') {
+                                startExtractionPoller(mom.id);
+                            } else if (data.status === 'none') {
+                                // Never extracted — queue it now
+                                var stream = resolveMomentStream(mom);
+                                if (stream) queueMomentExtraction(mom, stream);
+                            }
+                        }).catch(function() {});
+                }
+            });
+        }, 3000);
+
         updateModeIndicator();
+
+        // Seed moments from loaded streams when none exist yet
+        function seedMomentsFromStreams() {
+            var streams = PlexdStream.getAllStreams();
+            var count = 0;
+            var existingSources = {};
+            PlexdMoments.getAllMoments().forEach(function(m) { existingSources[m.sourceUrl] = true; });
+            streams.forEach(function(s) {
+                var srcUrl = s.serverUrl || s.url;
+                if (existingSources[srcUrl]) return; // Already has a moment
+                if (!s.video || !s.video.duration) return;
+                var peakT = s.video.currentTime || (s.video.duration * 0.3);
+                var dur = s.video.duration;
+                var newMom = PlexdMoments.createMoment({
+                    sourceUrl: srcUrl,
+                    sourceFileId: extractServerFileId(srcUrl),
+                    sourceTitle: s.fileName || s.url,
+                    streamId: s.id,
+                    start: Math.max(0, peakT - 5),
+                    end: Math.min(dur, peakT + 5),
+                    peak: peakT,
+                    rating: PlexdStream.getRating(s.url, s.fileName) || 0,
+                    loved: PlexdStream.isFavorite(s.id),
+                    thumbnailDataUrl: PlexdStream.captureStreamFrame(s.id)
+                });
+                queueMomentExtraction(newMom, s);
+                count++;
+            });
+            if (count > 0) {
+                console.log('[Plexd] Seeded ' + count + ' moments from loaded streams');
+            }
+            return count;
+        }
+        // Initial seed after metadata loads; retry once if no streams ready
+        setTimeout(function() {
+            var seeded = seedMomentsFromStreams();
+            if (seeded === 0 && PlexdMoments.count() === 0) {
+                setTimeout(seedMomentsFromStreams, 5000); // Retry after 5 more seconds
+            }
+        }, 3000);
+
         console.log('Plexd initialized');
     }
 
@@ -1127,6 +1208,24 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Update moment count badges on all stream tiles
+     */
+    function updateMomentBadges() {
+        var allStreams = PlexdStream.getAllStreams();
+        allStreams.forEach(function(s) {
+            if (!s.momentBadge) return;
+            var count = PlexdMoments.countForStream(s.id) || PlexdMoments.countForSource(s.serverUrl || s.url);
+            if (count > 0) {
+                s.momentBadge.textContent = '\u25C6 ' + count;
+                s.momentBadge.classList.add('has-moments');
+            } else {
+                s.momentBadge.textContent = '';
+                s.momentBadge.classList.remove('has-moments');
+            }
+        });
+    }
+
+    /**
      * Listen for messages from Plexd browser extension
      */
     function setupExtensionListener() {
@@ -1163,35 +1262,48 @@ const PlexdApp = (function() {
      * New streams from URL are ADDED to existing streams in localStorage
      */
     function loadStreamsFromUrl() {
-        // Load existing streams from localStorage first
-        let savedStreams;
-        try {
-            savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
-        } catch (e) {
-            console.warn('[Plexd] Failed to parse saved streams, starting fresh:', e);
-            savedStreams = [];
-        }
-        console.log('[Plexd] Saved streams:', savedStreams.length);
-
-        // Load saved streams (deduped by normalized equality key)
-        const savedKeys = new Set();
-        const dedupedSavedStreams = [];
-        savedStreams.forEach(url => {
-            if (!url || !isValidUrl(url)) return;
-            const key = urlEqualityKey(url);
-            if (savedKeys.has(key)) return;
-            savedKeys.add(key);
-            dedupedSavedStreams.push(url);
-            addStreamSilent(url);
-        });
-
-        // If localStorage contained duplicates/variants, clean it up for future runs.
-        if (dedupedSavedStreams.length !== savedStreams.length) {
-            localStorage.setItem('plexd_streams', JSON.stringify(dedupedSavedStreams));
-        }
-
-        // Check for new streams in URL params
         const params = new URLSearchParams(window.location.search);
+
+        // Skip localStorage restore when autoload is set — the autoload handler
+        // loads the correct set, so restoring localStorage would double-load streams.
+        const savedKeys = new Set();
+        let dedupedSavedStreams = [];
+
+        if (!params.get('autoload')) {
+            // Load existing streams from localStorage first
+            let savedStreams;
+            try {
+                savedStreams = JSON.parse(localStorage.getItem('plexd_streams') || '[]');
+            } catch (e) {
+                console.warn('[Plexd] Failed to parse saved streams, starting fresh:', e);
+                savedStreams = [];
+            }
+            console.log('[Plexd] Saved streams:', savedStreams.length);
+
+            // Load saved streams (deduped by normalized equality key)
+            savedStreams.forEach(url => {
+                if (!url || !isValidUrl(url)) return;
+                const key = urlEqualityKey(url);
+                if (savedKeys.has(key)) return;
+                savedKeys.add(key);
+                dedupedSavedStreams.push(url);
+            });
+            var IMMEDIATE = 6;
+            for (var i = 0; i < dedupedSavedStreams.length; i++) {
+                addStreamSilent(dedupedSavedStreams[i], i >= IMMEDIATE ? { deferred: true } : undefined);
+            }
+            updateLayout();
+            // Stagger-activate the deferred streams to avoid HTTP/1.1 connection saturation
+            var deferred = PlexdStream.getAllStreams().filter(function(s) { return !s.video.src && !s.hls; });
+            if (deferred.length) staggerActivate(deferred);
+
+            // If localStorage contained duplicates/variants, clean it up for future runs.
+            if (dedupedSavedStreams.length !== savedStreams.length) {
+                localStorage.setItem('plexd_streams', JSON.stringify(dedupedSavedStreams));
+            }
+        } else {
+            console.log('[Plexd] Skipping localStorage restore — autoload will load the set');
+        }
         const streamsParam = params.get('streams');
         const queueParam = params.get('queue');
 
@@ -1250,32 +1362,74 @@ const PlexdApp = (function() {
     /**
      * Add stream without showing message (for loading saved streams)
      */
-    function addStreamSilent(url) {
+
+    function addStreamSilent(url, opts) {
         // Avoid duplicates - check by URL, fileName, and server fileId
         const existing = findDuplicateStream(url);
         if (existing) {
-            console.log(`[Plexd] addStreamSilent: duplicate, selecting existing stream`);
             PlexdStream.selectStream(existing.id);
             return;
         }
 
-        console.log(`[Plexd] addStreamSilent: creating stream for ${url.substring(0, 60)}...`);
+        var deferred = opts && opts.deferred;
         const stream = PlexdStream.createStream(url, {
-            autoplay: true,
-            muted: true
+            autoplay: !deferred,
+            muted: true,
+            deferred: deferred
         });
-        if (!stream) {
-            console.error(`[Plexd] addStreamSilent: createStream returned null/undefined`);
-            return;
-        }
-        if (!containerEl) {
-            console.error(`[Plexd] addStreamSilent: containerEl is null!`);
-            return;
-        }
+        if (!stream || !containerEl) return;
         containerEl.appendChild(stream.wrapper);
-        console.log(`[Plexd] addStreamSilent: stream appended, total now: ${PlexdStream.getAllStreams().length}`);
         updateStreamCount();
-        updateLayout();
+        // NOTE: updateLayout() is NOT called here — callers must batch it.
+    }
+
+    /**
+     * Stagger-activate deferred streams in batches.
+     * Waits for canplaythrough (= browser has enough data) before loading next batch.
+     * This avoids Chrome's 6-connection HTTP/1.1 limit by letting each batch finish
+     * buffering before starting the next one.
+     */
+    function staggerActivate(streamList) {
+        var BATCH = 6;
+        var FALLBACK_MS = 2000;
+        var idx = 0;
+        var batchNum = 0;
+        var totalBatches = Math.ceil(streamList.length / BATCH);
+        console.log('[Plexd] staggerActivate: ' + streamList.length + ' deferred streams in ' + totalBatches + ' batches of ' + BATCH);
+
+        function activateBatch() {
+            batchNum++;
+            var end = Math.min(idx + BATCH, streamList.length);
+            var batch = [];
+            var ids = [];
+            for (var i = idx; i < end; i++) {
+                PlexdStream.activateStream(streamList[i].id);
+                batch.push(streamList[i]);
+                ids.push(streamList[i].id);
+            }
+            console.log('[Plexd] stagger batch ' + batchNum + '/' + totalBatches + ': ' + ids.join(', '));
+            idx = end;
+            if (idx >= streamList.length) {
+                console.log('[Plexd] staggerActivate complete');
+                return;
+            }
+
+            var advanced = false;
+            var batchStart = Date.now();
+            function advance(reason) {
+                if (advanced) return;
+                advanced = true;
+                console.log('[Plexd] stagger batch ' + batchNum + ' advanced after ' + (Date.now() - batchStart) + 'ms (' + reason + ')');
+                activateBatch();
+            }
+            for (var j = 0; j < batch.length; j++) {
+                (function(s) {
+                    s.video.addEventListener('canplaythrough', function() { advance('canplaythrough:' + s.id); }, { once: true });
+                })(batch[j]);
+            }
+            setTimeout(function() { advance('timeout'); }, FALLBACK_MS);
+        }
+        activateBatch();
     }
 
     /**
@@ -1467,7 +1621,17 @@ const PlexdApp = (function() {
     /**
      * Update the grid layout
      */
+    // Debounce: collapse rapid-fire updateLayout calls into one per frame
+    var _layoutRafId = null;
     function updateLayout() {
+        if (_layoutRafId) return; // Already scheduled
+        _layoutRafId = requestAnimationFrame(function() {
+            _layoutRafId = null;
+            _doUpdateLayout();
+        });
+    }
+
+    function _doUpdateLayout() {
         if (!containerEl) return;
 
         const allStreams = PlexdStream.getAllStreams();
@@ -2045,9 +2209,13 @@ const PlexdApp = (function() {
             faceDetectionActive = true;
             const btn = document.getElementById('smart-zoom-btn');
             if (btn) btn.classList.add('active');
+            // Enable crop on all streams (smart zoom needs cover mode to pan)
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.wrapper) s.wrapper.classList.remove('plexd-stream-contain');
+            });
             runFaceDetectionSweep();
             faceDetectionTimer = setInterval(runFaceDetectionSweep, FACE_DETECT_INTERVAL);
-            showMessage('Smart Zoom: ON (face detection)', 'info');
+            showMessage('Smart Zoom: ON (crop + auto-pan)', 'info');
             updateModeIndicator();
         });
     }
@@ -2061,10 +2229,14 @@ const PlexdApp = (function() {
         }
         // Reset all pan positions back to center so videos aren't stuck panned
         PlexdStream.resetAllPanPositions();
+        // Restore full frame (contain) on all streams
+        PlexdStream.getAllStreams().forEach(function(s) {
+            if (s.wrapper) s.wrapper.classList.add('plexd-stream-contain');
+        });
         updateLayout();
         const btn = document.getElementById('smart-zoom-btn');
         if (btn) btn.classList.remove('active');
-        showMessage('Smart Zoom: OFF', 'info');
+        showMessage('Smart Zoom: OFF (full frame)', 'info');
         updateModeIndicator();
     }
 
@@ -2083,22 +2255,25 @@ const PlexdApp = (function() {
      * CCW: each stream moves to previous position (last goes to first)
      */
     function rotateStreams(reverse = false) {
-        const count = PlexdStream.getStreamCount();
-        if (count < 2) {
+        // Use filtered streams so rotation respects active rating/favorites/view filters
+        const filtered = getFilteredStreams();
+        if (filtered.length < 2) {
             showMessage('Need 2+ streams to rotate', 'warning');
             return;
         }
 
-        // In focus mode, navigate to next/prev stream instead of rotating
+        // In focus mode, navigate to next/prev filtered stream
         const fullscreenMode = PlexdStream.getFullscreenMode();
         const focusedStream = PlexdStream.getFullscreenStream();
         if ((fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') && focusedStream) {
-            const nextId = reverse
-                ? PlexdStream.getPrevStreamId(focusedStream.id, true)
-                : PlexdStream.getNextStreamId(focusedStream.id, true);
-            if (nextId) {
-                PlexdStream.enterFocusedMode(nextId);
+            const currentIdx = filtered.findIndex(s => s.id === focusedStream.id);
+            let nextIdx;
+            if (reverse) {
+                nextIdx = currentIdx <= 0 ? filtered.length - 1 : currentIdx - 1;
+            } else {
+                nextIdx = currentIdx >= filtered.length - 1 ? 0 : currentIdx + 1;
             }
+            PlexdStream.enterFocusedMode(filtered[nextIdx].id);
             return;
         }
 
@@ -2106,25 +2281,21 @@ const PlexdApp = (function() {
         // (changes which stream is hero/highlighted) instead of reordering
         if (wallMode === 2 || wallMode === 3) {
             const selected = PlexdStream.getSelectedStream();
-            const allStreams = PlexdStream.getAllStreams().filter(s => !s.hidden);
-            if (allStreams.length > 0) {
-                const currentIdx = selected ? allStreams.findIndex(s => s.id === selected.id) : -1;
-                let nextIdx;
-                if (reverse) {
-                    nextIdx = currentIdx <= 0 ? allStreams.length - 1 : currentIdx - 1;
-                } else {
-                    nextIdx = currentIdx >= allStreams.length - 1 ? 0 : currentIdx + 1;
-                }
-                PlexdStream.selectStream(allStreams[nextIdx].id);
-                updateLayout();
+            const currentIdx = selected ? filtered.findIndex(s => s.id === selected.id) : -1;
+            let nextIdx;
+            if (reverse) {
+                nextIdx = currentIdx <= 0 ? filtered.length - 1 : currentIdx - 1;
+            } else {
+                nextIdx = currentIdx >= filtered.length - 1 ? 0 : currentIdx + 1;
             }
+            PlexdStream.selectStream(filtered[nextIdx].id);
+            updateLayout();
             return;
         }
 
-        // Normal mode: rotate stream order
-        // CW visually = first to last in array
-        // CCW visually = last to first in array
-        PlexdStream.rotateStreamOrder(!reverse);
+        // Normal mode: rotate only filtered stream positions in the map
+        const filteredIds = filtered.map(s => s.id);
+        PlexdStream.rotateStreamOrder(!reverse, filteredIds);
 
         // Relayout with new order
         updateLayout();
@@ -2199,6 +2370,10 @@ const PlexdApp = (function() {
             });
         }
         if (prev === 'encore') closeEncoreView();
+        if (prev === 'stage' && scene !== 'stage') {
+            var strip = document.getElementById('stage-moment-strip');
+            if (strip) strip.remove();
+        }
         if (prev === 'climax' && scene !== 'climax') stopAutoRotate();
 
         // Casting → Lineup: fade out non-favorite/low-rated streams first
@@ -2214,6 +2389,7 @@ const PlexdApp = (function() {
             castingFadeTimer = setTimeout(function() {
                 castingFadeTimer = null;
                 theaterScene = scene;
+                window._plexdTheaterScene = theaterScene;
                 applyTheaterScene();
                 updateModeIndicator();
                 allStreams.forEach(function(s) {
@@ -2224,6 +2400,7 @@ const PlexdApp = (function() {
         }
 
         theaterScene = scene;
+        window._plexdTheaterScene = theaterScene;
         applyTheaterScene();
         // If scene bounced (e.g., empty Encore), don't overwrite the message
         if (theaterScene !== scene) return;
@@ -2255,11 +2432,13 @@ const PlexdApp = (function() {
 
     function toggleTheaterAdvanced() {
         theaterMode = !theaterMode;
+        window._plexdTheaterMode = theaterMode;
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.toggle('theater-mode', theaterMode);
 
         if (theaterMode) {
             theaterScene = detectCurrentScene();
+            window._plexdTheaterScene = theaterScene;
             applyTheaterScene();
         } else {
             // Cleanup when leaving Theater mode
@@ -2354,6 +2533,7 @@ const PlexdApp = (function() {
                     stageHeroId = streams.length > 0 ? streams[0].id : null;
                 }
                 if (stageHeroId) PlexdStream.selectStream(stageHeroId);
+                updateStageMomentStrip();
                 break;
 
             case 'climax':
@@ -2427,6 +2607,12 @@ const PlexdApp = (function() {
             badge.textContent = sceneNames[theaterScene] || theaterScene;
             el.appendChild(badge);
         } else {
+            // Always show ADV badge so user knows they're in Advanced mode
+            const advBadge = document.createElement('span');
+            advBadge.className = 'badge badge-advanced';
+            advBadge.textContent = 'ADV';
+            el.appendChild(advBadge);
+
             const modes = [];
             if (bugEyeMode) modes.push('BUG');
             if (mosaicMode) modes.push('MOS');
@@ -2487,78 +2673,2502 @@ const PlexdApp = (function() {
         }
     }
 
-    // Encore bookmark view — visual recall grid of bookmarked moments
-    function showEncoreView() {
-        closeEncoreView(); // Properly cleans up any existing video elements
+    // Moment Browser state
+    var momentBrowserState = {
+        open: false,
+        mode: 0,            // 0=Grid, 1=Wall, 2=Player, 3=Collage, 4=Discovery, 5=Cascade
+        selectedIndex: 0,
+        filterSession: 'all', // 'current' or 'all'
+        filterMinRating: 0,
+        filterLoved: false,
+        filterSource: null,
+        sortBy: 'created',
+        filteredMoments: [],
+        shuffleMode: false,
+        playerHistory: [],      // Stack of played moment indices (most recent last)
+        playerHistoryPos: -1,   // Current position in history (-1 = at head)
+        playerCursor: 0,        // Filmstrip browse cursor (separate from playing index)
+        popupOpen: false        // Popup player overlay active
+    };
 
-        if (bookmarks.length === 0) {
-            showMessage('No bookmarks yet — press K to bookmark moments', 'info');
-            theaterScene = encorePreviousScene || 'casting';
-            applyTheaterScene();
-            updateModeIndicator();
+    // Popup player mirror state (separate from reelMirror to avoid conflicts)
+    var popupMirror = { rafId: null, sourceVid: null, prevMuteStates: null };
+
+    // Wall mode viewport state for 2D panning/zoom
+    var wallViewport = { x: 0, y: 0, zoom: 4 };
+
+    // Wall mirror loop state
+    var wallMirrorState = { rafId: null, handlers: [], prevMuteStates: null, prevPlayStates: {} };
+
+    // Collage mirror loop state
+    var collageMirrorState = { rafId: null, handlers: [], prevMuteStates: null, prevPlayStates: {} };
+
+    // Discovery mode mirror state
+    var discoveryMirrorState = { rafId: null, canvas: null, video: null, handler: null };
+
+    // Cascade mode index (which card is at front of the stack)
+    var cascadeIndex = 0;
+
+    var MOMENT_MODE_NAMES = ['Grid', 'Wall', 'Player', 'Collage', 'Discovery', 'Cascade'];
+
+    // Crescendo loop: progressive tightening toward peak
+    var crescendoState = {
+        momentId: null,
+        loopCount: 0,
+        maxLoopsBeforeTighten: 2,
+        tightenSteps: 3,
+        currentStart: 0,
+        currentEnd: 0,
+        targetStart: 0,
+        targetEnd: 0
+    };
+
+    // Store crescendo handler reference for cleanup
+    var _crescendoHandler = null;
+    var _crescendoVideo = null;
+
+    function teardownCrescendo() {
+        if (_crescendoVideo && _crescendoHandler) {
+            _crescendoVideo.removeEventListener('timeupdate', _crescendoHandler);
+        }
+        _crescendoHandler = null;
+        _crescendoVideo = null;
+    }
+
+    function setupCrescendo(video, moment) {
+        // Clean up previous crescendo if any
+        teardownCrescendo();
+
+        crescendoState.momentId = moment.id;
+        crescendoState.loopCount = 0;
+        crescendoState.currentStart = moment.start;
+        crescendoState.currentEnd = moment.end;
+        crescendoState.targetStart = (moment.peakStart !== undefined && moment.peakStart !== null) ? moment.peakStart : moment.peak;
+        crescendoState.targetEnd = (moment.peakEnd !== undefined && moment.peakEnd !== null) ? moment.peakEnd : moment.end;
+
+        _crescendoHandler = function() {
+            if (video.currentTime >= crescendoState.currentEnd) {
+                crescendoState.loopCount++;
+                var hasPeakRange = crescendoState.targetStart !== moment.start || crescendoState.targetEnd !== moment.end;
+                if (hasPeakRange && crescendoState.loopCount > crescendoState.maxLoopsBeforeTighten) {
+                    var progress = Math.min((crescendoState.loopCount - crescendoState.maxLoopsBeforeTighten) / crescendoState.tightenSteps, 1);
+                    crescendoState.currentStart = moment.start + (crescendoState.targetStart - moment.start) * progress;
+                    crescendoState.currentEnd = moment.end + (crescendoState.targetEnd - moment.end) * progress;
+                }
+                video.currentTime = crescendoState.currentStart;
+            }
+        };
+        _crescendoVideo = video;
+        video.addEventListener('timeupdate', _crescendoHandler);
+    }
+
+    var _extractedVideos = {};
+
+    function _makeExtractedVideoSource(mom) {
+        if (_extractedVideos[mom.id]) {
+            return { video: _extractedVideos[mom.id], id: 'extracted_' + mom.id, _isExtracted: true };
+        }
+        var vid = document.createElement('video');
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.preload = 'auto';
+        vid.crossOrigin = 'anonymous';
+        vid.src = mom.extractedPath;
+        vid._plexdExtracted = true;
+        vid.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+        document.body.appendChild(vid);
+        _extractedVideos[mom.id] = vid;
+        return { video: vid, id: 'extracted_' + mom.id, _isExtracted: true };
+    }
+
+    function resolveMomentStream(mom) {
+        // Find the loaded stream for this moment (for direct video element reuse)
+        var stream = PlexdStream.getStream(mom.streamId);
+        if (stream && stream.video) return stream;
+        var all = PlexdStream.getAllStreams();
+        for (var i = 0; i < all.length; i++) {
+            var sUrl = all[i].serverUrl || all[i].url;
+            if (sUrl === mom.sourceUrl) return all[i];
+        }
+        // Fallback: use extracted MP4 clip when source stream not loaded
+        if (mom.extracted && mom.extractedPath) {
+            return _makeExtractedVideoSource(mom);
+        }
+        // Last resort: create temporary video from source URL (server files, HLS)
+        if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:')) {
+            return _makeSourceVideoFallback(mom);
+        }
+        return null;
+    }
+
+    function _makeSourceVideoFallback(mom) {
+        var key = 'src_' + mom.id;
+        if (_extractedVideos[key]) {
+            return { video: _extractedVideos[key], id: key, _isExtracted: false };
+        }
+        var vid = document.createElement('video');
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.preload = 'auto';
+        vid.crossOrigin = 'anonymous';
+        vid.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+        document.body.appendChild(vid);
+        _extractedVideos[key] = vid;
+
+        var url = mom.sourceUrl;
+        var fileId = mom.sourceFileId || extractServerFileId(url);
+
+        // Server files: try HLS first (originals deleted after transcode), fall back to raw
+        if (fileId && !url.includes('.m3u8')) {
+            var hlsUrl = '/api/hls/' + encodeURIComponent(fileId) + '/playlist.m3u8';
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                var hls = new Hls();
+                hls.loadSource(hlsUrl);
+                hls.attachMedia(vid);
+                vid._hlsInstance = hls;
+                // If HLS fails (no transcode exists), fall back to raw file URL
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        console.log('[MomentFallback] HLS not available for', fileId, '— trying raw URL');
+                        hls.destroy();
+                        vid._hlsInstance = null;
+                        vid.src = url;
+                    }
+                });
+            } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari native HLS
+                vid.src = hlsUrl;
+                vid.addEventListener('error', function() {
+                    console.log('[MomentFallback] Native HLS failed for', fileId, '— trying raw URL');
+                    vid.src = url;
+                }, { once: true });
+            } else {
+                vid.src = url;
+            }
+        } else {
+            // Already an HLS URL or external URL
+            var proxied = (typeof getProxiedHlsUrl === 'function' && url.includes('.m3u8'))
+                ? getProxiedHlsUrl(url) : url;
+            if (proxied.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                var hls2 = new Hls();
+                hls2.loadSource(proxied);
+                hls2.attachMedia(vid);
+                vid._hlsInstance = hls2;
+            } else {
+                vid.src = proxied;
+            }
+        }
+        return { video: vid, id: key, _isExtracted: false };
+    }
+
+    function queueMomentExtraction(moment, stream) {
+        var sourceUrl = moment.sourceUrl;
+        if (!sourceUrl || sourceUrl.startsWith('blob:')) return;
+        // For server files, sourceFileId triggers local file resolution (fastest path).
+        // For external streams, send the sourceUrl (which may be proxied) so ffmpeg
+        // can access CDN-protected content through the same proxy the browser uses.
+        var ffmpegUrl = stream ? (stream.sourceUrl || stream.url || sourceUrl) : sourceUrl;
+
+        fetch('/api/moments/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                momentId: moment.id,
+                sourceUrl: ffmpegUrl,
+                start: moment.start,
+                end: moment.end,
+                sourceFileId: moment.sourceFileId || null
+            })
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data.jobId) {
+                console.log('[Moments] Extraction queued:', moment.id, 'job:', data.jobId);
+                startExtractionPoller(moment.id);
+            }
+        }).catch(function(err) {
+            console.warn('[Moments] Extraction queue failed:', err.message);
+        });
+    }
+
+    var _extractionPollers = {};
+
+    function startExtractionPoller(momentId) {
+        if (_extractionPollers[momentId]) return;
+        var POLL_INTERVAL = 5000;
+        var MAX_POLLS = 72; // 6 minutes max
+        var pollCount = 0;
+
+        _extractionPollers[momentId] = setInterval(function() {
+            pollCount++;
+            if (pollCount > MAX_POLLS) {
+                console.warn('[Moments] Extraction poll timeout:', momentId);
+                clearInterval(_extractionPollers[momentId]);
+                delete _extractionPollers[momentId];
+                return;
+            }
+            fetch('/api/moments/status?momentId=' + encodeURIComponent(momentId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.status === 'complete' && data.extractedUrl) {
+                        clearInterval(_extractionPollers[momentId]);
+                        delete _extractionPollers[momentId];
+                        PlexdMoments.updateMoment(momentId, {
+                            extracted: true,
+                            extractedPath: data.extractedUrl
+                        });
+                        console.log('[Moments] Extraction complete:', momentId);
+                    } else if (data.status === 'failed') {
+                        clearInterval(_extractionPollers[momentId]);
+                        delete _extractionPollers[momentId];
+                        console.warn('[Moments] Extraction failed:', momentId, data.error);
+                    }
+                })
+                .catch(function() { /* keep polling */ });
+        }, POLL_INTERVAL);
+    }
+
+    function getFilteredAndSortedMoments() {
+        var opts = {};
+        if (momentBrowserState.filterSession === 'current') {
+            opts.sessionId = PlexdMoments.getSessionId();
+        }
+        if (momentBrowserState.filterMinRating > 0) {
+            opts.minRating = momentBrowserState.filterMinRating;
+        }
+        if (momentBrowserState.filterLoved) {
+            opts.loved = true;
+        }
+        if (momentBrowserState.filterSource) {
+            opts.sourceUrl = momentBrowserState.filterSource;
+        }
+        var result = PlexdMoments.filter(opts);
+        var sorted = PlexdMoments.sort(result, momentBrowserState.sortBy);
+        // Push unextracted moments to the end so playable clips come first
+        sorted.sort(function(a, b) {
+            var aReady = a.extracted ? 1 : 0;
+            var bReady = b.extracted ? 1 : 0;
+            return bReady - aReady;
+        });
+        return sorted;
+    }
+
+    function showMomentBrowser() {
+        // Pause all main streams (remember which were playing to resume on close)
+        momentBrowserState._pausedStreams = [];
+        PlexdStream.getAllStreams().forEach(function(s) {
+            if (s.video && !s.video.paused) {
+                s.video.pause();
+                momentBrowserState._pausedStreams.push(s.id);
+            }
+        });
+
+        // Clean up any active canvas mirrors BEFORE removing DOM
+        stopReelMirror();
+        stopWallMirrors();
+        stopCollageMirrors();
+        var old = document.getElementById('encore-overlay');
+        if (old) old.remove();
+
+        var allMoments = PlexdMoments.getAllMoments();
+        var extractedCount = allMoments.filter(function(m) { return m.extracted; }).length;
+        console.log('[MomentBrowser] Total moments:', allMoments.length,
+            '| Extracted:', extractedCount,
+            '| IDs:', allMoments.slice(0, 3).map(function(m) { return m.id; }));
+        if (allMoments.length === 0) {
+            showMessage('No moments yet — press K to capture moments', 'info');
+            if (theaterMode) {
+                theaterScene = encorePreviousScene || 'casting';
+                window._plexdTheaterScene = theaterScene;
+                applyTheaterScene();
+                updateModeIndicator();
+            }
             return;
         }
 
-        overlay = document.createElement('div');
+        momentBrowserState.open = true;
+        momentBrowserState.selectedIndex = 0;
+        momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+
+        var overlay = document.createElement('div');
         overlay.id = 'encore-overlay';
-        overlay.className = 'plexd-encore-overlay';
+        overlay.className = 'plexd-moment-browser';
 
-        const title = document.createElement('div');
-        title.className = 'encore-title';
-        title.textContent = 'Encore — ' + bookmarks.length + ' moment' + (bookmarks.length !== 1 ? 's' : '');
-        overlay.appendChild(title);
+        // Header
+        var header = document.createElement('div');
+        header.className = 'moment-browser-header';
 
-        const grid = document.createElement('div');
-        grid.className = 'encore-grid';
+        var titleEl = document.createElement('span');
+        titleEl.className = 'moment-browser-title';
+        header.appendChild(titleEl);
 
-        bookmarks.slice().reverse().forEach(function(bm) {
-            const stream = PlexdStream.getStream(bm.streamId);
-            if (!stream) return;
+        var controls = document.createElement('div');
+        controls.className = 'moment-browser-controls';
 
-            const card = document.createElement('div');
-            card.className = 'encore-card';
+        // --- Filter group ---
+        var filterGroup = document.createElement('div');
+        filterGroup.className = 'moment-ctrl-group';
 
-            const thumb = document.createElement('video');
-            thumb.muted = true;
-            thumb.playsInline = true;
-            thumb.preload = 'metadata';
-            thumb.src = stream.hls ? (stream.sourceUrl || stream.url) : stream.video.src;
-            thumb.addEventListener('loadedmetadata', function() {
-                thumb.currentTime = bm.timestamp;
-            }, { once: true });
-            card.appendChild(thumb);
+        var filterLabel = document.createElement('span');
+        filterLabel.className = 'moment-ctrl-label';
+        filterLabel.textContent = 'Filter';
+        filterGroup.appendChild(filterLabel);
 
-            const info = document.createElement('div');
-            info.className = 'encore-info';
-            const m = Math.floor(bm.timestamp / 60);
-            const s = Math.floor(bm.timestamp % 60);
-            info.textContent = m + ':' + String(s).padStart(2, '0');
-            card.appendChild(info);
-
-            card.addEventListener('click', function() {
-                closeEncoreView();
-                stageHeroId = bm.streamId;
-                setTheaterScene('stage');
-                const st = PlexdStream.getStream(bm.streamId);
-                if (st && st.video) st.video.currentTime = bm.timestamp;
-            });
-
-            grid.appendChild(card);
+        // Session filter
+        var sessionBtn = document.createElement('button');
+        sessionBtn.className = 'moment-filter-btn' + (momentBrowserState.filterSession === 'current' ? ' active' : '');
+        sessionBtn.textContent = 'Session';
+        sessionBtn.title = 'Show only moments from this browser session';
+        sessionBtn.addEventListener('click', function() {
+            momentBrowserState.filterSession = momentBrowserState.filterSession === 'current' ? 'all' : 'current';
+            sessionBtn.classList.toggle('active', momentBrowserState.filterSession === 'current');
+            refreshMomentBrowser();
         });
+        filterGroup.appendChild(sessionBtn);
 
-        overlay.appendChild(grid);
+        // Loved filter
+        var lovedBtn = document.createElement('button');
+        lovedBtn.className = 'moment-filter-btn moment-loved-btn' + (momentBrowserState.filterLoved ? ' active' : '');
+        lovedBtn.textContent = '\u2665';
+        lovedBtn.title = 'Show only loved moments';
+        lovedBtn.addEventListener('click', function() {
+            momentBrowserState.filterLoved = !momentBrowserState.filterLoved;
+            lovedBtn.classList.toggle('active', momentBrowserState.filterLoved);
+            refreshMomentBrowser();
+        });
+        filterGroup.appendChild(lovedBtn);
+
+        // Source filter dropdown
+        var allMoments = PlexdMoments.getAllMoments();
+        var sources = [];
+        var seenSources = {};
+        allMoments.forEach(function(m) {
+            var src = m.sourceTitle || m.sourceUrl;
+            if (src && !seenSources[src]) {
+                seenSources[src] = true;
+                sources.push({ label: src, url: m.sourceUrl });
+            }
+        });
+        if (sources.length > 1) {
+            var sourceSelect = document.createElement('select');
+            sourceSelect.className = 'moment-source-filter';
+            sourceSelect.title = 'Filter by video source';
+            var allOpt = document.createElement('option');
+            allOpt.value = '';
+            allOpt.textContent = 'All sources';
+            sourceSelect.appendChild(allOpt);
+            sources.forEach(function(s) {
+                var opt = document.createElement('option');
+                opt.value = s.url;
+                opt.textContent = s.label.length > 30 ? s.label.substring(0, 30) + '\u2026' : s.label;
+                if (momentBrowserState.filterSource === s.url) opt.selected = true;
+                sourceSelect.appendChild(opt);
+            });
+            sourceSelect.addEventListener('change', function() {
+                momentBrowserState.filterSource = sourceSelect.value || null;
+                refreshMomentBrowser();
+            });
+            filterGroup.appendChild(sourceSelect);
+        }
+
+        controls.appendChild(filterGroup);
+
+        // --- Rating filter group ---
+        var ratingGroup = document.createElement('div');
+        ratingGroup.className = 'moment-ctrl-group';
+
+        var ratingLabel = document.createElement('span');
+        ratingLabel.className = 'moment-ctrl-label';
+        ratingLabel.textContent = 'Min';
+        ratingGroup.appendChild(ratingLabel);
+
+        var ratingWrap = document.createElement('span');
+        ratingWrap.className = 'moment-rating-filter';
+        function updateRatingFilterVisuals() {
+            var min = momentBrowserState.filterMinRating;
+            ratingWrap.querySelectorAll('.moment-rating-btn').forEach(function(b) {
+                var val = parseInt(b.dataset.rating, 10);
+                b.classList.toggle('active', min > 0 && val === min);
+                b.classList.toggle('in-range', min > 0 && val > min);
+            });
+        }
+        for (var r = 1; r <= 9; r++) {
+            (function(rating) {
+                var btn = document.createElement('button');
+                var isActive = momentBrowserState.filterMinRating === rating;
+                var inRange = momentBrowserState.filterMinRating > 0 && rating > momentBrowserState.filterMinRating;
+                btn.className = 'moment-rating-btn' + (isActive ? ' active' : '') + (inRange ? ' in-range' : '');
+                btn.textContent = rating;
+                btn.dataset.rating = rating;
+                btn.title = 'Show ' + rating + '+ only (click again to clear)';
+                btn.addEventListener('click', function() {
+                    momentBrowserState.filterMinRating = momentBrowserState.filterMinRating === rating ? 0 : rating;
+                    updateRatingFilterVisuals();
+                    refreshMomentBrowser();
+                });
+                ratingWrap.appendChild(btn);
+            })(r);
+        }
+        ratingGroup.appendChild(ratingWrap);
+        controls.appendChild(ratingGroup);
+
+        // --- Sort group ---
+        var sortGroup = document.createElement('div');
+        sortGroup.className = 'moment-ctrl-group';
+
+        var sortLabel = document.createElement('span');
+        sortLabel.className = 'moment-ctrl-label';
+        sortLabel.textContent = 'Sort';
+        sortGroup.appendChild(sortLabel);
+
+        var sortNames = { created: 'Newest', rating: 'Top rated', played: 'Recent', playCount: 'Most played', duration: 'Longest', manual: 'Custom' };
+        var sortBtn = document.createElement('button');
+        sortBtn.className = 'moment-filter-btn moment-sort-btn';
+        sortBtn.textContent = sortNames[momentBrowserState.sortBy] || momentBrowserState.sortBy;
+        sortBtn.title = 'Click to cycle sort order';
+        sortBtn.addEventListener('click', function() {
+            var sorts = ['created', 'rating', 'played', 'playCount', 'duration', 'manual'];
+            var idx = sorts.indexOf(momentBrowserState.sortBy);
+            momentBrowserState.sortBy = sorts[(idx + 1) % sorts.length];
+            sortBtn.textContent = sortNames[momentBrowserState.sortBy] || momentBrowserState.sortBy;
+            refreshMomentBrowser();
+        });
+        sortGroup.appendChild(sortBtn);
+        controls.appendChild(sortGroup);
+
+        // --- Selected moment status (reflects keyboard rating/love) ---
+        var statusEl = document.createElement('span');
+        statusEl.className = 'moment-selected-status';
+        statusEl.id = 'moment-selected-status';
+        controls.appendChild(statusEl);
+
+        // Overflow "..." menu
+        var overflowWrap = document.createElement('div');
+        overflowWrap.className = 'moment-overflow-wrap';
+        var overflowBtn = document.createElement('button');
+        overflowBtn.className = 'moment-filter-btn moment-overflow-btn';
+        overflowBtn.textContent = '\u2026';
+        overflowBtn.title = 'More actions';
+        var overflowMenu = document.createElement('div');
+        overflowMenu.className = 'moment-overflow-menu';
+        overflowMenu.style.display = 'none';
+
+        var purgeItem = document.createElement('button');
+        purgeItem.className = 'moment-overflow-item moment-overflow-danger';
+        purgeItem.textContent = 'Purge All Moments';
+        purgeItem.addEventListener('click', function() {
+            overflowMenu.style.display = 'none';
+            if (confirm('Delete ALL moments? This cannot be undone.')) {
+                PlexdMoments.clearAll();
+                closeMomentBrowser();
+                showMessage('All moments purged', 'info');
+            }
+        });
+        overflowMenu.appendChild(purgeItem);
+
+        overflowBtn.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            var isOpen = overflowMenu.style.display !== 'none';
+            overflowMenu.style.display = isOpen ? 'none' : 'block';
+        });
+        // Close on outside click (attached to overlay so it's cleaned up on close)
+        overlay.addEventListener('click', function closeOverflow() {
+            overflowMenu.style.display = 'none';
+        });
+        overflowWrap.appendChild(overflowBtn);
+        overflowWrap.appendChild(overflowMenu);
+        controls.appendChild(overflowWrap);
+
+        // Mode selector dropdown
+        var modeSelect = document.createElement('select');
+        modeSelect.className = 'moment-browser-mode-select';
+        MOMENT_MODE_NAMES.forEach(function(name, i) {
+            var opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = name;
+            if (i === momentBrowserState.mode) opt.selected = true;
+            modeSelect.appendChild(opt);
+        });
+        modeSelect.addEventListener('change', function() {
+            momentBrowserState.mode = parseInt(modeSelect.value, 10);
+            renderCurrentBrowserMode();
+            showMessage(MOMENT_MODE_NAMES[momentBrowserState.mode] + ' mode', 'info');
+        });
+        controls.appendChild(modeSelect);
+
+        header.appendChild(controls);
+        overlay.appendChild(header);
+
+        // Content area
+        var content = document.createElement('div');
+        content.className = 'moment-browser-content';
+        content.id = 'moment-browser-content';
+        overlay.appendChild(content);
+
         document.querySelector('.plexd-app').appendChild(overlay);
+
+        updateMomentBrowserTitle();
+        renderCurrentBrowserMode();
     }
 
-    function closeEncoreView() {
-        const overlay = document.getElementById('encore-overlay');
+    function updateMomentBrowserTitle() {
+        var titleEl = document.querySelector('.moment-browser-title');
+        if (!titleEl) return;
+        var count = momentBrowserState.filteredMoments.length;
+        titleEl.textContent = 'Moments \u2014 ' + count + (count !== 1 ? ' clips' : ' clip');
+    }
+
+    function updateSelectedMomentStatus() {
+        var el = document.getElementById('moment-selected-status');
+        if (!el) return;
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        if (moments.length === 0 || !moments[idx]) {
+            el.textContent = '';
+            return;
+        }
+        var mom = moments[idx];
+        var parts = [];
+        if (mom.loved) parts.push('\u2665');
+        if (mom.rating > 0) parts.push('\u2605' + mom.rating);
+        el.textContent = parts.length > 0 ? parts.join(' ') : '';
+        el.classList.toggle('has-love', !!mom.loved);
+        el.classList.toggle('has-rating', mom.rating > 0);
+        // Flash effect
+        el.classList.remove('flash');
+        void el.offsetWidth;
+        el.classList.add('flash');
+    }
+
+    function refreshMomentBrowser() {
+        momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+        momentBrowserState.selectedIndex = 0;
+        momentBrowserState.playerHistory = [];
+        momentBrowserState.playerHistoryPos = -1;
+        if (!momentBrowserState.open) return;
+        updateMomentBrowserTitle();
+        renderCurrentBrowserMode();
+        updateSelectedMomentStatus();
+    }
+
+    function renderCurrentBrowserMode() {
+        var content = document.getElementById('moment-browser-content');
+        if (!content) return;
+        // Stop all canvas mirror loops
+        stopReelMirror();
+        stopWallMirrors();
+        stopCollageMirrors();
+        stopDiscoveryMirror();
+        // Clean up extracted/fallback videos on mode switch (they're on document.body, not inside content)
+        Object.keys(_extractedVideos).forEach(function(momentId) {
+            var vid = _extractedVideos[momentId];
+            if (vid._hlsInstance) { vid._hlsInstance.destroy(); vid._hlsInstance = null; }
+            vid.pause();
+            vid.removeAttribute('src');
+            vid.load();
+            if (vid.parentNode) vid.parentNode.removeChild(vid);
+        });
+        _extractedVideos = {};
+        content.querySelectorAll('video').forEach(function(v) {
+            if (v._hlsInstance) { v._hlsInstance.destroy(); v._hlsInstance = null; }
+            v.pause(); v.src = '';
+        });
+        while (content.firstChild) content.removeChild(content.firstChild);
+        switch (momentBrowserState.mode) {
+            case 0: renderMomentGrid(content); break;
+            case 1: renderMomentWall(content); break;
+            case 2: renderMomentPlayer(content); break;
+            case 3: renderMomentCollage(content); break;
+            case 4: renderMomentDiscovery(content); break;
+            case 5: renderMomentCascade(content); break;
+            default: renderMomentGrid(content); break;
+        }
+        updateSelectedMomentStatus();
+    }
+
+    function renderMomentGrid(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments match filters';
+            container.appendChild(empty);
+            return;
+        }
+
+        console.log('[MomentGrid] Rendering', moments.length, 'cards. First:', moments[0] && moments[0].id,
+            'extracted:', moments[0] && moments[0].extracted, 'path:', moments[0] && moments[0].extractedPath);
+
+        var grid = document.createElement('div');
+        grid.className = 'moment-grid';
+
+        // Click selects only (no double-click)
+        grid.addEventListener('click', function(ev) {
+            var card = ev.target.closest('.moment-card');
+            if (card) {
+                momentBrowserState.selectedIndex = parseInt(card.dataset.index, 10);
+                updateMomentGridSelection();
+            }
+        });
+
+        var frag = document.createDocumentFragment();
+        var count = moments.length;
+        var dragSrcIdx = null;
+
+        for (var idx = 0; idx < count; idx++) {
+            var mom = moments[idx];
+            var card = document.createElement('div');
+            card.className = 'moment-card' + (idx === momentBrowserState.selectedIndex ? ' selected' : '');
+            card.dataset.index = idx;
+            card.draggable = true;
+
+            if (mom.thumbnailDataUrl) {
+                var img = document.createElement('img');
+                img.src = mom.thumbnailDataUrl;
+                img.draggable = false;
+                img.loading = 'lazy';
+                card.appendChild(img);
+            } else {
+                // Try extracted clip — load a poster frame via hidden video + canvas
+                var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
+                var poster = document.createElement('canvas');
+                poster.className = 'moment-card-poster';
+                poster.width = 320;
+                poster.height = 180;
+                card.appendChild(poster);
+                // Load clip in a temporary video to grab one frame
+                (function(canvas, url, moment) {
+                    var tmp = document.createElement('video');
+                    tmp.preload = 'auto';
+                    tmp.muted = true;
+                    tmp.playsInline = true;
+                    tmp.crossOrigin = 'anonymous';
+                    tmp.addEventListener('loadeddata', function() {
+                        tmp.currentTime = 0.5; // skip past any black leader
+                    });
+                    tmp.addEventListener('seeked', function() {
+                        try {
+                            var ctx = canvas.getContext('2d');
+                            ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+                            // Cache as thumbnailDataUrl on the in-memory moment
+                            moment.thumbnailDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                        } catch (e) {}
+                        // Cleanup
+                        tmp.pause();
+                        tmp.removeAttribute('src');
+                        tmp.load();
+                        if (!moment.extracted) {
+                            PlexdMoments.updateMoment(moment.id, {
+                                extracted: true,
+                                extractedPath: url
+                            });
+                        }
+                    });
+                    tmp.addEventListener('error', function() {
+                        // Clip doesn't exist — show placeholder
+                        var ph = document.createElement('div');
+                        ph.className = 'moment-card-placeholder';
+                        var ts = Math.floor(moment.peak / 60) + ':' + String(Math.floor(moment.peak % 60)).padStart(2, '0');
+                        ph.textContent = ts;
+                        canvas.replaceWith(ph);
+                    });
+                    tmp.src = url;
+                })(poster, clipUrl, mom);
+            }
+
+            // Info overlay: sourceTitle, duration, rating, loved
+            var info = document.createElement('div');
+            info.className = 'moment-card-info';
+            var title = mom.sourceTitle || '';
+            if (title.length > 20) title = title.slice(0, 18) + '\u2026';
+            var dur = (mom.end - mom.start).toFixed(1) + 's';
+            var ratingText = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+            var lovedText = mom.loved ? ' \u2665' : '';
+            if (title) {
+                var titleSpan = document.createElement('div');
+                titleSpan.className = 'moment-card-title';
+                titleSpan.textContent = title;
+                info.appendChild(titleSpan);
+            }
+            var metaSpan = document.createElement('div');
+            metaSpan.textContent = dur + ratingText + lovedText;
+            info.appendChild(metaSpan);
+            card.appendChild(info);
+
+            // Drag-to-reorder (same pattern as Player filmstrip)
+            (function(cardEl, cardIdx) {
+                cardEl.addEventListener('dragstart', function(ev) {
+                    dragSrcIdx = cardIdx;
+                    cardEl.classList.add('dragging');
+                    ev.dataTransfer.effectAllowed = 'move';
+                });
+                cardEl.addEventListener('dragend', function() {
+                    cardEl.classList.remove('dragging');
+                    grid.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+                });
+                cardEl.addEventListener('dragover', function(ev) {
+                    ev.preventDefault();
+                    ev.dataTransfer.dropEffect = 'move';
+                    cardEl.classList.add('drag-over');
+                });
+                cardEl.addEventListener('dragleave', function() {
+                    cardEl.classList.remove('drag-over');
+                });
+                cardEl.addEventListener('drop', function(ev) {
+                    ev.preventDefault();
+                    cardEl.classList.remove('drag-over');
+                    if (dragSrcIdx === null || dragSrcIdx === cardIdx) return;
+                    var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
+                    momentBrowserState.filteredMoments.splice(cardIdx, 0, moved);
+                    PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
+                    momentBrowserState.sortBy = 'manual';
+                    if (momentBrowserState.selectedIndex === dragSrcIdx) {
+                        momentBrowserState.selectedIndex = cardIdx;
+                    }
+                    renderCurrentBrowserMode();
+                    dragSrcIdx = null;
+                });
+            })(card, idx);
+
+            frag.appendChild(card);
+        }
+        grid.appendChild(frag);
+        container.appendChild(grid);
+    }
+
+    function updateMomentGridSelection() {
+        var cards = document.querySelectorAll('.moment-card');
+        cards.forEach(function(card) {
+            var idx = parseInt(card.dataset.index, 10);
+            card.classList.toggle('selected', idx === momentBrowserState.selectedIndex);
+        });
+        // Scroll selected into view
+        var selected = document.querySelector('.moment-card.selected');
+        if (selected) selected.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        updateSelectedMomentStatus();
+    }
+
+    function stopWallMirrors() {
+        if (wallMirrorState.rafId) {
+            cancelAnimationFrame(wallMirrorState.rafId);
+            wallMirrorState.rafId = null;
+        }
+        // Remove timeupdate loop handlers from source videos
+        wallMirrorState.handlers.forEach(function(h) {
+            if (h.video && h.handler) h.video.removeEventListener('timeupdate', h.handler);
+        });
+        wallMirrorState.handlers = [];
+        // Restore play/pause states
+        if (wallMirrorState.prevPlayStates) {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (wallMirrorState.prevPlayStates[s.id] === true && !s.video.paused) {
+                    s.video.pause();
+                }
+            });
+            wallMirrorState.prevPlayStates = {};
+        }
+    }
+
+    function renderMomentWall(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments match filters';
+            container.appendChild(empty);
+            return;
+        }
+
+        stopWallMirrors();
+
+        // Viewport container (overflow hidden, panning via transform)
+        var viewport = document.createElement('div');
+        viewport.className = 'moment-wall-viewport';
+
+        // Inner grid (translated for panning)
+        var grid = document.createElement('div');
+        grid.className = 'moment-wall-canvas';
+        grid.style.gridTemplateColumns = 'repeat(' + wallViewport.zoom + ', 1fr)';
+
+        var canvasRefs = []; // { canvas, ctx, sourceVid, mom }
+        var dragSrcIdx = null;
+        var wallSourceHandled = {}; // Track which source videos already have loop handlers
+
+        moments.forEach(function(mom, idx) {
+            var cell = document.createElement('div');
+            cell.className = 'moment-wall-cell' + (idx === momentBrowserState.selectedIndex ? ' selected' : '');
+            cell.dataset.index = idx;
+            cell.draggable = true;
+
+            var canvas = document.createElement('canvas');
+            canvas.width = 320;
+            canvas.height = 180;
+            cell.appendChild(canvas);
+
+            var loadedStream = resolveMomentStream(mom);
+            var ctx = canvas.getContext('2d');
+
+            if (loadedStream && loadedStream.video) {
+                var sourceVid = loadedStream.video;
+                var isExtracted = !!loadedStream._isExtracted;
+                canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom });
+
+                // Save play state before forcing play
+                if (wallMirrorState.prevPlayStates[loadedStream.id] === undefined) {
+                    wallMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
+                }
+                if (sourceVid.paused) sourceVid.play().catch(function() {});
+
+                // Only add one timeupdate handler per source video to prevent seek-fighting
+                var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
+                if (!wallSourceHandled[sourceKey]) {
+                    var loopHandler = (function(vid, m, extracted) {
+                        return function() {
+                            if (extracted) {
+                                if (vid.currentTime >= (m.end - m.start) - 0.1) vid.currentTime = 0;
+                            } else {
+                                if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
+                            }
+                        };
+                    })(sourceVid, mom, isExtracted);
+                    sourceVid.addEventListener('timeupdate', loopHandler);
+                    wallMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
+                    wallSourceHandled[sourceKey] = true;
+                } else {
+                    // Shared source: seek to this moment's start for initial frame
+                    sourceVid.currentTime = mom.start;
+                }
+            } else if (mom.thumbnailDataUrl) {
+                // Fallback: draw thumbnail on canvas
+                var thumbImg = new Image();
+                thumbImg.onload = function() {
+                    ctx.drawImage(thumbImg, 0, 0, 320, 180);
+                };
+                thumbImg.src = mom.thumbnailDataUrl;
+            } else {
+                ctx.fillStyle = 'rgba(237, 232, 224, 0.08)';
+                ctx.fillRect(0, 0, 320, 180);
+                ctx.fillStyle = 'rgba(237, 232, 224, 0.3)';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                var timeStr = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
+                ctx.fillText(timeStr, 160, 95);
+            }
+
+            // Click selects
+            cell.addEventListener('click', function() {
+                momentBrowserState.selectedIndex = idx;
+                updateWallSelection();
+            });
+
+            // Drag-to-reorder
+            (function(cellEl, cellIdx) {
+                cellEl.addEventListener('dragstart', function(ev) {
+                    dragSrcIdx = cellIdx;
+                    cellEl.classList.add('dragging');
+                    ev.dataTransfer.effectAllowed = 'move';
+                });
+                cellEl.addEventListener('dragend', function() {
+                    cellEl.classList.remove('dragging');
+                    grid.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+                });
+                cellEl.addEventListener('dragover', function(ev) {
+                    ev.preventDefault();
+                    ev.dataTransfer.dropEffect = 'move';
+                    cellEl.classList.add('drag-over');
+                });
+                cellEl.addEventListener('dragleave', function() {
+                    cellEl.classList.remove('drag-over');
+                });
+                cellEl.addEventListener('drop', function(ev) {
+                    ev.preventDefault();
+                    cellEl.classList.remove('drag-over');
+                    if (dragSrcIdx === null || dragSrcIdx === cellIdx) return;
+                    var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
+                    momentBrowserState.filteredMoments.splice(cellIdx, 0, moved);
+                    PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
+                    momentBrowserState.sortBy = 'manual';
+                    if (momentBrowserState.selectedIndex === dragSrcIdx) {
+                        momentBrowserState.selectedIndex = cellIdx;
+                    }
+                    renderCurrentBrowserMode();
+                    dragSrcIdx = null;
+                });
+            })(cell, idx);
+
+            grid.appendChild(cell);
+        });
+
+        viewport.appendChild(grid);
+        container.appendChild(viewport);
+
+        // Apply initial viewport pan
+        applyWallViewport(grid);
+
+        // Start rAF mirror loop for all canvases with live sources
+        var wallFrameSkip = 0;
+        function wallMirrorLoop() {
+            if (!momentBrowserState.open || momentBrowserState.mode !== 1) {
+                stopWallMirrors();
+                return;
+            }
+            // Throttle to ~30fps for performance with many canvases
+            wallFrameSkip = (wallFrameSkip + 1) % 2;
+            if (wallFrameSkip !== 0 && canvasRefs.length > 12) {
+                wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
+                return;
+            }
+            for (var i = 0; i < canvasRefs.length; i++) {
+                var ref = canvasRefs[i];
+                if (ref.sourceVid.readyState >= 2) {
+                    // Cover-crop: draw source video centered/cropped into 320x180 canvas
+                    var vw = ref.sourceVid.videoWidth || 320;
+                    var vh = ref.sourceVid.videoHeight || 180;
+                    var canvasAR = 320 / 180;
+                    var videoAR = vw / vh;
+                    var sx, sy, sw, sh;
+                    if (videoAR > canvasAR) {
+                        sh = vh;
+                        sw = vh * canvasAR;
+                        sx = (vw - sw) / 2;
+                        sy = 0;
+                    } else {
+                        sw = vw;
+                        sh = vw / canvasAR;
+                        sx = 0;
+                        sy = (vh - sh) / 2;
+                    }
+                    ref.ctx.drawImage(ref.sourceVid, sx, sy, sw, sh, 0, 0, 320, 180);
+                }
+            }
+            wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
+        }
+        if (canvasRefs.length > 0) {
+            wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
+        }
+    }
+
+    function applyWallViewport(gridEl) {
+        if (!gridEl) gridEl = document.querySelector('.moment-wall-canvas');
+        if (!gridEl) return;
+        gridEl.style.transform = 'translate(' + (-wallViewport.x) + 'px, ' + (-wallViewport.y) + 'px)';
+        gridEl.style.gridTemplateColumns = 'repeat(' + wallViewport.zoom + ', 1fr)';
+    }
+
+    function updateWallSelection() {
+        var cells = document.querySelectorAll('.moment-wall-cell');
+        cells.forEach(function(cell) {
+            var idx = parseInt(cell.dataset.index, 10);
+            cell.classList.toggle('selected', idx === momentBrowserState.selectedIndex);
+        });
+        var selected = document.querySelector('.moment-wall-cell.selected');
+        if (selected) selected.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    // Reel canvas mirror state
+    var reelMirror = { rafId: null, sourceVid: null, loopHandler: null, prevMuteStates: null };
+
+    function stopReelMirror() {
+        if (reelMirror.rafId) { cancelAnimationFrame(reelMirror.rafId); reelMirror.rafId = null; }
+        // Clean up crescendo handler properly (addEventListener-based)
+        teardownCrescendo();
+        // Restore mute states
+        // Pause extracted video (don't let it buffer in background)
+        if (reelMirror.sourceVid && reelMirror.sourceVid._plexdExtracted) {
+            reelMirror.sourceVid.pause();
+        }
+        // Restore mute states
+        if (reelMirror.prevMuteStates) {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (reelMirror.prevMuteStates[s.id] !== undefined) {
+                    s.video.muted = reelMirror.prevMuteStates[s.id];
+                }
+            });
+            reelMirror.prevMuteStates = null;
+        }
+        reelMirror.sourceVid = null;
+        reelMirror.loopHandler = null;
+    }
+
+    function renderMomentPlayer(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments match filters';
+            container.appendChild(empty);
+            return;
+        }
+        if (momentBrowserState.selectedIndex >= moments.length) {
+            momentBrowserState.selectedIndex = 0;
+        }
+        // Sync filmstrip cursor with playing index on render
+        momentBrowserState.playerCursor = momentBrowserState.selectedIndex;
+
+        var wrapper = document.createElement('div');
+        wrapper.className = 'moment-reel';
+
+        // Main video area — canvas mirror (zero new network connections)
+        var videoArea = document.createElement('div');
+        videoArea.className = 'moment-reel-main';
+        var canvas = document.createElement('canvas');
+        canvas.className = 'moment-reel-video';
+        canvas.id = 'moment-reel-canvas';
+        videoArea.appendChild(canvas);
+
+        // Info overlay
+        var info = document.createElement('div');
+        info.className = 'moment-reel-info';
+        info.id = 'moment-reel-info';
+        videoArea.appendChild(info);
+
+        // Hint: Space = random, Enter = play cursor, Arrows = browse
+        var hintEl = document.createElement('div');
+        hintEl.className = 'moment-reel-hint';
+        hintEl.textContent = 'Space: random \u2022 Enter: play selected \u2022 \u2190\u2192: browse';
+        videoArea.appendChild(hintEl);
+
+        wrapper.appendChild(videoArea);
+
+        // Filmstrip
+        var strip = document.createElement('div');
+        strip.className = 'moment-reel-strip';
+        strip.id = 'moment-player-strip';
+
+        var dragSrcIdx = null;
+        moments.forEach(function(mom, idx) {
+            var thumb = document.createElement('div');
+            var classes = 'moment-reel-thumb';
+            if (idx === momentBrowserState.selectedIndex) classes += ' active';
+            if (idx === momentBrowserState.playerCursor) classes += ' highlighted';
+            thumb.className = classes;
+            thumb.dataset.index = idx;
+            thumb.draggable = true;
+            if (mom.thumbnailDataUrl) {
+                var img = document.createElement('img');
+                img.src = mom.thumbnailDataUrl;
+                img.draggable = false;
+                thumb.appendChild(img);
+            }
+            // Click: move cursor AND play
+            thumb.addEventListener('click', function() {
+                momentBrowserState.playerCursor = idx;
+                momentBrowserState.selectedIndex = idx;
+                loadReelMoment();
+            });
+            // Drag-to-reorder
+            thumb.addEventListener('dragstart', function(ev) {
+                dragSrcIdx = idx;
+                thumb.classList.add('dragging');
+                ev.dataTransfer.effectAllowed = 'move';
+            });
+            thumb.addEventListener('dragend', function() {
+                thumb.classList.remove('dragging');
+                strip.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+            });
+            thumb.addEventListener('dragover', function(ev) {
+                ev.preventDefault();
+                ev.dataTransfer.dropEffect = 'move';
+                thumb.classList.add('drag-over');
+            });
+            thumb.addEventListener('dragleave', function() {
+                thumb.classList.remove('drag-over');
+            });
+            thumb.addEventListener('drop', function(ev) {
+                ev.preventDefault();
+                thumb.classList.remove('drag-over');
+                if (dragSrcIdx === null || dragSrcIdx === idx) return;
+                // Reorder: splice from source to target position
+                var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
+                momentBrowserState.filteredMoments.splice(idx, 0, moved);
+                // Persist order
+                PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
+                momentBrowserState.sortBy = 'manual';
+                // Update selectedIndex to follow the current playing moment
+                if (momentBrowserState.selectedIndex === dragSrcIdx) {
+                    momentBrowserState.selectedIndex = idx;
+                }
+                renderCurrentBrowserMode();
+                dragSrcIdx = null;
+            });
+            strip.appendChild(thumb);
+        });
+        wrapper.appendChild(strip);
+
+        container.appendChild(wrapper);
+        loadReelMoment();
+    }
+
+    function loadReelMoment(skipHistory) {
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        if (idx >= moments.length) return;
+        var mom = moments[idx];
+
+        // Push to playback history (unless navigating history itself)
+        if (!skipHistory) {
+            // Truncate forward history if we were mid-history
+            if (momentBrowserState.playerHistoryPos >= 0) {
+                momentBrowserState.playerHistory.length = momentBrowserState.playerHistoryPos + 1;
+            }
+            momentBrowserState.playerHistory.push(idx);
+            momentBrowserState.playerHistoryPos = -1; // at head
+        }
+
+        // Stop previous mirror
+        stopReelMirror();
+
+        var canvas = document.getElementById('moment-reel-canvas');
+
+        // Show thumbnail immediately so canvas is never black
+        if (canvas && mom.thumbnailDataUrl) {
+            var thumbCtx = canvas.getContext('2d');
+            var thumbImg = new Image();
+            thumbImg.onload = function() {
+                // Only draw if we haven't started the live mirror yet
+                if (!reelMirror.sourceVid || (reelMirror.sourceVid && reelMirror.sourceVid.readyState < 2)) {
+                    canvas.width = thumbImg.width || 1280;
+                    canvas.height = thumbImg.height || 720;
+                    thumbCtx.drawImage(thumbImg, 0, 0, canvas.width, canvas.height);
+                }
+            };
+            thumbImg.src = mom.thumbnailDataUrl;
+        }
+
+        var loadedStream = resolveMomentStream(mom);
+        if (loadedStream && loadedStream.video) {
+            var sourceVid = loadedStream.video;
+            var isExtracted = !!loadedStream._isExtracted;
+            var seekTarget = isExtracted ? 0 : mom.start;
+
+            // Seek + play: immediate if ready, deferred if still loading
+            if (sourceVid.readyState >= 1) {
+                sourceVid.currentTime = seekTarget;
+                if (sourceVid.paused) sourceVid.play().catch(function() {});
+            } else {
+                sourceVid.addEventListener('loadedmetadata', function() {
+                    sourceVid.currentTime = seekTarget;
+                    sourceVid.play().catch(function() {});
+                }, { once: true });
+            }
+
+            // Solo audio: mute all others, unmute source
+            // For extracted videos, just unmute the extracted source directly
+            if (!isExtracted) {
+                reelMirror.prevMuteStates = {};
+                PlexdStream.getAllStreams().forEach(function(s) {
+                    reelMirror.prevMuteStates[s.id] = s.video.muted;
+                    s.video.muted = (s.id !== loadedStream.id);
+                });
+            }
+            sourceVid.muted = false;
+
+            // Canvas mirror — draw source frames with no new network connections
+            if (canvas) {
+                var ctx = canvas.getContext('2d');
+                canvas.width = sourceVid.videoWidth || 1280;
+                canvas.height = sourceVid.videoHeight || 720;
+                reelMirror.sourceVid = sourceVid;
+                function drawFrame() {
+                    if (!momentBrowserState.open || momentBrowserState.mode !== 2) {
+                        stopReelMirror();
+                        return;
+                    }
+                    if (sourceVid.readyState >= 2) {
+                        // Update canvas size once video metadata is ready
+                        if (canvas.width !== sourceVid.videoWidth && sourceVid.videoWidth > 0) {
+                            canvas.width = sourceVid.videoWidth;
+                            canvas.height = sourceVid.videoHeight;
+                        }
+                        ctx.drawImage(sourceVid, 0, 0, canvas.width, canvas.height);
+                    }
+                    reelMirror.rafId = requestAnimationFrame(drawFrame);
+                }
+                reelMirror.rafId = requestAnimationFrame(drawFrame);
+            }
+
+            // Crescendo loop on source video, or native loop for extracted clips
+            if (isExtracted) {
+                sourceVid.loop = true;
+            } else {
+                setupCrescendo(sourceVid, mom);
+            }
+        }
+
+        // Update info
+        var infoEl = document.getElementById('moment-reel-info');
+        if (infoEl) {
+            var dur = (mom.end - mom.start).toFixed(1) + 's';
+            var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 25) + ' \u2014 ' : '';
+            infoEl.textContent = title + (idx + 1) + '/' + moments.length + ' \u2014 ' + dur + rating;
+        }
+
+        // Sync cursor to playing index
+        momentBrowserState.playerCursor = idx;
+
+        // Update filmstrip: .active = playing, .highlighted = cursor
+        var thumbs = document.querySelectorAll('.moment-reel-thumb');
+        thumbs.forEach(function(t) {
+            var tIdx = parseInt(t.dataset.index, 10);
+            t.classList.toggle('active', tIdx === idx);
+            t.classList.toggle('highlighted', tIdx === idx);
+        });
+        var activeThumb = document.querySelector('.moment-reel-thumb.active');
+        if (activeThumb) activeThumb.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+
+        PlexdMoments.recordPlay(mom.id);
+    }
+
+    function advancePlayer() {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) return;
+        // Always shuffle: pick a random moment (avoid repeating current)
+        var randomMom = PlexdMoments.getRandomMoment(moments);
+        if (randomMom) {
+            for (var i = 0; i < moments.length; i++) {
+                if (moments[i].id === randomMom.id) {
+                    momentBrowserState.selectedIndex = i;
+                    break;
+                }
+            }
+        }
+        loadReelMoment();
+    }
+
+    // Update filmstrip cursor visual (arrows browse without playing)
+    function updateFilmstripCursor() {
+        var cursor = momentBrowserState.playerCursor;
+        var thumbs = document.querySelectorAll('.moment-reel-thumb');
+        thumbs.forEach(function(t) {
+            t.classList.toggle('highlighted', parseInt(t.dataset.index, 10) === cursor);
+        });
+        var hlThumb = document.querySelector('.moment-reel-thumb.highlighted');
+        if (hlThumb) hlThumb.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    }
+
+    // Navigate playback history (direction: -1 = back/older, +1 = forward/newer)
+    function navigatePlayerHistory(direction) {
+        var history = momentBrowserState.playerHistory;
+        if (history.length === 0) return;
+        var pos = momentBrowserState.playerHistoryPos;
+        // pos = -1 means "at head" (most recent). Convert to actual index.
+        var actualPos = (pos === -1) ? history.length - 1 : pos;
+        var newPos = actualPos + direction;
+        if (newPos < 0 || newPos >= history.length) return;
+        momentBrowserState.playerHistoryPos = newPos;
+        momentBrowserState.selectedIndex = history[newPos];
+        loadReelMoment(true); // skipHistory=true so we don't push to history
+        showMessage('History ' + (newPos + 1) + '/' + history.length, 'info');
+    }
+
+    function stopCollageMirrors() {
+        if (collageMirrorState.rafId) {
+            cancelAnimationFrame(collageMirrorState.rafId);
+            collageMirrorState.rafId = null;
+        }
+        // Remove timeupdate loop handlers
+        collageMirrorState.handlers.forEach(function(h) {
+            if (h.video && h.handler) h.video.removeEventListener('timeupdate', h.handler);
+        });
+        collageMirrorState.handlers = [];
+        // Restore mute states
+        if (collageMirrorState.prevMuteStates) {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (collageMirrorState.prevMuteStates[s.id] !== undefined) {
+                    s.video.muted = collageMirrorState.prevMuteStates[s.id];
+                }
+            });
+            collageMirrorState.prevMuteStates = null;
+        }
+        // Restore play/pause states
+        if (collageMirrorState.prevPlayStates) {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (collageMirrorState.prevPlayStates[s.id] === true && !s.video.paused) {
+                    s.video.pause();
+                }
+            });
+            collageMirrorState.prevPlayStates = {};
+        }
+    }
+
+    function renderMomentCollage(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments match filters';
+            container.appendChild(empty);
+            return;
+        }
+
+        stopCollageMirrors();
+
+        var wrapper = document.createElement('div');
+        wrapper.className = 'moment-collage';
+
+        var count = Math.min(moments.length, 12);
+        if (momentBrowserState.selectedIndex >= count) {
+            momentBrowserState.selectedIndex = 0;
+        }
+        var cells = generateRandomCells(count);
+        var canvasRefs = []; // { canvas, ctx, sourceVid, mom, cellEl }
+
+        // Save mute states for solo audio
+        collageMirrorState.prevMuteStates = {};
+        PlexdStream.getAllStreams().forEach(function(s) {
+            collageMirrorState.prevMuteStates[s.id] = s.video.muted;
+        });
+
+        var collageSourceHandled = {};
+
+        for (var i = 0; i < count; i++) {
+            var mom = moments[i];
+            var cellData = cells[i];
+            var cell = document.createElement('div');
+            var isSelected = (i === momentBrowserState.selectedIndex);
+            cell.className = 'moment-collage-cell' + (isSelected ? ' selected' : '');
+            // Scattered position using generateRandomCells
+            var scaleStr = isSelected ? ' scale(1.1)' : '';
+            cell.style.cssText = 'left:' + cellData.x + '%;top:' + cellData.y + '%;'
+                + 'width:' + cellData.size + '%;'
+                + 'transform:rotate(' + cellData.rotate + 'deg)' + scaleStr + ';'
+                + 'opacity:' + (isSelected ? 1 : cellData.opacity) + ';'
+                + 'z-index:' + (isSelected ? 100 : i + 1);
+            cell.dataset.index = i;
+
+            var canvas = document.createElement('canvas');
+            canvas.width = 320;
+            canvas.height = 180;
+            cell.appendChild(canvas);
+
+            var loadedStream = resolveMomentStream(mom);
+            var ctx = canvas.getContext('2d');
+
+            if (loadedStream && loadedStream.video) {
+                var sourceVid = loadedStream.video;
+                var isExtracted = !!loadedStream._isExtracted;
+                canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom, cellEl: cell, streamId: loadedStream.id });
+
+                // Save play state before forcing play
+                if (collageMirrorState.prevPlayStates[loadedStream.id] === undefined) {
+                    collageMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
+                }
+                if (sourceVid.paused) sourceVid.play().catch(function() {});
+
+                // Only add one timeupdate handler per source video to prevent seek-fighting
+                var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
+                if (!collageSourceHandled[sourceKey]) {
+                    var loopHandler = (function(vid, m, extracted) {
+                        return function() {
+                            if (extracted) {
+                                if (vid.currentTime >= (m.end - m.start) - 0.1) vid.currentTime = 0;
+                            } else {
+                                if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
+                            }
+                        };
+                    })(sourceVid, mom, isExtracted);
+                    sourceVid.addEventListener('timeupdate', loopHandler);
+                    collageMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
+                    collageSourceHandled[sourceKey] = true;
+                }
+
+                // Solo audio: mute all except selected
+                sourceVid.muted = !isSelected;
+            } else if (mom.thumbnailDataUrl) {
+                var thumbImg = new Image();
+                (function(c, cx) {
+                    thumbImg.onload = function() { cx.drawImage(c, 0, 0, 320, 180); };
+                })(thumbImg, ctx);
+                thumbImg.src = mom.thumbnailDataUrl;
+            }
+
+            var info = document.createElement('div');
+            info.className = 'moment-collage-info';
+            var label = (mom.loved ? '\u2665 ' : '') + (mom.rating > 0 ? '\u2605' + mom.rating : '');
+            info.textContent = label || '\u00A0';
+            cell.appendChild(info);
+
+            // Click selects only
+            (function(idx) {
+                cell.addEventListener('click', function() {
+                    momentBrowserState.selectedIndex = idx;
+                    updateCollageSelection(canvasRefs, cells);
+                });
+            })(i);
+
+            wrapper.appendChild(cell);
+        }
+
+        container.appendChild(wrapper);
+
+        // Start rAF mirror loop
+        function collageMirrorLoop() {
+            if (!momentBrowserState.open || momentBrowserState.mode !== 3) {
+                stopCollageMirrors();
+                return;
+            }
+            for (var j = 0; j < canvasRefs.length; j++) {
+                var ref = canvasRefs[j];
+                if (ref.sourceVid.readyState >= 2) {
+                    var vw = ref.sourceVid.videoWidth || 320;
+                    var vh = ref.sourceVid.videoHeight || 180;
+                    var canvasAR = 320 / 180;
+                    var videoAR = vw / vh;
+                    var sx, sy, sw, sh;
+                    if (videoAR > canvasAR) {
+                        sh = vh; sw = vh * canvasAR; sx = (vw - sw) / 2; sy = 0;
+                    } else {
+                        sw = vw; sh = vw / canvasAR; sx = 0; sy = (vh - sh) / 2;
+                    }
+                    ref.ctx.drawImage(ref.sourceVid, sx, sy, sw, sh, 0, 0, 320, 180);
+                }
+            }
+            collageMirrorState.rafId = requestAnimationFrame(collageMirrorLoop);
+        }
+        if (canvasRefs.length > 0) {
+            collageMirrorState.rafId = requestAnimationFrame(collageMirrorLoop);
+        }
+    }
+
+    function updateCollageSelection(canvasRefs, cells) {
+        var idx = momentBrowserState.selectedIndex;
+        // Update visual selection
+        var cellEls = document.querySelectorAll('.moment-collage-cell');
+        cellEls.forEach(function(cell) {
+            var cellIdx = parseInt(cell.dataset.index, 10);
+            var isSelected = (cellIdx === idx);
+            var cellData = cells[cellIdx];
+            cell.classList.toggle('selected', isSelected);
+            var scaleStr = isSelected ? ' scale(1.1)' : '';
+            cell.style.cssText = 'left:' + cellData.x + '%;top:' + cellData.y + '%;'
+                + 'width:' + cellData.size + '%;'
+                + 'transform:rotate(' + cellData.rotate + 'deg)' + scaleStr + ';'
+                + 'opacity:' + (isSelected ? 1 : cellData.opacity) + ';'
+                + 'z-index:' + (isSelected ? 100 : cellIdx + 1);
+        });
+        // Solo audio: mute all, unmute selected
+        if (canvasRefs) {
+            for (var i = 0; i < canvasRefs.length; i++) {
+                var ref = canvasRefs[i];
+                var isThisSelected = (i === idx);
+                ref.sourceVid.muted = !isThisSelected;
+                if (isThisSelected) {
+                    // Seek to moment start on selection change
+                    ref.sourceVid.currentTime = ref.mom.start;
+                }
+            }
+        }
+    }
+
+    // ── Discovery mode ──────────────────────────────────────────────────
+
+    function stopDiscoveryMirror() {
+        if (discoveryMirrorState.rafId) {
+            cancelAnimationFrame(discoveryMirrorState.rafId);
+        }
+        if (discoveryMirrorState.video && discoveryMirrorState.handler) {
+            discoveryMirrorState.video.removeEventListener('timeupdate', discoveryMirrorState.handler);
+        }
+        discoveryMirrorState = { rafId: null, canvas: null, video: null, handler: null };
+    }
+
+    function renderMomentDiscovery(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments yet';
+            container.appendChild(empty);
+            return;
+        }
+
+        stopDiscoveryMirror();
+
+        var mom = PlexdMoments.getRandomMoment(moments);
+        if (!mom) return;
+
+        // Track which moment is showing so keyboard handlers can access it
+        momentBrowserState._discoveryMoment = mom;
+        // Sync selectedIndex to this moment's position in filtered list
+        for (var si = 0; si < moments.length; si++) {
+            if (moments[si].id === mom.id) { momentBrowserState.selectedIndex = si; break; }
+        }
+
+        var wrapper = document.createElement('div');
+        wrapper.className = 'moment-discovery';
+
+        var loadedStream = resolveMomentStream(mom);
+
+        if (loadedStream && loadedStream.video) {
+            var sourceVid = loadedStream.video;
+            var isExtracted = !!loadedStream._isExtracted;
+            var canvas = document.createElement('canvas');
+            canvas.width = 1280;
+            canvas.height = 720;
+            wrapper.appendChild(canvas);
+            var ctx = canvas.getContext('2d');
+
+            // Seek to moment start
+            if (isExtracted) {
+                sourceVid.currentTime = 0;
+            } else {
+                sourceVid.currentTime = mom.start;
+            }
+            if (sourceVid.paused) sourceVid.play().catch(function() {});
+
+            // Loop within moment range
+            var loopHandler = (function(vid, m, extracted) {
+                return function() {
+                    if (extracted) {
+                        if (vid.currentTime >= (m.end - m.start) - 0.1) vid.currentTime = 0;
+                    } else {
+                        if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
+                    }
+                };
+            })(sourceVid, mom, isExtracted);
+            sourceVid.addEventListener('timeupdate', loopHandler);
+            discoveryMirrorState.video = sourceVid;
+            discoveryMirrorState.handler = loopHandler;
+            discoveryMirrorState.canvas = canvas;
+
+            // rAF mirror loop
+            function discoveryMirrorLoop() {
+                if (!momentBrowserState.open || momentBrowserState.mode !== 4) {
+                    stopDiscoveryMirror();
+                    return;
+                }
+                if (sourceVid.readyState >= 2) {
+                    var vw = sourceVid.videoWidth || 1280;
+                    var vh = sourceVid.videoHeight || 720;
+                    var canvasAR = canvas.width / canvas.height;
+                    var videoAR = vw / vh;
+                    var sx, sy, sw, sh;
+                    if (videoAR > canvasAR) {
+                        sh = vh; sw = vh * canvasAR; sx = (vw - sw) / 2; sy = 0;
+                    } else {
+                        sw = vw; sh = vw / canvasAR; sx = 0; sy = (vh - sh) / 2;
+                    }
+                    ctx.drawImage(sourceVid, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+                }
+                discoveryMirrorState.rafId = requestAnimationFrame(discoveryMirrorLoop);
+            }
+            discoveryMirrorState.rafId = requestAnimationFrame(discoveryMirrorLoop);
+        } else if (mom.thumbnailDataUrl) {
+            // Fallback: show thumbnail image
+            var img = document.createElement('img');
+            img.src = mom.thumbnailDataUrl;
+            img.alt = 'Moment thumbnail';
+            wrapper.appendChild(img);
+        } else {
+            var placeholder = document.createElement('div');
+            placeholder.className = 'moment-browser-empty';
+            placeholder.textContent = 'Source not loaded';
+            wrapper.appendChild(placeholder);
+        }
+
+        // Info overlay at bottom
+        var info = document.createElement('div');
+        info.className = 'moment-discovery-info';
+        var duration = (mom.end - mom.start).toFixed(1);
+        var title = mom.sourceTitle || 'Untitled';
+        var stars = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+        var loved = mom.loved ? ' \u2665' : '';
+        info.textContent = title + ' \u00B7 ' + duration + 's' + stars + loved;
+        wrapper.appendChild(info);
+
+        // Hint overlay
+        var hint = document.createElement('div');
+        hint.className = 'moment-discovery-hint';
+        hint.textContent = 'Space = next random \u00B7 Enter = play in grid';
+        wrapper.appendChild(hint);
+
+        container.appendChild(wrapper);
+    }
+
+    // ── Cascade mode ─────────────────────────────────────────────────────
+
+    function renderMomentCascade(container) {
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'moment-browser-empty';
+            empty.textContent = 'No moments match filters';
+            container.appendChild(empty);
+            return;
+        }
+
+        var displayMoments = moments.slice(0, Math.min(moments.length, 20));
+        cascadeIndex = Math.min(momentBrowserState.selectedIndex, displayMoments.length - 1);
+        if (cascadeIndex < 0) cascadeIndex = 0;
+
+        var wrapper = document.createElement('div');
+        wrapper.className = 'moment-cascade';
+
+        // Show up to 4 cards from the current index
+        var cardsToShow = Math.min(4, displayMoments.length - cascadeIndex);
+
+        for (var i = 0; i < cardsToShow; i++) {
+            var momIdx = cascadeIndex + i;
+            var mom = displayMoments[momIdx];
+            var card = document.createElement('div');
+            card.className = 'moment-cascade-card' + (i === 0 ? ' front' : '');
+            card.dataset.index = String(momIdx);
+
+            // Position cards in a stacked perspective deck
+            var scale = 1.0 - (i * 0.12);
+            var offsetY = i * 50;
+            var opacity = 1.0 - (i * 0.2);
+            var zIndex = 4 - i;
+            card.style.transform = 'translateY(' + offsetY + 'px) scale(' + scale + ')';
+            card.style.opacity = String(opacity);
+            card.style.zIndex = String(zIndex);
+
+            // Thumbnail image
+            if (mom.thumbnailDataUrl) {
+                var img = document.createElement('img');
+                img.src = mom.thumbnailDataUrl;
+                img.alt = 'Moment thumbnail';
+                card.appendChild(img);
+            }
+
+            // Info overlay (full info on front card, minimal on back cards)
+            var cardInfo = document.createElement('div');
+            cardInfo.className = 'moment-cascade-info';
+            if (i === 0) {
+                var duration = (mom.end - mom.start).toFixed(1);
+                var title = mom.sourceTitle || 'Untitled';
+                var stars = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+                var loved = mom.loved ? ' \u2665' : '';
+                cardInfo.textContent = title + ' \u00B7 ' + duration + 's' + stars + loved;
+            } else {
+                cardInfo.textContent = (mom.sourceTitle || 'Untitled');
+            }
+            card.appendChild(cardInfo);
+
+            // Click on front card opens popup player
+            (function(idx, m) {
+                card.addEventListener('click', function() {
+                    if (idx === cascadeIndex) {
+                        showMomentPopupPlayer(m);
+                    } else {
+                        momentBrowserState.selectedIndex = idx;
+                        renderCurrentBrowserMode();
+                    }
+                });
+            })(momIdx, mom);
+
+            wrapper.appendChild(card);
+        }
+
+        // Navigation hint
+        var nav = document.createElement('div');
+        nav.className = 'moment-cascade-nav';
+        nav.textContent = (cascadeIndex + 1) + ' / ' + displayMoments.length + ' \u00B7 \u2190\u2192 navigate \u00B7 Enter = play';
+        wrapper.appendChild(nav);
+
+        container.appendChild(wrapper);
+    }
+
+    function playMomentInContext(moment) {
+        closeMomentBrowser();
+        // Find loaded stream matching moment's source
+        var allStreams = PlexdStream.getAllStreams();
+        var targetStream = null;
+        for (var i = 0; i < allStreams.length; i++) {
+            if (allStreams[i].id === moment.streamId) { targetStream = allStreams[i]; break; }
+        }
+        if (!targetStream) {
+            for (var j = 0; j < allStreams.length; j++) {
+                var sUrl = allStreams[j].serverUrl || allStreams[j].url;
+                if (sUrl === moment.sourceUrl) { targetStream = allStreams[j]; break; }
+            }
+        }
+        if (targetStream && targetStream.video) {
+            targetStream.video.currentTime = moment.peak;
+            PlexdStream.selectStream(targetStream.id);
+        } else {
+            showMessage('Source not loaded', 'info');
+        }
+        PlexdMoments.recordPlay(moment.id);
+    }
+
+    function stopPopupMirror() {
+        if (popupMirror.rafId) { cancelAnimationFrame(popupMirror.rafId); popupMirror.rafId = null; }
+        teardownCrescendo();
+        if (popupMirror.sourceVid && popupMirror.sourceVid._plexdExtracted) {
+            popupMirror.sourceVid.pause();
+        }
+        if (popupMirror.prevMuteStates) {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (popupMirror.prevMuteStates[s.id] !== undefined) {
+                    s.video.muted = popupMirror.prevMuteStates[s.id];
+                }
+            });
+            popupMirror.prevMuteStates = null;
+        }
+        if (popupMirror._canPlayCleanup) {
+            popupMirror._canPlayCleanup();
+            popupMirror._canPlayCleanup = null;
+        }
+        if (popupMirror._hlsInstance) {
+            popupMirror._hlsInstance.destroy();
+            popupMirror._hlsInstance = null;
+        }
+        popupMirror.sourceVid = null;
+    }
+
+    function closeMomentPopupPlayer() {
+        momentBrowserState.popupOpen = false;
+        stopPopupMirror();
+        var popup = document.getElementById('moment-popup-player');
+        if (popup) {
+            popup.querySelectorAll('video').forEach(function(v) {
+                v.pause();
+                // Revoke blob URL to free memory
+                if (v._blobUrl) { URL.revokeObjectURL(v._blobUrl); v._blobUrl = null; }
+                v.removeAttribute('src');
+                v.load(); // Reset media element
+            });
+            popup.remove();
+        }
+    }
+
+    function showMomentPopupPlayer(mom) {
+        closeMomentPopupPlayer();
+        momentBrowserState.popupOpen = true;
+
+        var popup = document.createElement('div');
+        popup.id = 'moment-popup-player';
+        popup.className = 'moment-popup-player';
+
+        // Backdrop click closes
+        popup.addEventListener('click', function(ev) {
+            if (ev.target === popup) closeMomentPopupPlayer();
+        });
+
+        var panel = document.createElement('div');
+        panel.className = 'moment-popup-panel';
+
+        // Info bar
+        var info = document.createElement('div');
+        info.className = 'moment-popup-info';
+        var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
+        var dur = (mom.end - mom.start).toFixed(1) + 's';
+        var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+        var loved = mom.loved ? ' \u2665' : '';
+        info.textContent = (title ? title + ' \u2014 ' : '') + dur + rating + loved;
+        panel.appendChild(info);
+
+        // Video element — fetch clip as blob first, then play via blob URL.
+        // This bypasses Chrome's media URL resolution which can spuriously error.
+        var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
+        var video = document.createElement('video');
+        video.className = 'moment-popup-video';
+        video.playsInline = true;
+        video.loop = true; // Extracted clips loop natively
+        video.muted = true; // Mute initially to satisfy autoplay policy
+        if (mom.thumbnailDataUrl) video.poster = mom.thumbnailDataUrl;
+        panel.appendChild(video);
+
+        console.log('[PopupPlayer] Fetching clip:', clipUrl);
+
+        fetch(clipUrl).then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.blob();
+        }).then(function(blob) {
+            // Check popup wasn't closed while we were fetching
+            if (!document.getElementById('moment-popup-player')) return;
+            var blobUrl = URL.createObjectURL(blob);
+            video._blobUrl = blobUrl; // Store for cleanup
+            video.src = blobUrl;
+            console.log('[PopupPlayer] Blob ready, size:', blob.size, 'playing...');
+            video.play().catch(function(e) {
+                console.warn('[PopupPlayer] play() rejected:', e.message);
+            });
+        }).catch(function(err) {
+            console.log('[PopupPlayer] Fetch failed:', err.message, '— trying source URL');
+            // Fall back to source URL (original stream) — use crescendo for time-range looping
+            video.loop = false;
+            var videoUrl = mom.sourceUrl;
+            if (!videoUrl || videoUrl.startsWith('blob:')) {
+                var infoEl = popup.querySelector('.moment-popup-info');
+                if (infoEl) infoEl.textContent = 'Clip not available \u2014 source expired';
+                return;
+            }
+            var proxiedUrl = (typeof getProxiedHlsUrl === 'function' && videoUrl.includes('.m3u8'))
+                ? getProxiedHlsUrl(videoUrl) : videoUrl;
+            if (proxiedUrl.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
+                var popupHls = new Hls();
+                popupHls.loadSource(proxiedUrl);
+                popupHls.attachMedia(video);
+                popupHls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.currentTime = mom.start;
+                    video.play().catch(function() {});
+                });
+                popupMirror._hlsInstance = popupHls;
+            } else {
+                video.src = proxiedUrl;
+                video.addEventListener('canplay', function() {
+                    video.currentTime = mom.start;
+                    video.play().catch(function() {});
+                }, { once: true });
+            }
+            setupCrescendo(video, mom);
+        });
+
+        var actions = document.createElement('div');
+        actions.className = 'moment-popup-actions';
+
+        var closeBtn = document.createElement('button');
+        closeBtn.className = 'moment-filter-btn';
+        closeBtn.textContent = 'Close';
+        closeBtn.addEventListener('click', closeMomentPopupPlayer);
+        actions.appendChild(closeBtn);
+
+        panel.appendChild(actions);
+        popup.appendChild(panel);
+
+        // 4) Insert into DOM — browser starts loading
+        var overlay = document.getElementById('encore-overlay');
+        if (overlay) overlay.appendChild(popup);
+        else document.querySelector('.plexd-app').appendChild(popup);
+
+        popupMirror.sourceVid = video;
+
+        PlexdMoments.recordPlay(mom.id);
+    }
+
+    function jumpToRandomMoment() {
+        var selected = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+        var moments;
+        if (selected) {
+            moments = PlexdMoments.getMomentsForStream(selected.id);
+            if (moments.length === 0) moments = PlexdMoments.getMomentsForSource(selected.serverUrl || selected.url);
+        }
+        if (!moments || moments.length === 0) {
+            moments = PlexdMoments.getAllMoments();
+        }
+        if (moments.length === 0) {
+            showMessage('No moments yet — press K to create one', 'info');
+            return;
+        }
+        var mom = PlexdMoments.getRandomMoment(moments);
+        if (mom) {
+            var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+            showMessage('Random moment' + rating, 'info');
+            playMomentInContext(mom);
+        }
+    }
+
+    function updateStageMomentStrip() {
+        // Remove existing strip
+        var existing = document.getElementById('stage-moment-strip');
+        if (existing) existing.remove();
+
+        if (!theaterMode || theaterScene !== 'stage') return;
+        if (!stageHeroId) return;
+
+        var stream = PlexdStream.getStream(stageHeroId);
+        if (!stream || !stream.video) return;
+        var duration = stream.video.duration;
+        if (!duration || !isFinite(duration)) return;
+
+        var moments = PlexdMoments.getMomentsForStream(stageHeroId);
+        if (moments.length === 0) {
+            moments = PlexdMoments.getMomentsForSource(stream.serverUrl || stream.url);
+        }
+        if (moments.length === 0) return;
+
+        var strip = document.createElement('div');
+        strip.id = 'stage-moment-strip';
+        strip.className = 'stage-moment-strip';
+
+        moments.forEach(function(mom) {
+            var block = document.createElement('div');
+            block.className = 'stage-moment-block';
+            var left = (mom.start / duration) * 100;
+            var width = ((mom.end - mom.start) / duration) * 100;
+            block.style.cssText = 'left:' + left + '%;width:' + Math.max(width, 0.5) + '%';
+            block.title = (mom.end - mom.start).toFixed(1) + 's' + (mom.rating > 0 ? ' \u2605' + mom.rating : '');
+
+            // Peak marker
+            var peak = document.createElement('div');
+            peak.className = 'stage-moment-peak';
+            var rangeDuration = mom.end - mom.start;
+            var peakPos = rangeDuration > 0 ? ((mom.peak - mom.start) / rangeDuration) * 100 : 50;
+            peak.style.left = peakPos + '%';
+            block.appendChild(peak);
+
+            block.addEventListener('click', function() {
+                stream.video.currentTime = mom.peak;
+                showMessage('Jumped to moment', 'info');
+            });
+
+            strip.appendChild(block);
+        });
+
+        document.body.appendChild(strip);
+    }
+
+    function jumpToAdjacentMoment(direction) {
+        if (!stageHeroId) return;
+        var stream = PlexdStream.getStream(stageHeroId);
+        if (!stream || !stream.video) return;
+
+        var moments = PlexdMoments.getMomentsForStream(stageHeroId);
+        if (moments.length === 0) {
+            moments = PlexdMoments.getMomentsForSource(stream.serverUrl || stream.url);
+        }
+        if (moments.length === 0) {
+            showMessage('No moments for this stream', 'info');
+            return;
+        }
+
+        // Sort by peak time
+        moments.sort(function(a, b) { return a.peak - b.peak; });
+        var currentTime = stream.video.currentTime;
+
+        var target = null;
+        if (direction > 0) {
+            // Next: find first moment with peak > currentTime + small buffer
+            for (var i = 0; i < moments.length; i++) {
+                if (moments[i].peak > currentTime + 0.5) { target = moments[i]; break; }
+            }
+            if (!target) target = moments[0]; // wrap around
+        } else {
+            // Prev: find last moment with peak < currentTime - small buffer
+            for (var j = moments.length - 1; j >= 0; j--) {
+                if (moments[j].peak < currentTime - 0.5) { target = moments[j]; break; }
+            }
+            if (!target) target = moments[moments.length - 1]; // wrap around
+        }
+
+        if (target) {
+            stream.video.currentTime = target.peak;
+            var rating = target.rating > 0 ? ' \u2605' + target.rating : '';
+            showMessage('Moment' + rating, 'info');
+            PlexdMoments.recordPlay(target.id);
+        }
+    }
+
+    function handleMomentBrowserKeyboard(e) {
+        if (!momentBrowserState.open) return false;
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        var mode = momentBrowserState.mode;
+
+        // Helper: cycle mode forward/backward
+        function cycleMode(dir) {
+            momentBrowserState.mode = (mode + dir + MOMENT_MODE_NAMES.length) % MOMENT_MODE_NAMES.length;
+            var modeSelect = document.querySelector('.moment-browser-mode-select');
+            if (modeSelect) modeSelect.value = String(momentBrowserState.mode);
+            renderCurrentBrowserMode();
+            showMessage(MOMENT_MODE_NAMES[momentBrowserState.mode] + ' mode', 'info');
+        }
+
+        // Helper: play/pause selected moment's source video
+        function toggleSelectedPlayback() {
+            if (moments.length === 0 || !moments[idx]) return;
+            var stream = resolveMomentStream(moments[idx]);
+            if (stream && stream.video) {
+                if (stream.video.paused) stream.video.play().catch(function() {});
+                else stream.video.pause();
+            }
+        }
+
+        // Helper: if popup is open, reload it with the new selection
+        function syncPopupToSelection() {
+            if (momentBrowserState.popupOpen && moments[momentBrowserState.selectedIndex]) {
+                var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
+                showMomentPopupPlayer(moments[momentBrowserState.selectedIndex]);
+                if (wasFullscreen) {
+                    var panel = document.querySelector('.moment-popup-panel');
+                    if (panel) panel.classList.add('fullscreen');
+                }
+            }
+        }
+
+        // Helper: get grid column count for up/down navigation
+        function getGridRowWidth() {
+            var gridEl = document.querySelector('.moment-grid');
+            if (!gridEl) return 5;
+            var cards = gridEl.querySelectorAll('.moment-card');
+            if (cards.length < 2) return 5;
+            var firstTop = cards[0].getBoundingClientRect().top;
+            for (var i = 1; i < cards.length; i++) {
+                if (cards[i].getBoundingClientRect().top > firstTop + 2) return i;
+            }
+            return cards.length;
+        }
+
+        switch (e.key) {
+            case 'Escape':
+            case 'j':
+            case 'J':
+                e.preventDefault();
+                // Close popup player first if open, don't exit browser
+                if (momentBrowserState.popupOpen) {
+                    closeMomentPopupPlayer();
+                    return true;
+                }
+                closeMomentBrowser();
+                if (theaterMode) {
+                    theaterScene = encorePreviousScene || 'casting';
+                    window._plexdTheaterScene = theaterScene;
+                    applyTheaterScene();
+                    updateModeIndicator();
+                }
+                return true;
+
+            case 'Tab':
+                // Tab/Shift+Tab cycles modes (more discoverable than E)
+                e.preventDefault();
+                cycleMode(e.shiftKey ? -1 : 1);
+                return true;
+
+            case 'e':
+                e.preventDefault();
+                cycleMode(1);
+                return true;
+            case 'E':
+                e.preventDefault();
+                cycleMode(-1);
+                return true;
+
+            case 'r':
+            case 'R':
+                // Reserved for future use
+                return true;
+
+            case 'ArrowRight':
+                e.preventDefault();
+                if (moments.length > 0) {
+                    if (mode === 2) {
+                        momentBrowserState.playerCursor = Math.min(momentBrowserState.playerCursor + 1, moments.length - 1);
+                        updateFilmstripCursor();
+                    } else {
+                        momentBrowserState.selectedIndex = Math.min(idx + 1, moments.length - 1);
+                        if (mode === 0) updateMomentGridSelection();
+                        else if (mode === 1) updateWallSelection();
+                        else renderCurrentBrowserMode();
+                        syncPopupToSelection();
+                    }
+                }
+                return true;
+
+            case 'ArrowLeft':
+                e.preventDefault();
+                if (moments.length > 0) {
+                    if (mode === 2) {
+                        momentBrowserState.playerCursor = Math.max(momentBrowserState.playerCursor - 1, 0);
+                        updateFilmstripCursor();
+                    } else {
+                        momentBrowserState.selectedIndex = Math.max(idx - 1, 0);
+                        if (mode === 0) updateMomentGridSelection();
+                        else if (mode === 1) updateWallSelection();
+                        else renderCurrentBrowserMode();
+                        syncPopupToSelection();
+                    }
+                }
+                return true;
+
+            case 'ArrowDown':
+                e.preventDefault();
+                if (moments.length > 0) {
+                    if (mode === 0) {
+                        var cols = getGridRowWidth();
+                        momentBrowserState.selectedIndex = Math.min(idx + cols, moments.length - 1);
+                        updateMomentGridSelection();
+                    } else if (mode === 1) {
+                        momentBrowserState.selectedIndex = Math.min(idx + wallViewport.zoom, moments.length - 1);
+                        updateWallSelection();
+                    } else if (mode === 2) {
+                        navigatePlayerHistory(-1);
+                    } else {
+                        momentBrowserState.selectedIndex = Math.min(idx + 1, moments.length - 1);
+                        renderCurrentBrowserMode();
+                    }
+                    syncPopupToSelection();
+                }
+                return true;
+
+            case 'ArrowUp':
+                e.preventDefault();
+                if (moments.length > 0) {
+                    if (mode === 0) {
+                        var cols2 = getGridRowWidth();
+                        momentBrowserState.selectedIndex = Math.max(idx - cols2, 0);
+                        updateMomentGridSelection();
+                    } else if (mode === 1) {
+                        momentBrowserState.selectedIndex = Math.max(idx - wallViewport.zoom, 0);
+                        updateWallSelection();
+                    } else if (mode === 2) {
+                        navigatePlayerHistory(1);
+                    } else {
+                        momentBrowserState.selectedIndex = Math.max(idx - 1, 0);
+                        renderCurrentBrowserMode();
+                    }
+                    syncPopupToSelection();
+                }
+                return true;
+
+            case '+':
+            case '=':
+                // Wall: zoom in (fewer, larger cells)
+                e.preventDefault();
+                if (mode === 1) {
+                    wallViewport.zoom = Math.max(2, wallViewport.zoom - 1);
+                    applyWallViewport();
+                    showMessage('Wall zoom: ' + wallViewport.zoom + 'x' + wallViewport.zoom, 'info');
+                }
+                return true;
+
+            case '-':
+                // Wall: zoom out (more, smaller cells)
+                e.preventDefault();
+                if (mode === 1) {
+                    wallViewport.zoom = Math.min(8, wallViewport.zoom + 1);
+                    applyWallViewport();
+                    showMessage('Wall zoom: ' + wallViewport.zoom + 'x' + wallViewport.zoom, 'info');
+                }
+                return true;
+
+            case 'Enter':
+                e.preventDefault();
+                if (momentBrowserState.popupOpen) {
+                    // Second Enter closes the popup (toggle)
+                    closeMomentPopupPlayer();
+                    return true;
+                }
+                if (moments.length > 0 && moments[idx]) {
+                    if (mode === 2) {
+                        // Player mode: Enter plays the filmstrip cursor position
+                        momentBrowserState.selectedIndex = momentBrowserState.playerCursor;
+                        loadReelMoment();
+                    } else if (mode === 4) {
+                        // Discovery: play in main grid context
+                        var discoveryMom = momentBrowserState._discoveryMoment;
+                        if (discoveryMom) playMomentInContext(discoveryMom);
+                    } else {
+                        // Grid/Wall/Collage/Cascade: popup player overlay
+                        showMomentPopupPlayer(moments[idx]);
+                    }
+                }
+                return true;
+
+            case 'Delete':
+            case 'Backspace':
+            case 'x':
+            case 'X':
+                e.preventDefault();
+                if (moments.length > 0 && moments[idx]) {
+                    var wasPopupOpen = momentBrowserState.popupOpen;
+                    var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
+                    if (wasPopupOpen) closeMomentPopupPlayer();
+                    PlexdMoments.deleteMoment(moments[idx].id);
+                    momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                    if (momentBrowserState.selectedIndex >= momentBrowserState.filteredMoments.length) {
+                        momentBrowserState.selectedIndex = Math.max(0, momentBrowserState.filteredMoments.length - 1);
+                    }
+                    renderCurrentBrowserMode();
+                    updateMomentBrowserTitle();
+                    showMessage('Moment deleted', 'info');
+                    // Re-open popup with next clip if it was open
+                    if (wasPopupOpen && momentBrowserState.filteredMoments.length > 0) {
+                        showMomentPopupPlayer(momentBrowserState.filteredMoments[momentBrowserState.selectedIndex]);
+                        if (wasFullscreen) {
+                            var panel = document.querySelector('.moment-popup-panel');
+                            if (panel) panel.classList.add('fullscreen');
+                        }
+                    }
+                }
+                return true;
+
+            case '/':
+                e.preventDefault();
+                if (moments.length > 0) {
+                    momentBrowserState.selectedIndex = Math.floor(Math.random() * moments.length);
+                    if (mode === 0) updateMomentGridSelection();
+                    else if (mode === 1) updateWallSelection();
+                    else renderCurrentBrowserMode();
+                }
+                return true;
+
+            case 'f':
+            case 'F':
+                e.preventDefault();
+                if (momentBrowserState.popupOpen) {
+                    var panel = document.querySelector('.moment-popup-panel');
+                    if (panel) panel.classList.toggle('fullscreen');
+                }
+                return true;
+
+            case 'q':
+            case 'Q':
+                e.preventDefault();
+                handleDoubleTap('moment_love', function() {
+                    // Single tap — toggle loved on selected clip
+                    var curMoments = momentBrowserState.filteredMoments;
+                    var curIdx = momentBrowserState.selectedIndex;
+                    if (curMoments.length > 0 && curMoments[curIdx]) {
+                        var nowLoved = !curMoments[curIdx].loved;
+                        PlexdMoments.updateMoment(curMoments[curIdx].id, { loved: nowLoved });
+                        showMessage(nowLoved ? '\u2665 Loved' : '\u2665 Unloved', 'info');
+                        momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                        renderCurrentBrowserMode();
+                        updateSelectedMomentStatus();
+                    }
+                }, function() {
+                    // Double tap — toggle loved filter
+                    momentBrowserState.filterLoved = !momentBrowserState.filterLoved;
+                    showMessage(momentBrowserState.filterLoved ? 'Filter: \u2665 loved only' : 'Filter: all', 'info');
+                    refreshMomentBrowser();
+                    // Update toolbar loved button
+                    var lovedBtn = document.querySelector('.moment-loved-btn');
+                    if (lovedBtn) lovedBtn.classList.toggle('active', momentBrowserState.filterLoved);
+                });
+                return true;
+
+            case ' ':
+                e.preventDefault();
+                // Popup open: toggle play/pause of the popup's source video
+                if (momentBrowserState.popupOpen && popupMirror.sourceVid) {
+                    if (popupMirror.sourceVid.paused) popupMirror.sourceVid.play().catch(function() {});
+                    else popupMirror.sourceVid.pause();
+                    return true;
+                }
+                if (mode === 2) {
+                    // Player: Space always plays random
+                    advancePlayer();
+                } else if (mode === 4) {
+                    // Discovery: pick new random moment and re-render
+                    renderCurrentBrowserMode();
+                } else {
+                    // Grid/Wall/Collage/Cascade: play/pause selected moment's source
+                    toggleSelectedPlayback();
+                }
+                return true;
+        }
+
+        // Rating keys 0-9: single = rate clip, double = filter by min rating
+        if (/^[0-9]$/.test(e.key)) {
+            e.preventDefault();
+            var pressedRating = parseInt(e.key, 10);
+            handleDoubleTap('moment_rate_' + e.key, function() {
+                // Single tap — rate the selected moment
+                var curMoments = momentBrowserState.filteredMoments;
+                var curIdx = momentBrowserState.selectedIndex;
+                if (curMoments.length > 0 && curMoments[curIdx]) {
+                    PlexdMoments.updateMoment(curMoments[curIdx].id, { rating: pressedRating });
+                    showMessage(pressedRating > 0 ? '\u2605' + pressedRating : 'Rating cleared', 'info');
+                    momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                    renderCurrentBrowserMode();
+                    updateSelectedMomentStatus();
+                }
+            }, function() {
+                // Double tap — toggle min rating filter
+                momentBrowserState.filterMinRating = momentBrowserState.filterMinRating === pressedRating ? 0 : pressedRating;
+                var label = momentBrowserState.filterMinRating > 0
+                    ? 'Filter: \u2605' + momentBrowserState.filterMinRating + '+'
+                    : 'Filter cleared';
+                showMessage(label, 'info');
+                refreshMomentBrowser();
+                // Update toolbar rating buttons
+                var ratingBtns = document.querySelectorAll('.moment-rating-btn');
+                var min = momentBrowserState.filterMinRating;
+                ratingBtns.forEach(function(b) {
+                    var val = parseInt(b.dataset.rating, 10);
+                    b.classList.toggle('active', min > 0 && val === min);
+                    b.classList.toggle('in-range', min > 0 && val > min);
+                });
+            });
+            return true;
+        }
+
+        // Consume all other keys when browser is open
+        e.preventDefault();
+        return true;
+    }
+
+    function closeMomentBrowser() {
+        momentBrowserState.open = false;
+        closeMomentPopupPlayer();
+        stopReelMirror();
+        stopWallMirrors();
+        stopCollageMirrors();
+        stopDiscoveryMirror();
+        var overlay = document.getElementById('encore-overlay');
         if (overlay) {
             overlay.querySelectorAll('video').forEach(function(v) {
-                v.pause();
-                v.removeAttribute('src');
-                v.load();
+                if (v._hlsInstance) { v._hlsInstance.destroy(); v._hlsInstance = null; }
+                v.pause(); v.src = '';
             });
             overlay.remove();
+        }
+        // Clean up all extracted/fallback video elements
+        Object.keys(_extractedVideos).forEach(function(momentId) {
+            var vid = _extractedVideos[momentId];
+            if (vid._hlsInstance) { vid._hlsInstance.destroy(); vid._hlsInstance = null; }
+            vid.pause();
+            vid.removeAttribute('src');
+            vid.load();
+            if (vid.parentNode) vid.parentNode.removeChild(vid);
+        });
+        _extractedVideos = {};
+
+        // Resume streams that were playing before browser opened
+        if (momentBrowserState._pausedStreams) {
+            momentBrowserState._pausedStreams.forEach(function(id) {
+                PlexdStream.resumeStream(id);
+            });
+            momentBrowserState._pausedStreams = null;
+        }
+    }
+
+    // Backward compat aliases
+    var showEncoreView = showMomentBrowser;
+    var closeEncoreView = closeMomentBrowser;
+
+    /**
+     * Auto-detect moment range using canvas pixel diff.
+     * Creates an offscreen video probe, seeks through +/-15s window at 0.5s intervals,
+     * compares consecutive frames to find scene cuts and stillness boundaries.
+     * Silently updates moment start/end if better boundaries found.
+     */
+    function autoDetectRange(momentId, stream) {
+        var moment = PlexdMoments.getMoment(momentId);
+        if (!moment) return;
+        var peak = moment.peak;
+        var videoSrc = stream.hls ? (stream.sourceUrl || stream.url) : (stream.video ? stream.video.src : null);
+        if (!videoSrc) return;
+
+        var probe = document.createElement('video');
+        probe.muted = true;
+        probe.playsInline = true;
+        probe.crossOrigin = 'anonymous';
+        probe.preload = 'auto';
+        probe.src = videoSrc;
+
+        var canvas = document.createElement('canvas');
+        canvas.width = 160;
+        canvas.height = 90;
+        var ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        var WINDOW = 15; // seconds each side of peak
+        var STEP = 0.5;
+        var SCENE_CUT_THRESHOLD = 0.30; // 30% pixel diff = scene cut
+        var STILLNESS_THRESHOLD = 0.02; // 2% pixel diff = stillness
+
+        var sampleTimes = [];
+        var duration = stream.video ? stream.video.duration : 0;
+        var rangeStart = Math.max(0, peak - WINDOW);
+        var rangeEnd = duration ? Math.min(duration, peak + WINDOW) : peak + WINDOW;
+        for (var t = rangeStart; t <= rangeEnd; t += STEP) {
+            sampleTimes.push(t);
+        }
+        if (sampleTimes.length < 3) { cleanup(); return; }
+
+        var frames = [];
+        var currentIdx = 0;
+
+        probe.addEventListener('error', cleanup);
+
+        probe.addEventListener('loadedmetadata', function() {
+            seekNext();
+        }, { once: true });
+
+        function seekNext() {
+            if (currentIdx >= sampleTimes.length) {
+                analyzeFrames();
+                return;
+            }
+            probe.currentTime = sampleTimes[currentIdx];
+        }
+
+        probe.addEventListener('seeked', function onSeeked() {
+            try {
+                ctx.drawImage(probe, 0, 0, 160, 90);
+                var imgData = ctx.getImageData(0, 0, 160, 90);
+                frames.push({ time: sampleTimes[currentIdx], data: imgData.data });
+            } catch (e) {
+                // CORS tainted canvas — fall back to default range
+                probe.removeEventListener('seeked', onSeeked);
+                cleanup();
+                return;
+            }
+            currentIdx++;
+            seekNext();
+        });
+
+        function analyzeFrames() {
+            if (frames.length < 3) { cleanup(); return; }
+
+            // Compute diffs between consecutive frames
+            var diffs = [];
+            for (var i = 1; i < frames.length; i++) {
+                var diff = pixelDiff(frames[i - 1].data, frames[i].data);
+                diffs.push({ time: frames[i].time, prevTime: frames[i - 1].time, diff: diff });
+            }
+
+            // Find peak index in sampleTimes
+            var peakIdx = 0;
+            var minDist = Infinity;
+            for (var j = 0; j < diffs.length; j++) {
+                var d = Math.abs(diffs[j].time - peak);
+                if (d < minDist) { minDist = d; peakIdx = j; }
+            }
+
+            // Expand left from peak until scene cut or stillness
+            var newStart = moment.start;
+            for (var left = peakIdx; left >= 0; left--) {
+                if (diffs[left].diff > SCENE_CUT_THRESHOLD) {
+                    newStart = diffs[left].time;
+                    break;
+                }
+                if (diffs[left].diff < STILLNESS_THRESHOLD && left < peakIdx - 2) {
+                    newStart = diffs[left].time;
+                    break;
+                }
+                newStart = diffs[left].prevTime;
+            }
+
+            // Expand right from peak until scene cut or stillness
+            var newEnd = moment.end;
+            for (var right = peakIdx; right < diffs.length; right++) {
+                if (diffs[right].diff > SCENE_CUT_THRESHOLD) {
+                    newEnd = diffs[right].prevTime;
+                    break;
+                }
+                if (diffs[right].diff < STILLNESS_THRESHOLD && right > peakIdx + 2) {
+                    newEnd = diffs[right].time;
+                    break;
+                }
+                newEnd = diffs[right].time;
+            }
+
+            // Only update if we found wider boundaries than default
+            if (newStart < moment.start || newEnd > moment.end) {
+                PlexdMoments.updateMoment(momentId, { start: newStart, end: newEnd });
+            }
+            cleanup();
+        }
+
+        function pixelDiff(data1, data2) {
+            var total = data1.length / 4; // RGBA pixels
+            var diffCount = 0;
+            for (var i = 0; i < data1.length; i += 4) {
+                var dr = Math.abs(data1[i] - data2[i]);
+                var dg = Math.abs(data1[i + 1] - data2[i + 1]);
+                var db = Math.abs(data1[i + 2] - data2[i + 2]);
+                if ((dr + dg + db) / 3 > 30) diffCount++;
+            }
+            return diffCount / total;
+        }
+
+        function cleanup() {
+            probe.pause();
+            probe.removeAttribute('src');
+            probe.load();
+            probe = null;
         }
     }
 
@@ -2777,6 +5387,7 @@ const PlexdApp = (function() {
         if (mosaicMode && targetStream.id !== mosaicStreamId) {
             destroyMosaicOverlay();
             mosaicMode = true; // Keep mode on after destroy resets it
+            window._plexdMosaicMode = true;
             const app = document.querySelector('.plexd-app');
             if (app) app.classList.add('mosaic-mode');
             createMosaicOverlay(targetStream);
@@ -2785,6 +5396,7 @@ const PlexdApp = (function() {
 
     // Mosaic mode state (simpler version with fewer, non-overlapping copies)
     let mosaicMode = false;
+    window._plexdMosaicMode = false;
     let mosaicOverlay = null;
     let mosaicAnimationFrame = null;
     let mosaicPausedStreams = []; // Track streams we paused for power efficiency
@@ -2820,6 +5432,7 @@ const PlexdApp = (function() {
         }
 
         mosaicMode = true;
+        window._plexdMosaicMode = true;
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.add('mosaic-mode');
         createMosaicOverlay(targetStream);
@@ -3046,6 +5659,7 @@ const PlexdApp = (function() {
         const app = document.querySelector('.plexd-app');
         if (app) app.classList.remove('mosaic-mode');
         mosaicMode = false;
+        window._plexdMosaicMode = false;
         mosaicStreamId = null;
     }
 
@@ -3093,20 +5707,22 @@ const PlexdApp = (function() {
      * Toggle pause/play all streams
      */
     function togglePauseAll() {
-        const paused = PlexdStream.togglePauseAll();
-        const btn = document.getElementById('pause-all-btn');
+        var targets = getActiveStreams();
+        var paused = PlexdStream.togglePauseAll(targets);
+        var btn = document.getElementById('pause-all-btn');
         if (btn) btn.textContent = paused ? '▶' : '⏸';
-        showMessage(paused ? 'All paused' : 'All playing', 'info');
+        showMessage(paused ? targets.length + ' paused' : targets.length + ' playing', 'info');
     }
 
     /**
      * Toggle mute all streams
      */
     function toggleMuteAll() {
-        const muted = PlexdStream.toggleMuteAll();
-        const btn = document.getElementById('mute-all-btn');
+        var targets = getActiveStreams();
+        var muted = PlexdStream.toggleMuteAll(targets);
+        var btn = document.getElementById('mute-all-btn');
         if (btn) btn.textContent = muted ? '🔊' : '🔇';
-        showMessage(muted ? 'All muted' : 'All unmuted', 'info');
+        showMessage(muted ? targets.length + ' muted' : targets.length + ' unmuted', 'info');
     }
 
     /**
@@ -3636,11 +6252,6 @@ const PlexdApp = (function() {
      * Handle keyboard shortcuts
      */
     function handleKeyboard(e) {
-        // Log all key events to debug fullscreen navigation
-        if (e.key.startsWith('Arrow')) {
-            console.log(`[Plexd] handleKeyboard: received ${e.key}, target=${e.target.tagName}, activeElement=${document.activeElement?.tagName || 'null'}, className=${document.activeElement?.className || 'null'}`);
-        }
-
         // If a modal is open, avoid accidental destructive/global shortcuts.
         // Let modal-specific handlers deal with Escape/etc.
         if (document.querySelector('.plexd-modal-overlay') && e.key !== 'Escape') {
@@ -3656,6 +6267,9 @@ const PlexdApp = (function() {
 
         // Handle Sets panel keyboard navigation first
         if (handleSetsPanelKeyboard(e)) return;
+
+        // Moment Browser consumes all keys when open
+        if (handleMomentBrowserKeyboard(e)) return;
 
         const selected = PlexdStream.getSelectedStream();
         const fullscreenStream = PlexdStream.getFullscreenStream();
@@ -3709,6 +6323,7 @@ const PlexdApp = (function() {
                         showMessage(anyContain ? 'All: Crop (fill)' : 'All: Contain (full frame)', 'info');
                     }
                     return;
+                case '÷': // macOS Option+/ produces ÷
                 case '/':
                     // Opt+/ = reload selected stream, double-tap = reload all
                     e.preventDefault();
@@ -3732,17 +6347,7 @@ const PlexdApp = (function() {
                 // Tab = Theater scene advance, Shift+Tab = previous scene
                 if (theaterMode) {
                     e.preventDefault();
-                    var tabShiftHeld = e.shiftKey;
-                    handleDoubleTap('tab', function() {
-                        if (tabShiftHeld) { prevScene(); } else { nextScene(); }
-                    }, function() {
-                        // Double-tap Tab: random seek (context-dependent)
-                        if (theaterScene === 'stage' || theaterScene === 'climax') {
-                            randomSeekSelected();
-                        } else {
-                            randomSeekAll();
-                        }
-                    });
+                    if (e.shiftKey) { prevScene(); } else { nextScene(); }
                 }
                 break;
             case ' ':
@@ -3836,13 +6441,21 @@ const PlexdApp = (function() {
                 break;
             case 'ArrowRight':
                 e.preventDefault();
-                handleArrowNav('right', fullscreenStream, selected);
-                updateBugEyeIfNeeded();
+                if (e.shiftKey && theaterMode && theaterScene === 'stage') {
+                    jumpToAdjacentMoment(1);
+                } else {
+                    handleArrowNav('right', fullscreenStream, selected);
+                    updateBugEyeIfNeeded();
+                }
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
-                handleArrowNav('left', fullscreenStream, selected);
-                updateBugEyeIfNeeded();
+                if (e.shiftKey && theaterMode && theaterScene === 'stage') {
+                    jumpToAdjacentMoment(-1);
+                } else {
+                    handleArrowNav('left', fullscreenStream, selected);
+                    updateBugEyeIfNeeded();
+                }
                 break;
             case 'ArrowUp':
                 e.preventDefault();
@@ -4269,41 +6882,100 @@ const PlexdApp = (function() {
                 break;
             case 'j':
             case 'J':
-                if (!theaterMode) break;
+                // J opens Moment Browser in both modes
                 e.preventDefault();
-                if (theaterScene === 'encore') {
-                    // Exit Encore, return to previous scene
-                    setTheaterScene(encorePreviousScene || 'casting');
-                    encorePreviousScene = null;
+                if (momentBrowserState.open) {
+                    closeMomentBrowser();
+                    if (theaterMode) {
+                        theaterScene = encorePreviousScene || 'casting';
+                        window._plexdTheaterScene = theaterScene;
+                        applyTheaterScene();
+                        updateModeIndicator();
+                    }
                 } else {
-                    // Enter Encore
-                    encorePreviousScene = theaterScene;
-                    setTheaterScene('encore');
+                    if (theaterMode) encorePreviousScene = theaterScene;
+                    showMomentBrowser();
                 }
                 break;
             case 'k':
             case 'K':
-                if (!theaterMode) break;
                 e.preventDefault();
+                if (e.shiftKey) {
+                    // Shift+K: capture moments for all visible streams at current position
+                    var targets = getActiveStreams();
+                    var captured = 0;
+                    targets.forEach(function(s) {
+                        if (!s.video || s.video.currentTime === undefined) return;
+                        var peakT = s.video.currentTime;
+                        var srcUrl = s.serverUrl || s.url;
+                        var existing = PlexdMoments.getMomentsForSource(srcUrl);
+                        if (existing.some(function(m) { return Math.abs(m.peak - peakT) < 1; })) return;
+                        var thumb = PlexdStream.captureStreamFrame(s.id);
+                        var r = PlexdStream.getRating(s.url, s.fileName) || 0;
+                        var l = PlexdStream.isFavorite(s.id);
+                        var dur = s.video.duration || 0;
+                        var newMom = PlexdMoments.createMoment({
+                            sourceUrl: srcUrl,
+                            sourceFileId: extractServerFileId(srcUrl),
+                            sourceTitle: s.fileName || s.url,
+                            streamId: s.id,
+                            start: Math.max(0, peakT - 5),
+                            end: dur ? Math.min(dur, peakT + 5) : peakT + 5,
+                            peak: peakT,
+                            rating: r,
+                            loved: l,
+                            thumbnailDataUrl: thumb
+                        });
+                        captured++;
+                        queueMomentExtraction(newMom, s);
+                    });
+                    showMessage('Captured ' + captured + ' moment' + (captured !== 1 ? 's' : ''), 'success');
+                    break;
+                }
                 {
-                    const ts = fullscreenStream || selected;
+                    var ts = fullscreenStream || selected;
                     if (ts && ts.video) {
-                        // Deduplicate: skip if same stream within 1 second of existing bookmark
-                        var isDupe = bookmarks.some(function(b) {
-                            return b.streamId === ts.id && Math.abs(b.timestamp - ts.video.currentTime) < 1;
+                        var peakTime = ts.video.currentTime;
+                        var sourceUrl = ts.serverUrl || ts.url;
+                        // Deduplicate: skip if same source within 1 second of existing moment
+                        var existingMoments = PlexdMoments.getMomentsForSource(sourceUrl);
+                        var isDupe = existingMoments.some(function(m) {
+                            return Math.abs(m.peak - peakTime) < 1;
                         });
                         if (isDupe) {
-                            showMessage('Already bookmarked', 'info');
+                            showMessage('Already captured', 'info');
                             break;
                         }
-                        bookmarks.push({
+                        // Capture thumbnail
+                        var thumbnailDataUrl = PlexdStream.captureStreamFrame(ts.id);
+                        // Get rating and loved status
+                        var rating = PlexdStream.getRating(ts.url, ts.fileName) || 0;
+                        var loved = PlexdStream.isFavorite(ts.id);
+                        // Calculate default range: peak +/- 5s, clamped to duration
+                        var duration = ts.video.duration || 0;
+                        var rangeStart = Math.max(0, peakTime - 5);
+                        var rangeEnd = duration ? Math.min(duration, peakTime + 5) : peakTime + 5;
+                        var sourceFileId = extractServerFileId(sourceUrl);
+                        var moment = PlexdMoments.createMoment({
+                            sourceUrl: sourceUrl,
+                            sourceFileId: sourceFileId,
+                            sourceTitle: ts.fileName || ts.url,
                             streamId: ts.id,
-                            timestamp: ts.video.currentTime,
-                            bookmarkedAt: Date.now()
+                            start: rangeStart,
+                            end: rangeEnd,
+                            peak: peakTime,
+                            rating: rating,
+                            loved: loved,
+                            thumbnailDataUrl: thumbnailDataUrl
                         });
-                        const m = Math.floor(ts.video.currentTime / 60);
-                        const s = Math.floor(ts.video.currentTime % 60);
-                        showMessage('Bookmarked at ' + m + ':' + String(s).padStart(2, '0'), 'success');
+                        var mm = Math.floor(peakTime / 60);
+                        var ss = Math.floor(peakTime % 60);
+                        showMessage('Moment captured at ' + mm + ':' + String(ss).padStart(2, '0'), 'success');
+                        // Auto-detect range asynchronously (Task 3)
+                        if (typeof autoDetectRange === 'function') {
+                            autoDetectRange(moment.id, ts);
+                        }
+                        queueMomentExtraction(moment, ts);
                     } else {
                         showMessage('Select a stream first', 'warning');
                     }
@@ -4395,9 +7067,13 @@ const PlexdApp = (function() {
                 rewindAll();
                 break;
             case '?':
-                // ? : Toggle shortcuts overlay (standard help key)
+                // ? : Toggle shortcuts overlay, ?? : Jump to random moment
                 e.preventDefault();
-                toggleShortcutsOverlay();
+                handleDoubleTap('question', function() {
+                    toggleShortcutsOverlay();
+                }, function() {
+                    jumpToRandomMoment();
+                });
                 break;
         }
     }
@@ -4426,6 +7102,7 @@ const PlexdApp = (function() {
                 stageHeroId = streams[nextIdx].id;
                 PlexdStream.selectStream(stageHeroId);
                 updateLayout();
+                updateStageMomentStrip();
                 return;
             }
             // Up/Down: navigate within ensemble
@@ -4510,6 +7187,7 @@ const PlexdApp = (function() {
         if (mosaicMode && mosaicOverlay) {
             destroyMosaicOverlay();
             mosaicMode = true; // Keep the mode on
+            window._plexdMosaicMode = true;
             if (app) app.classList.add('mosaic-mode');
             createMosaicOverlay(stream);
         }
@@ -4529,9 +7207,8 @@ const PlexdApp = (function() {
     function toggleShortcutsOverlay() {
         const shortcuts = document.querySelector('.plexd-shortcuts');
         if (shortcuts) {
-            const isHidden = shortcuts.style.display === 'none';
-            shortcuts.style.display = isHidden ? '' : 'none';
-            localStorage.setItem('plexd_shortcuts_hidden', isHidden ? 'false' : 'true');
+            const isHidden = shortcuts.classList.toggle('shortcuts-hidden');
+            localStorage.setItem('plexd_shortcuts_hidden', isHidden ? 'true' : 'false');
         }
     }
 
@@ -4542,7 +7219,7 @@ const PlexdApp = (function() {
         const shortcuts = document.querySelector('.plexd-shortcuts');
         const hidden = localStorage.getItem('plexd_shortcuts_hidden') === 'true';
         if (shortcuts && hidden) {
-            shortcuts.style.display = 'none';
+            shortcuts.classList.add('shortcuts-hidden');
         }
     }
 
@@ -4576,6 +7253,16 @@ const PlexdApp = (function() {
             return PlexdStream.getFavoriteStreams();
         }
         return PlexdStream.getStreamsByRating(viewMode);
+    }
+
+    /**
+     * Get the "active set" of streams for bulk operations.
+     * Focus mode → just that clip. Otherwise → filtered view set.
+     */
+    function getActiveStreams() {
+        var fs = PlexdStream.getFullscreenStream();
+        if (fs) return [fs];
+        return getFilteredStreams();
     }
 
     /**
@@ -5790,33 +8477,32 @@ const PlexdApp = (function() {
         const localCount = providedFiles.filter(f => f).length;
         console.log(`[Plexd] Loading "${name}": ${urlCount} URL streams, ${localCount} local files, HLS.js: ${hlsAvailable ? 'available' : 'NOT AVAILABLE'}`);
 
-        // Load URL streams with validation
+        // Load URL streams with validation — staggered to avoid connection saturation
         let loadedCount = 0;
         let skippedCount = 0;
         let duplicateCount = 0;
-
-        dedupedUrls.forEach((url, index) => {
+        var validUrls = [];
+        dedupedUrls.forEach(function(url, index) {
             if (url && isValidUrl(url)) {
-                // Skip duplicates when merging (check both URL and fileId)
                 if (merge) {
-                    if (existingUrls.has(url)) {
-                        duplicateCount++;
-                        return;
-                    }
-                    const fileId = extractServerFileId(url);
-                    if (fileId && existingFileIds.has(fileId.toLowerCase())) {
-                        duplicateCount++;
-                        return;
-                    }
+                    if (existingUrls.has(url)) { duplicateCount++; return; }
+                    var fileId = extractServerFileId(url);
+                    if (fileId && existingFileIds.has(fileId.toLowerCase())) { duplicateCount++; return; }
                 }
-                console.log(`[Plexd] Loading stream ${index + 1}/${urlCount}: ${truncateUrl(url, 80)}`);
-                addStreamSilent(url);
-                loadedCount++;
+                validUrls.push(url);
             } else {
-                console.warn(`[Plexd] Skipping invalid URL at index ${index}:`, url);
                 skippedCount++;
             }
         });
+        var IMMEDIATE = 6;
+        for (var vi = 0; vi < validUrls.length; vi++) {
+            addStreamSilent(validUrls[vi], vi >= IMMEDIATE ? { deferred: true } : undefined);
+            loadedCount++;
+        }
+        updateLayout();
+        // Stagger-activate the deferred streams
+        var deferredCombo = PlexdStream.getAllStreams().filter(function(s) { return !s.video.src && !s.hls; });
+        if (deferredCombo.length) staggerActivate(deferredCombo);
 
         // Load provided local files and restore their ratings
         let localLoaded = 0;
@@ -5870,8 +8556,8 @@ const PlexdApp = (function() {
         }
 
         // Save to current streams (only URL streams, not local files)
-        const validUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
-        localStorage.setItem('plexd_streams', JSON.stringify(validUrls));
+        var savableUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
+        localStorage.setItem('plexd_streams', JSON.stringify(savableUrls));
 
         // Restore playback positions (wait for videos to be ready)
         const positions = combo.positions || {};
@@ -7410,6 +10096,10 @@ const PlexdApp = (function() {
         const streamsList = document.getElementById('streams-list');
         if (!streamsList) return;
 
+        // Skip expensive rebuild when panel is not visible (saves massive DOM churn with 30+ streams)
+        var panel = document.getElementById('streams-panel');
+        if (panel && !panel.classList.contains('active')) return;
+
         const allStreams = PlexdStream.getAllStreams();
         const selectedStream = PlexdStream.getSelectedStream();
 
@@ -7427,10 +10117,12 @@ const PlexdApp = (function() {
             const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
             const stateClass = stream.state === 'playing' ? 'playing' :
                               stream.state === 'error' ? 'error' :
+                              stream.state === 'idle' ? 'idle' :
                               stream.state === 'buffering' || stream.state === 'loading' ? 'buffering' : '';
             const stateIcon = stream.state === 'playing' ? '▶' :
                              stream.state === 'paused' ? '⏸' :
                              stream.state === 'error' ? '⚠' :
+                             stream.state === 'idle' ? '◻' :
                              stream.state === 'buffering' || stream.state === 'loading' ? '⏳' : '●';
             const ratingDisplay = rating > 0 ? `<span class="plexd-stream-rating rated-${rating}">★${rating}</span>` : '';
             const visibilityIcon = isVisible ? '👁' : '👁‍🗨';
@@ -7786,11 +10478,11 @@ const PlexdApp = (function() {
      * Reload all streams
      */
     function reloadAllStreams() {
-        const allStreams = PlexdStream.getAllStreams();
-        allStreams.forEach(stream => {
+        var targets = getActiveStreams();
+        targets.forEach(function(stream) {
             PlexdStream.reloadStream(stream.id);
         });
-        showMessage(`Reloading ${allStreams.length} stream(s)...`, 'info');
+        showMessage('Reloading ' + targets.length + ' stream(s)...', 'info');
         setTimeout(updateStreamsPanelUI, 500);
     }
 
@@ -7931,14 +10623,14 @@ const PlexdApp = (function() {
      * Updates the button with feedback
      */
     async function randomSeekAll() {
-        const btn = document.getElementById('random-seek-all-btn');
-        const originalText = btn ? btn.innerHTML : '';
+        var targets = getActiveStreams();
+        var btn = document.getElementById('random-seek-all-btn');
 
-        if (btn) btn.innerHTML = '⏳';
+        if (btn) btn.textContent = '⏳';
 
         try {
-            const successCount = await PlexdStream.seekAllToRandomPosition();
-            const totalCount = PlexdStream.getStreamCount();
+            var successCount = await PlexdStream.seekAllToRandomPosition(targets);
+            var totalCount = targets.length;
 
             if (btn) {
                 btn.innerHTML = successCount === totalCount ? '✓' : `${successCount}/${totalCount}`;
@@ -8008,10 +10700,10 @@ const PlexdApp = (function() {
      * Rewind all streams to beginning
      */
     function rewindAll() {
-        const streams = PlexdStream.getAllStreams();
-        let count = 0;
+        var targets = getActiveStreams();
+        var count = 0;
 
-        streams.forEach(stream => {
+        targets.forEach(function(stream) {
             if (stream.video) {
                 stream.video.currentTime = 0;
                 count++;
@@ -8019,7 +10711,7 @@ const PlexdApp = (function() {
         });
 
         syncOverlayClones();
-        showMessage(`Rewound ${count} stream${count !== 1 ? 's' : ''} to start`, 'success');
+        showMessage('Rewound ' + count + ' stream' + (count !== 1 ? 's' : '') + ' to start', 'success');
     }
 
     // Public API
@@ -8095,7 +10787,8 @@ const PlexdApp = (function() {
         // Stream cleanup (called by stream.js when streams are removed)
         stopTranscodePollForStream,
         // Help
-        showShortcutsModal
+        showShortcutsModal,
+        jumpToRandomMoment
     };
 })();
 
@@ -8412,6 +11105,78 @@ const PlexdRemote = (function() {
                 PlexdApp.prevScene();
                 sendState();
                 break;
+            case 'theater-scene':
+                // Set specific theater scene
+                if (payload.scene) {
+                    // Ensure theater mode is on first
+                    if (!window._plexdTheaterMode) {
+                        PlexdApp.toggleTheaterAdvanced();
+                    }
+                    PlexdApp.setTheaterScene(payload.scene);
+                }
+                sendState();
+                break;
+
+            // Moments
+            case 'moment-play':
+                // Play a random moment (seeks to peak of a random captured moment)
+                PlexdApp.jumpToRandomMoment();
+                sendState();
+                break;
+
+            // Crop toggle (Coverflow mode, mapped to O key)
+            case 'toggleCrop':
+                PlexdApp.toggleCoverflowMode();
+                sendState();
+                break;
+
+            // Generic key command — dispatch a synthetic keyboard event
+            case 'key':
+                if (payload.key) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: payload.key,
+                        code: payload.code || payload.key,
+                        shiftKey: payload.shift || false,
+                        ctrlKey: payload.ctrl || false,
+                        altKey: payload.alt || false,
+                        bubbles: true
+                    }));
+                }
+                sendState();
+                break;
+
+            // Favorites
+            case 'toggleFavorite':
+                if (payload.streamId) {
+                    PlexdStream.toggleFavorite(payload.streamId);
+                }
+                sendState();
+                break;
+
+            // Overlays
+            case 'toggleBugEyeMode':
+                PlexdApp.toggleBugEyeMode();
+                sendState();
+                break;
+            case 'toggleMosaicMode':
+                PlexdApp.toggleMosaicMode();
+                sendState();
+                break;
+            case 'toggleStreamInfo':
+                PlexdStream.toggleAllStreamInfo();
+                sendState();
+                break;
+
+            // Layout — explicit set (used by layout cycle to return to grid)
+            case 'setLayoutMode':
+                if (payload.mode === 'grid') {
+                    // Turn off all special layout modes to return to grid
+                    if (window._plexdTetrisMode) PlexdApp.toggleTetrisMode();
+                    if (window._plexdMosaicMode) PlexdApp.toggleMosaicMode();
+                    if (window._plexdCoverflowMode) PlexdApp.toggleCoverflowMode();
+                }
+                sendState();
+                break;
 
             // State request
             case 'getState':
@@ -8442,6 +11207,7 @@ const PlexdRemote = (function() {
             duration: s.video ? s.video.duration : 0,
             aspectRatio: s.aspectRatio,
             rating: PlexdStream.getRating(s.url),
+            favorite: PlexdStream.getFavorite(s.url, s.fileName),
             fileName: s.fileName || null,
             thumbnail: thumbnails[s.id] || null
         }));
@@ -8461,6 +11227,14 @@ const PlexdRemote = (function() {
             cleanMode: PlexdStream.isCleanMode ? PlexdStream.isCleanMode() : false,
             // `getAudioFocusMode()` returns a boolean (true = focus on).
             audioFocusMode: PlexdStream.getAudioFocusMode ? PlexdStream.getAudioFocusMode() : true,
+            // Theater mode state
+            theaterMode: window._plexdTheaterMode || false,
+            theaterScene: window._plexdTheaterScene || '',
+            // Mosaic mode (for remote layout label)
+            mosaicMode: window._plexdMosaicMode || false,
+            // Moment count
+            momentCount: (typeof PlexdMoments !== 'undefined' && PlexdMoments.getAllMoments)
+                ? PlexdMoments.getAllMoments().length : 0,
             timestamp: Date.now()
         };
     }
@@ -8548,6 +11322,15 @@ window.PlexdAppState = {
     },
     get headerVisible() {
         return window._plexdHeaderVisible || false;
+    },
+    get mosaicMode() {
+        return window._plexdMosaicMode || false;
+    },
+    get theaterMode() {
+        return window._plexdTheaterMode || false;
+    },
+    get theaterScene() {
+        return window._plexdTheaterScene || '';
     }
 };
 

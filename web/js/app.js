@@ -6711,10 +6711,17 @@ const PlexdApp = (function() {
                 break;
             case '{':
             case '}':
-                // { or } = Shuffle randomly
-                PlexdStream.shuffleStreamOrder();
-                updateLayout();
-                showMessage('Shuffled', 'info');
+                // { or } = Shuffle randomly (filtered streams only)
+                {
+                    const shuffleFiltered = getFilteredStreams();
+                    if (shuffleFiltered.length < 2) {
+                        showMessage('Need 2+ streams to shuffle', 'warning');
+                    } else {
+                        PlexdStream.shuffleStreamOrder(shuffleFiltered.map(s => s.id));
+                        updateLayout();
+                        showMessage('Shuffled', 'info');
+                    }
+                }
                 break;
             case 'b':
             case 'B':
@@ -7250,9 +7257,9 @@ const PlexdApp = (function() {
             return PlexdStream.getAllStreams().filter(s => !s.hidden);
         }
         if (viewMode === 'favorites') {
-            return PlexdStream.getFavoriteStreams();
+            return PlexdStream.getFavoriteStreams().filter(s => !s.hidden);
         }
-        return PlexdStream.getStreamsByRating(viewMode);
+        return PlexdStream.getStreamsByRating(viewMode).filter(s => !s.hidden);
     }
 
     /**

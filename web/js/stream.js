@@ -3697,31 +3697,32 @@ const PlexdStream = (function() {
 
     /**
      * Shuffle streams into random order (Fisher-Yates)
+     * @param {string[]|null} onlyIds - If provided, only shuffle these stream IDs (others stay fixed)
      */
-    function shuffleStreamOrder() {
+    function shuffleStreamOrder(onlyIds = null) {
         const allEntries = Array.from(streams.entries());
-        const visible = [];
-        const hiddenPositions = [];
+        const toShuffle = [];
+        const fixedPositions = [];
 
         allEntries.forEach(([id, stream], idx) => {
-            if (stream.hidden) {
-                hiddenPositions.push({ idx, entry: [id, stream] });
+            if (stream.hidden || (onlyIds && !onlyIds.includes(id))) {
+                fixedPositions.push({ idx, entry: [id, stream] });
             } else {
-                visible.push([id, stream]);
+                toShuffle.push([id, stream]);
             }
         });
 
-        if (visible.length < 2) return;
+        if (toShuffle.length < 2) return;
 
-        // Fisher-Yates on visible only
-        for (let i = visible.length - 1; i > 0; i--) {
+        // Fisher-Yates on target streams only
+        for (let i = toShuffle.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [visible[i], visible[j]] = [visible[j], visible[i]];
+            [toShuffle[i], toShuffle[j]] = [toShuffle[j], toShuffle[i]];
         }
 
-        // Reconstruct: insert hidden streams back at their original positions
-        const result = [...visible];
-        hiddenPositions.forEach(({ idx, entry }) => {
+        // Reconstruct: insert fixed entries back at their original positions
+        const result = [...toShuffle];
+        fixedPositions.forEach(({ idx, entry }) => {
             result.splice(Math.min(idx, result.length), 0, entry);
         });
 

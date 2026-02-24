@@ -188,6 +188,46 @@ try {
     console.log('[Server] ffmpeg not found - HLS transcoding disabled');
 }
 
+// Ollama LLM integration (optional — for AI analysis of moment thumbnails)
+let ollamaAvailable = false;
+let ollamaModel = null;
+const OLLAMA_BASE = 'http://localhost:11434';
+
+async function checkOllama() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(OLLAMA_BASE + '/api/tags', { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.models || data.models.length === 0) return;
+
+        // Prefer vision-capable models (llava, bakllava, llama3.2-vision, minicpm-v)
+        const visionModels = data.models.filter(m =>
+            /llava|bakllava|vision|minicpm/i.test(m.name)
+        );
+
+        if (visionModels.length > 0) {
+            ollamaModel = visionModels[0].name;
+            ollamaAvailable = true;
+            console.log('[Server] Ollama available with vision model:', ollamaModel);
+        } else {
+            ollamaModel = null;
+            ollamaAvailable = false;
+            // Only log on first check or state change
+        }
+    } catch (e) {
+        ollamaModel = null;
+        ollamaAvailable = false;
+        // Ollama not running — that's fine, it's optional
+    }
+}
+
+// Check on startup, re-check every 5 minutes (user might start Ollama later)
+checkOllama();
+setInterval(checkOllama, 5 * 60 * 1000);
+
 // Check available disk space (returns MB)
 function getFreeDiskSpaceMB() {
     try {
@@ -1047,7 +1087,7 @@ function serveFileWithRange(req, res, filePath, stat, contentType) {
     }
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
     // Enable CORS for all requests (including Chrome extension Private Network Access)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -2449,6 +2489,110 @@ const server = http.createServer((req, res) => {
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
+        return;
+    }
+
+    // === AI Analysis API (Ollama) ===
+
+    // GET /api/ai/status — Check Ollama availability
+    if (pathname === '/api/ai/status' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            available: ollamaAvailable,
+            model: ollamaModel,
+            provider: 'ollama',
+            endpoint: OLLAMA_BASE
+        }));
+        return;
+    }
+
+    // POST /api/moments/:id/analyze — Run AI analysis on moment thumbnail
+    const analyzeMatch = pathname.match(/^\/api\/moments\/([^/]+)\/analyze$/);
+    if (analyzeMatch && req.method === 'POST') {
+        const momentId = decodeURIComponent(analyzeMatch[1]);
+
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            return;
+        }
+
+        if (!ollamaAvailable || !ollamaModel) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Ollama not available or no vision model found' }));
+            return;
+        }
+
+        // Find thumbnail
+        const thumbPath = path.join(MOMENTS_THUMBS, momentId + '.jpg');
+
+        try {
+            await fs.promises.access(thumbPath);
+        } catch {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No thumbnail found for moment ' + momentId }));
+            return;
+        }
+
+        try {
+            // Read thumbnail as base64
+            const thumbBuffer = await fs.promises.readFile(thumbPath);
+            const thumbBase64 = thumbBuffer.toString('base64');
+
+            // Call Ollama vision API
+            const ollamaRes = await fetch(OLLAMA_BASE + '/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: ollamaModel,
+                    prompt: 'Describe this video frame in 1-2 sentences. Then list 3-5 descriptive tags as a comma-separated list on a new line starting with "Tags: ". Be concise and specific about what you see.',
+                    images: [thumbBase64],
+                    stream: false
+                })
+            });
+
+            if (!ollamaRes.ok) {
+                const errText = await ollamaRes.text();
+                throw new Error('Ollama returned ' + ollamaRes.status + ': ' + errText);
+            }
+
+            const ollamaData = await ollamaRes.json();
+            const response = ollamaData.response || '';
+
+            // Parse description and tags from response
+            let aiDescription = response;
+            let aiTags = [];
+
+            const tagsMatch = response.match(/Tags?:\s*(.+)/i);
+            if (tagsMatch) {
+                aiDescription = response.slice(0, tagsMatch.index).trim();
+                aiTags = tagsMatch[1].split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
+            }
+
+            // Update moment in server store
+            const moment = momentsDb.find(m => m.id === momentId);
+            if (moment) {
+                moment.aiDescription = aiDescription;
+                moment.aiTags = aiTags;
+                moment.updatedAt = Date.now();
+                saveMomentsDb();
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                momentId: momentId,
+                description: aiDescription,
+                tags: aiTags,
+                model: ollamaModel
+            }));
+
+            console.log('[Server] AI analysis complete for', momentId, '- tags:', aiTags.join(', '));
+
+        } catch (err) {
+            console.error('[Server] AI analysis failed:', err.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'AI analysis failed: ' + err.message }));
+        }
         return;
     }
 

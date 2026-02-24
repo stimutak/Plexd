@@ -429,7 +429,7 @@ For panels with selectable items:
 - `PlexdMoments` — Data store IIFE (moments.js). CRUD + filter/sort/reorder + server sync.
 - `momentBrowserState` — UI state object in app.js. Tracks open/mode/selectedIndex/filters/sort.
 
-**Moment Browser modes (6):** Grid, Wall, Player, Collage, Discovery, Cascade. Cycled with E/Shift+E or Tab/Shift+Tab.
+**Moment Browser modes (4):** Grid, Wall, Player, Collage. Cycled with E/Shift+E or Tab/Shift+Tab.
 
 **Canvas mirror pattern:** Moments play by mirroring already-loaded `<video>` elements onto `<canvas>` via rAF loop — zero extra network connections. Each mode manages its own rAF loop and MUST clean up via `stop*Mirrors()` on mode switch or browser close.
 
@@ -441,6 +441,16 @@ For panels with selectable items:
 - `/` — Random moment in browser
 
 **Set integration:** Saved sets (`plexd_combinations`) include `momentIds` array linking to associated moments.
+
+**Wall Editing (Wall mode = mode 1):**
+- Each Wall cell has a timeline bar (`wall-timeline`) showing the moment's range within the source video duration
+- Selected cell gets 8px interactive bar with drag handles for in-point (left) and out-point (right)
+- `updateCellTimeline(cell)` — recalculates fill/peak/handle positions from `cell._moment`
+- `setupTimelineDrag(cell)` — attaches mouse+touch drag handlers to handles; persists via `PlexdMoments.updateMoment()`
+- Drag handles mutate `mom.start`/`mom.end` directly — the existing `timeupdate` loop handler holds a closure reference to the same object, so loop boundaries update live
+- `Opt+Left/Right` — Nudge in-point ±0.5s (Wall mode only)
+- `Opt+Shift+Left/Right` — Adjust duration ±0.5s (Wall mode only)
+- Minimum 1s duration enforced; peak clamped to stay within range
 
 **Server API:**
 - `GET /api/moments` — List (with filters)

@@ -3613,7 +3613,8 @@ const PlexdStream = (function() {
         const navigable = getNavigableStreams();
         if (navigable.length === 0) return;
 
-        const currentId = (selectedStreamId && streams.has(selectedStreamId)) ? selectedStreamId : navigable[0].id;
+        const navigableIds = new Set(navigable.map(s => s.id));
+        const currentId = (selectedStreamId && navigableIds.has(selectedStreamId)) ? selectedStreamId : navigable[0].id;
         const nextId = getSpatialNeighborStreamId(currentId, direction) || navigable[0].id;
         selectStream(nextId);
 

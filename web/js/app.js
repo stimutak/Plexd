@@ -1846,6 +1846,30 @@ const PlexdApp = (function() {
     }
 
     /**
+     * If the currently selected stream isn't in the new filter, select the first filtered stream instead.
+     */
+    function _validateSelectionForFilter(mode) {
+        var sel = PlexdStream.getSelectedStream();
+        if (!sel) return;
+        if (sel.hidden) {
+            var filtered = getFilteredStreams();
+            if (filtered.length > 0) PlexdStream.selectStream(filtered[0].id);
+            return;
+        }
+        if (mode === 'all') return;
+        var inFilter;
+        if (mode === 'favorites') {
+            inFilter = PlexdStream.getFavorite(sel.url, sel.fileName);
+        } else {
+            inFilter = PlexdStream.getRating(sel.url, sel.fileName) === Number(mode);
+        }
+        if (!inFilter) {
+            var filtered = getFilteredStreams();
+            if (filtered.length > 0) PlexdStream.selectStream(filtered[0].id);
+        }
+    }
+
+    /**
      * Set view mode (all, favorites, or 1-9 for star ratings)
      */
     function setViewMode(mode) {
@@ -1854,6 +1878,7 @@ const PlexdApp = (function() {
         updateViewButtons();
         updateFilterIndicator();
         updateLayout();
+        _validateSelectionForFilter(mode);
 
         if (mode === 'all') {
             showMessage('View: All Streams', 'info');
@@ -2696,6 +2721,7 @@ const PlexdApp = (function() {
 
     // Wall mode viewport state for 2D panning/zoom
     var wallViewport = { x: 0, y: 0, zoom: 4 };
+    var wallEditMode = false;
 
     // Wall mirror loop state
     var wallMirrorState = { rafId: null, handlers: [], prevMuteStates: null, prevPlayStates: {} };
@@ -2703,13 +2729,7 @@ const PlexdApp = (function() {
     // Collage mirror loop state
     var collageMirrorState = { rafId: null, handlers: [], prevMuteStates: null, prevPlayStates: {} };
 
-    // Discovery mode mirror state
-    var discoveryMirrorState = { rafId: null, canvas: null, video: null, handler: null };
-
-    // Cascade mode index (which card is at front of the stack)
-    var cascadeIndex = 0;
-
-    var MOMENT_MODE_NAMES = ['Grid', 'Wall', 'Player', 'Collage', 'Discovery', 'Cascade'];
+    var MOMENT_MODE_NAMES = ['Grid', 'Wall', 'Player', 'Collage'];
 
     // Crescendo loop: progressive tightening toward peak
     var crescendoState = {
@@ -3256,7 +3276,6 @@ const PlexdApp = (function() {
         stopReelMirror();
         stopWallMirrors();
         stopCollageMirrors();
-        stopDiscoveryMirror();
         // Clean up extracted/fallback videos on mode switch (they're on document.body, not inside content)
         Object.keys(_extractedVideos).forEach(function(momentId) {
             var vid = _extractedVideos[momentId];
@@ -3277,8 +3296,6 @@ const PlexdApp = (function() {
             case 1: renderMomentWall(content); break;
             case 2: renderMomentPlayer(content); break;
             case 3: renderMomentCollage(content); break;
-            case 4: renderMomentDiscovery(content); break;
-            case 5: renderMomentCascade(content); break;
             default: renderMomentGrid(content); break;
         }
         updateSelectedMomentStatus();
@@ -3467,6 +3484,227 @@ const PlexdApp = (function() {
         }
     }
 
+    // Compute the contextual time window for a moment's timeline
+    function getTimelineWindow(mom) {
+        var loadedStream = resolveMomentStream(mom);
+        var isExtracted = loadedStream && loadedStream._isExtracted;
+        var momDur = mom.end - mom.start;
+
+        // Check if cell has been upgraded to source for editing
+        var upgradedToSource = false;
+        var refs = wallMirrorState.canvasRefs;
+        if (refs) {
+            for (var i = 0; i < refs.length; i++) {
+                if (refs[i].mom.id === mom.id && refs[i]._wasExtracted) {
+                    upgradedToSource = true;
+                    loadedStream = { video: refs[i].sourceVid };
+                    break;
+                }
+            }
+        }
+
+        if (isExtracted && !upgradedToSource) {
+            // Extracted clip: window IS the original extraction range
+            var origStart = mom._extractedStart !== undefined ? mom._extractedStart : mom.start;
+            var origEnd = mom._extractedEnd !== undefined ? mom._extractedEnd : mom.end;
+            if (mom._extractedStart === undefined) {
+                mom._extractedStart = mom.start;
+                mom._extractedEnd = mom.end;
+            }
+            return { winStart: origStart, winEnd: origEnd, isExtracted: true, sourceDur: origEnd - origStart };
+        } else {
+            // Source loaded (or upgraded): show ±context around the moment
+            var sourceDur = (loadedStream && loadedStream.video && loadedStream.video.duration > 0)
+                ? loadedStream.video.duration : Math.max(mom.end + 30, 60);
+            var padding = Math.max(momDur, 15);
+            var winStart = Math.max(0, mom.start - padding);
+            var winEnd = Math.min(sourceDur, mom.end + padding);
+            return { winStart: winStart, winEnd: winEnd, isExtracted: false, sourceDur: sourceDur };
+        }
+    }
+
+    function updateCellTimeline(cell) {
+        var t = cell._timeline;
+        var mom = cell._moment;
+        if (!t || !mom) return;
+
+        // Use snapshotted window during drag for stable visuals
+        var win = cell._dragWin || getTimelineWindow(mom);
+        var winDur = win.winEnd - win.winStart;
+        if (winDur <= 0) return;
+
+        var startPct = ((mom.start - win.winStart) / winDur) * 100;
+        var endPct = ((mom.end - win.winStart) / winDur) * 100;
+        var peakPct = ((mom.peak - win.winStart) / winDur) * 100;
+
+        t.fill.style.left = startPct + '%';
+        t.fill.style.width = (endPct - startPct) + '%';
+        t.peakDot.style.left = peakPct + '%';
+        t.handleL.style.left = startPct + '%';
+        t.handleR.style.left = endPct + '%';
+    }
+
+    function setupTimelineDrag(cell) {
+        var t = cell._timeline;
+        var mom = cell._moment;
+        if (!t) return;
+
+        // Guard: remove old listeners by replacing handle elements
+        if (cell._dragBound) return;
+        cell._dragBound = true;
+
+        function handleDrag(handle, side) {
+            function onMove(e) {
+                e.preventDefault();
+                if (!cell._dragWin) return;
+                var win = cell._dragWin;
+                var winDur = win.winEnd - win.winStart;
+                var rect = t.bar.getBoundingClientRect();
+                var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                var pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                var time = win.winStart + pct * winDur;
+
+                if (side === 'left') {
+                    mom.start = Math.max(win.winStart, Math.min(time, mom.end - 1));
+                    if (mom.peak < mom.start) mom.peak = mom.start;
+                } else {
+                    mom.end = Math.max(mom.start + 1, Math.min(time, win.winEnd));
+                    if (mom.peak > mom.end) mom.peak = mom.end;
+                }
+                updateCellTimeline(cell);
+            }
+
+            function onEnd() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onEnd);
+                document.removeEventListener('touchmove', onMove);
+                document.removeEventListener('touchend', onEnd);
+                cell._dragWin = null;
+                PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
+                var durStr = (mom.end - mom.start).toFixed(1) + 's';
+                var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                showMessage('In: ' + inStr + ' | Dur: ' + durStr, 'info');
+            }
+
+            function startDrag(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                // Snapshot window once — stays stable during entire drag
+                cell._dragWin = getTimelineWindow(mom);
+                updateCellTimeline(cell);
+            }
+
+            handle.addEventListener('mousedown', function(e) {
+                startDrag(e);
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onEnd);
+            });
+            handle.addEventListener('touchstart', function(e) {
+                startDrag(e);
+                document.addEventListener('touchmove', onMove, { passive: false });
+                document.addEventListener('touchend', onEnd);
+            }, { passive: false });
+        }
+
+        handleDrag(t.handleL, 'left');
+        handleDrag(t.handleR, 'right');
+    }
+
+    // Swap extracted clip to full source video for editing (wider timeline)
+    function upgradeEditCellToSource(mom) {
+        if (!mom || !mom.extracted || !mom.sourceUrl) return false;
+        var refs = wallMirrorState.canvasRefs;
+        if (!refs) return false;
+        // Find this moment's canvasRef
+        var ref = null;
+        for (var i = 0; i < refs.length; i++) {
+            if (refs[i].mom.id === mom.id) { ref = refs[i]; break; }
+        }
+        if (!ref) return false;
+        // Already on source?
+        if (!ref._origExtractedVid) {
+            var loadedStream = resolveMomentStream(mom);
+            if (!loadedStream || !loadedStream._isExtracted) return false; // already source
+            // Try to get full source video
+            var sourceStream = PlexdStream.getStream(mom.streamId);
+            if (!sourceStream || !sourceStream.video) {
+                // Try URL match
+                var all = PlexdStream.getAllStreams();
+                for (var j = 0; j < all.length; j++) {
+                    var sUrl = all[j].serverUrl || all[j].url;
+                    if (sUrl === mom.sourceUrl) { sourceStream = all[j]; break; }
+                }
+            }
+            if (!sourceStream || !sourceStream.video) {
+                // Create temporary source video from server
+                var fallback = _makeSourceVideoFallback(mom);
+                if (!fallback || !fallback.video) return false;
+                sourceStream = fallback;
+            }
+            // Save original extracted vid, swap to source
+            ref._origExtractedVid = ref.sourceVid;
+            ref._origLoopHandler = null;
+            ref.sourceVid = sourceStream.video;
+            // Remove old extracted loop handler
+            for (var k = wallMirrorState.handlers.length - 1; k >= 0; k--) {
+                var h = wallMirrorState.handlers[k];
+                if (h.video === ref._origExtractedVid) {
+                    h.video.removeEventListener('timeupdate', h.handler);
+                    ref._origLoopHandler = h;
+                    wallMirrorState.handlers.splice(k, 1);
+                    break;
+                }
+            }
+            // Add source-based loop handler
+            var sourceLoopHandler = function() {
+                if (ref.sourceVid.currentTime >= mom.end || ref.sourceVid.currentTime < mom.start) {
+                    ref.sourceVid.currentTime = mom.start;
+                }
+            };
+            ref.sourceVid.addEventListener('timeupdate', sourceLoopHandler);
+            wallMirrorState.handlers.push({ video: ref.sourceVid, handler: sourceLoopHandler });
+            ref._editLoopHandler = sourceLoopHandler;
+            // Start playing source, seek to moment
+            ref.sourceVid.currentTime = mom.start;
+            if (ref.sourceVid.paused) ref.sourceVid.play().catch(function() {});
+            // Clear extracted flag so getTimelineWindow uses source-based window
+            ref._wasExtracted = true;
+        }
+        return true;
+    }
+
+    // Restore extracted clip after edit mode
+    function downgradeEditCellFromSource(mom) {
+        var refs = wallMirrorState.canvasRefs;
+        if (!refs) return;
+        for (var i = 0; i < refs.length; i++) {
+            var ref = refs[i];
+            if (ref.mom.id === mom.id && ref._origExtractedVid) {
+                // Remove source loop handler
+                if (ref._editLoopHandler) {
+                    ref.sourceVid.removeEventListener('timeupdate', ref._editLoopHandler);
+                    for (var k = wallMirrorState.handlers.length - 1; k >= 0; k--) {
+                        if (wallMirrorState.handlers[k].handler === ref._editLoopHandler) {
+                            wallMirrorState.handlers.splice(k, 1);
+                            break;
+                        }
+                    }
+                }
+                // Restore extracted vid
+                ref.sourceVid = ref._origExtractedVid;
+                if (ref._origLoopHandler) {
+                    ref.sourceVid.addEventListener('timeupdate', ref._origLoopHandler.handler);
+                    wallMirrorState.handlers.push(ref._origLoopHandler);
+                }
+                ref._origExtractedVid = null;
+                ref._origLoopHandler = null;
+                ref._editLoopHandler = null;
+                ref._wasExtracted = false;
+                break;
+            }
+        }
+    }
+
     function renderMomentWall(container) {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) {
@@ -3481,7 +3719,7 @@ const PlexdApp = (function() {
 
         // Viewport container (overflow hidden, panning via transform)
         var viewport = document.createElement('div');
-        viewport.className = 'moment-wall-viewport';
+        viewport.className = 'moment-wall-viewport' + (wallEditMode ? ' wall-edit-mode' : '');
 
         // Inner grid (translated for panning)
         var grid = document.createElement('div');
@@ -3489,6 +3727,7 @@ const PlexdApp = (function() {
         grid.style.gridTemplateColumns = 'repeat(' + wallViewport.zoom + ', 1fr)';
 
         var canvasRefs = []; // { canvas, ctx, sourceVid, mom }
+        wallMirrorState.canvasRefs = canvasRefs; // expose for edit-mode source swap
         var dragSrcIdx = null;
         var wallSourceHandled = {}; // Track which source videos already have loop handlers
 
@@ -3502,6 +3741,25 @@ const PlexdApp = (function() {
             canvas.width = 320;
             canvas.height = 180;
             cell.appendChild(canvas);
+
+            // Timeline bar showing moment range within source duration
+            var timeline = document.createElement('div');
+            timeline.className = 'wall-timeline';
+            var fill = document.createElement('div');
+            fill.className = 'wall-timeline-fill';
+            var peakDot = document.createElement('div');
+            peakDot.className = 'wall-timeline-peak';
+            var handleL = document.createElement('div');
+            handleL.className = 'wall-timeline-handle wall-timeline-handle-l';
+            var handleR = document.createElement('div');
+            handleR.className = 'wall-timeline-handle wall-timeline-handle-r';
+            timeline.appendChild(fill);
+            timeline.appendChild(peakDot);
+            timeline.appendChild(handleL);
+            timeline.appendChild(handleR);
+            cell.appendChild(timeline);
+            cell._timeline = { fill: fill, peakDot: peakDot, handleL: handleL, handleR: handleR, bar: timeline };
+            cell._moment = mom;
 
             var loadedStream = resolveMomentStream(mom);
             var ctx = canvas.getContext('2d');
@@ -3523,7 +3781,10 @@ const PlexdApp = (function() {
                     var loopHandler = (function(vid, m, extracted) {
                         return function() {
                             if (extracted) {
-                                if (vid.currentTime >= (m.end - m.start) - 0.1) vid.currentTime = 0;
+                                var origStart = m._extractedStart !== undefined ? m._extractedStart : m.start;
+                                var clipStart = m.start - origStart;
+                                var clipEnd = m.end - origStart;
+                                if (vid.currentTime >= clipEnd - 0.1 || vid.currentTime < clipStart) vid.currentTime = clipStart;
                             } else {
                                 if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
                             }
@@ -3562,6 +3823,7 @@ const PlexdApp = (function() {
             // Drag-to-reorder
             (function(cellEl, cellIdx) {
                 cellEl.addEventListener('dragstart', function(ev) {
+                    if (wallEditMode) { ev.preventDefault(); return; }
                     dragSrcIdx = cellIdx;
                     cellEl.classList.add('dragging');
                     ev.dataTransfer.effectAllowed = 'move';
@@ -3594,6 +3856,10 @@ const PlexdApp = (function() {
                 });
             })(cell, idx);
 
+            updateCellTimeline(cell);
+            if (wallEditMode && idx === momentBrowserState.selectedIndex) {
+                setupTimelineDrag(cell);
+            }
             grid.appendChild(cell);
         });
 
@@ -3616,8 +3882,12 @@ const PlexdApp = (function() {
                 wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
                 return;
             }
+            var selectedMom = wallEditMode && moments[momentBrowserState.selectedIndex]
+                ? moments[momentBrowserState.selectedIndex] : null;
             for (var i = 0; i < canvasRefs.length; i++) {
                 var ref = canvasRefs[i];
+                // Edit mode: only draw the selected cell's canvas
+                if (selectedMom && ref.mom.id !== selectedMom.id) continue;
                 if (ref.sourceVid.readyState >= 2) {
                     // Cover-crop: draw source video centered/cropped into 320x180 canvas
                     var vw = ref.sourceVid.videoWidth || 320;
@@ -3653,12 +3923,53 @@ const PlexdApp = (function() {
         gridEl.style.gridTemplateColumns = 'repeat(' + wallViewport.zoom + ', 1fr)';
     }
 
+    function toggleWallEditMode(forceOff) {
+        var cells = document.querySelectorAll('.moment-wall-cell');
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        var mom = moments[idx] || null;
+        if (forceOff || wallEditMode) {
+            // Downgrade source swap before exiting
+            if (mom) downgradeEditCellFromSource(mom);
+            wallEditMode = false;
+            var vp = document.querySelector('.moment-wall-viewport');
+            if (vp) vp.classList.remove('wall-edit-mode');
+            // Re-enable drag-to-reorder
+            cells.forEach(function(c) { c.draggable = true; });
+            showMessage('Browse mode', 'info');
+        } else {
+            wallEditMode = true;
+            var vp = document.querySelector('.moment-wall-viewport');
+            if (vp) vp.classList.add('wall-edit-mode');
+            // Disable native drag so handle drag works
+            cells.forEach(function(c) { c.draggable = false; });
+            // Upgrade extracted clip to full source for wider editing
+            if (mom && mom.extracted) {
+                var upgraded = upgradeEditCellToSource(mom);
+                if (upgraded) {
+                    // Rerender timeline with source-based window
+                    var selected = document.querySelector('.moment-wall-cell.selected');
+                    if (selected) updateCellTimeline(selected);
+                }
+            }
+            // Re-attach drag handlers for selected cell
+            var selected = document.querySelector('.moment-wall-cell.selected');
+            if (selected && selected._timeline) setupTimelineDrag(selected);
+            showMessage('Edit mode — drag handles or Opt+Arrows', 'info');
+        }
+    }
+
     function updateWallSelection() {
         var cells = document.querySelectorAll('.moment-wall-cell');
         cells.forEach(function(cell) {
             var idx = parseInt(cell.dataset.index, 10);
             cell.classList.toggle('selected', idx === momentBrowserState.selectedIndex);
         });
+        // Re-attach drag handlers in edit mode
+        if (wallEditMode) {
+            var selected = document.querySelector('.moment-wall-cell.selected');
+            if (selected && selected._timeline) setupTimelineDrag(selected);
+        }
         var selected = document.querySelector('.moment-wall-cell.selected');
         if (selected) selected.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
@@ -4159,215 +4470,6 @@ const PlexdApp = (function() {
         }
     }
 
-    // ── Discovery mode ──────────────────────────────────────────────────
-
-    function stopDiscoveryMirror() {
-        if (discoveryMirrorState.rafId) {
-            cancelAnimationFrame(discoveryMirrorState.rafId);
-        }
-        if (discoveryMirrorState.video && discoveryMirrorState.handler) {
-            discoveryMirrorState.video.removeEventListener('timeupdate', discoveryMirrorState.handler);
-        }
-        discoveryMirrorState = { rafId: null, canvas: null, video: null, handler: null };
-    }
-
-    function renderMomentDiscovery(container) {
-        var moments = momentBrowserState.filteredMoments;
-        if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments yet';
-            container.appendChild(empty);
-            return;
-        }
-
-        stopDiscoveryMirror();
-
-        var mom = PlexdMoments.getRandomMoment(moments);
-        if (!mom) return;
-
-        // Track which moment is showing so keyboard handlers can access it
-        momentBrowserState._discoveryMoment = mom;
-        // Sync selectedIndex to this moment's position in filtered list
-        for (var si = 0; si < moments.length; si++) {
-            if (moments[si].id === mom.id) { momentBrowserState.selectedIndex = si; break; }
-        }
-
-        var wrapper = document.createElement('div');
-        wrapper.className = 'moment-discovery';
-
-        var loadedStream = resolveMomentStream(mom);
-
-        if (loadedStream && loadedStream.video) {
-            var sourceVid = loadedStream.video;
-            var isExtracted = !!loadedStream._isExtracted;
-            var canvas = document.createElement('canvas');
-            canvas.width = 1280;
-            canvas.height = 720;
-            wrapper.appendChild(canvas);
-            var ctx = canvas.getContext('2d');
-
-            // Seek to moment start
-            if (isExtracted) {
-                sourceVid.currentTime = 0;
-            } else {
-                sourceVid.currentTime = mom.start;
-            }
-            if (sourceVid.paused) sourceVid.play().catch(function() {});
-
-            // Loop within moment range
-            var loopHandler = (function(vid, m, extracted) {
-                return function() {
-                    if (extracted) {
-                        if (vid.currentTime >= (m.end - m.start) - 0.1) vid.currentTime = 0;
-                    } else {
-                        if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
-                    }
-                };
-            })(sourceVid, mom, isExtracted);
-            sourceVid.addEventListener('timeupdate', loopHandler);
-            discoveryMirrorState.video = sourceVid;
-            discoveryMirrorState.handler = loopHandler;
-            discoveryMirrorState.canvas = canvas;
-
-            // rAF mirror loop
-            function discoveryMirrorLoop() {
-                if (!momentBrowserState.open || momentBrowserState.mode !== 4) {
-                    stopDiscoveryMirror();
-                    return;
-                }
-                if (sourceVid.readyState >= 2) {
-                    var vw = sourceVid.videoWidth || 1280;
-                    var vh = sourceVid.videoHeight || 720;
-                    var canvasAR = canvas.width / canvas.height;
-                    var videoAR = vw / vh;
-                    var sx, sy, sw, sh;
-                    if (videoAR > canvasAR) {
-                        sh = vh; sw = vh * canvasAR; sx = (vw - sw) / 2; sy = 0;
-                    } else {
-                        sw = vw; sh = vw / canvasAR; sx = 0; sy = (vh - sh) / 2;
-                    }
-                    ctx.drawImage(sourceVid, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-                }
-                discoveryMirrorState.rafId = requestAnimationFrame(discoveryMirrorLoop);
-            }
-            discoveryMirrorState.rafId = requestAnimationFrame(discoveryMirrorLoop);
-        } else if (mom.thumbnailDataUrl) {
-            // Fallback: show thumbnail image
-            var img = document.createElement('img');
-            img.src = mom.thumbnailDataUrl;
-            img.alt = 'Moment thumbnail';
-            wrapper.appendChild(img);
-        } else {
-            var placeholder = document.createElement('div');
-            placeholder.className = 'moment-browser-empty';
-            placeholder.textContent = 'Source not loaded';
-            wrapper.appendChild(placeholder);
-        }
-
-        // Info overlay at bottom
-        var info = document.createElement('div');
-        info.className = 'moment-discovery-info';
-        var duration = (mom.end - mom.start).toFixed(1);
-        var title = mom.sourceTitle || 'Untitled';
-        var stars = mom.rating > 0 ? ' \u2605' + mom.rating : '';
-        var loved = mom.loved ? ' \u2665' : '';
-        info.textContent = title + ' \u00B7 ' + duration + 's' + stars + loved;
-        wrapper.appendChild(info);
-
-        // Hint overlay
-        var hint = document.createElement('div');
-        hint.className = 'moment-discovery-hint';
-        hint.textContent = 'Space = next random \u00B7 Enter = play in grid';
-        wrapper.appendChild(hint);
-
-        container.appendChild(wrapper);
-    }
-
-    // ── Cascade mode ─────────────────────────────────────────────────────
-
-    function renderMomentCascade(container) {
-        var moments = momentBrowserState.filteredMoments;
-        if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments match filters';
-            container.appendChild(empty);
-            return;
-        }
-
-        var displayMoments = moments.slice(0, Math.min(moments.length, 20));
-        cascadeIndex = Math.min(momentBrowserState.selectedIndex, displayMoments.length - 1);
-        if (cascadeIndex < 0) cascadeIndex = 0;
-
-        var wrapper = document.createElement('div');
-        wrapper.className = 'moment-cascade';
-
-        // Show up to 4 cards from the current index
-        var cardsToShow = Math.min(4, displayMoments.length - cascadeIndex);
-
-        for (var i = 0; i < cardsToShow; i++) {
-            var momIdx = cascadeIndex + i;
-            var mom = displayMoments[momIdx];
-            var card = document.createElement('div');
-            card.className = 'moment-cascade-card' + (i === 0 ? ' front' : '');
-            card.dataset.index = String(momIdx);
-
-            // Position cards in a stacked perspective deck
-            var scale = 1.0 - (i * 0.12);
-            var offsetY = i * 50;
-            var opacity = 1.0 - (i * 0.2);
-            var zIndex = 4 - i;
-            card.style.transform = 'translateY(' + offsetY + 'px) scale(' + scale + ')';
-            card.style.opacity = String(opacity);
-            card.style.zIndex = String(zIndex);
-
-            // Thumbnail image
-            if (mom.thumbnailDataUrl) {
-                var img = document.createElement('img');
-                img.src = mom.thumbnailDataUrl;
-                img.alt = 'Moment thumbnail';
-                card.appendChild(img);
-            }
-
-            // Info overlay (full info on front card, minimal on back cards)
-            var cardInfo = document.createElement('div');
-            cardInfo.className = 'moment-cascade-info';
-            if (i === 0) {
-                var duration = (mom.end - mom.start).toFixed(1);
-                var title = mom.sourceTitle || 'Untitled';
-                var stars = mom.rating > 0 ? ' \u2605' + mom.rating : '';
-                var loved = mom.loved ? ' \u2665' : '';
-                cardInfo.textContent = title + ' \u00B7 ' + duration + 's' + stars + loved;
-            } else {
-                cardInfo.textContent = (mom.sourceTitle || 'Untitled');
-            }
-            card.appendChild(cardInfo);
-
-            // Click on front card opens popup player
-            (function(idx, m) {
-                card.addEventListener('click', function() {
-                    if (idx === cascadeIndex) {
-                        showMomentPopupPlayer(m);
-                    } else {
-                        momentBrowserState.selectedIndex = idx;
-                        renderCurrentBrowserMode();
-                    }
-                });
-            })(momIdx, mom);
-
-            wrapper.appendChild(card);
-        }
-
-        // Navigation hint
-        var nav = document.createElement('div');
-        nav.className = 'moment-cascade-nav';
-        nav.textContent = (cascadeIndex + 1) + ' / ' + displayMoments.length + ' \u00B7 \u2190\u2192 navigate \u00B7 Enter = play';
-        wrapper.appendChild(nav);
-
-        container.appendChild(wrapper);
-    }
-
     function playMomentInContext(moment) {
         closeMomentBrowser();
         // Find loaded stream matching moment's source
@@ -4658,6 +4760,7 @@ const PlexdApp = (function() {
 
         // Helper: cycle mode forward/backward
         function cycleMode(dir) {
+            wallEditMode = false;
             momentBrowserState.mode = (mode + dir + MOMENT_MODE_NAMES.length) % MOMENT_MODE_NAMES.length;
             var modeSelect = document.querySelector('.moment-browser-mode-select');
             if (modeSelect) modeSelect.value = String(momentBrowserState.mode);
@@ -4739,8 +4842,65 @@ const PlexdApp = (function() {
                 // Reserved for future use
                 return true;
 
+            case 'a':
+                // a = AI analyze selected moment
+                e.preventDefault();
+                if (moments.length > 0 && moments[idx]) {
+                    var analyzeMom = moments[idx];
+                    showMessage('Analyzing...', 'info');
+                    fetch('/api/moments/' + encodeURIComponent(analyzeMom.id) + '/analyze', { method: 'POST' })
+                        .then(function(r) { return r.json(); })
+                        .then(function(data) {
+                            if (data.error) {
+                                showMessage('Analysis failed: ' + data.error, 'error');
+                            } else {
+                                var tagStr = (data.tags || []).join(', ');
+                                PlexdMoments.updateMoment(analyzeMom.id, {
+                                    aiTags: data.tags || [],
+                                    aiDescription: data.description || '',
+                                    aiConfidences: data.confidences || {}
+                                });
+                                showMessage('Tags: ' + (tagStr || 'none'), 'info');
+                            }
+                        })
+                        .catch(function(err) { showMessage('Analysis error: ' + err.message, 'error'); });
+                }
+                return true;
+
+            case 'A':
+                // Shift+A = AI analyze ALL untagged moments (batch)
+                e.preventDefault();
+                showMessage('Batch analyzing...', 'info');
+                fetch('/api/moments/analyze-batch', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.error) {
+                            showMessage('Batch failed: ' + data.error, 'error');
+                        } else {
+                            showMessage('Queued ' + data.queued + ' of ' + data.total + ' moments', 'info');
+                        }
+                    })
+                    .catch(function(err) { showMessage('Batch error: ' + err.message, 'error'); });
+                return true;
+
             case 'ArrowRight':
                 e.preventDefault();
+                if (e.altKey && mode === 1 && wallEditMode && moments.length > 0 && moments[idx]) {
+                    var mom = moments[idx];
+                    var win = getTimelineWindow(mom);
+                    if (e.shiftKey) {
+                        mom.end = Math.min(mom.end + 0.5, win.winEnd);
+                    } else {
+                        mom.start = Math.min(mom.start + 0.5, mom.end - 1);
+                        if (mom.peak < mom.start) mom.peak = mom.start;
+                    }
+                    PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
+                    var cell = document.querySelector('.moment-wall-cell.selected');
+                    if (cell) updateCellTimeline(cell);
+                    var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                    showMessage('In: ' + inStr + ' | Dur: ' + (mom.end - mom.start).toFixed(1) + 's', 'info');
+                    return true;
+                }
                 if (moments.length > 0) {
                     if (mode === 2) {
                         momentBrowserState.playerCursor = Math.min(momentBrowserState.playerCursor + 1, moments.length - 1);
@@ -4757,6 +4917,22 @@ const PlexdApp = (function() {
 
             case 'ArrowLeft':
                 e.preventDefault();
+                if (e.altKey && mode === 1 && wallEditMode && moments.length > 0 && moments[idx]) {
+                    var mom = moments[idx];
+                    var win = getTimelineWindow(mom);
+                    if (e.shiftKey) {
+                        mom.end = Math.max(mom.end - 0.5, mom.start + 1);
+                        if (mom.peak > mom.end) mom.peak = mom.end;
+                    } else {
+                        mom.start = Math.max(mom.start - 0.5, win.winStart);
+                    }
+                    PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
+                    var cell = document.querySelector('.moment-wall-cell.selected');
+                    if (cell) updateCellTimeline(cell);
+                    var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                    showMessage('In: ' + inStr + ' | Dur: ' + (mom.end - mom.start).toFixed(1) + 's', 'info');
+                    return true;
+                }
                 if (moments.length > 0) {
                     if (mode === 2) {
                         momentBrowserState.playerCursor = Math.max(momentBrowserState.playerCursor - 1, 0);
@@ -4840,16 +5016,15 @@ const PlexdApp = (function() {
                     return true;
                 }
                 if (moments.length > 0 && moments[idx]) {
-                    if (mode === 2) {
+                    if (mode === 1) {
+                        // Wall: toggle edit mode
+                        toggleWallEditMode();
+                    } else if (mode === 2) {
                         // Player mode: Enter plays the filmstrip cursor position
                         momentBrowserState.selectedIndex = momentBrowserState.playerCursor;
                         loadReelMoment();
-                    } else if (mode === 4) {
-                        // Discovery: play in main grid context
-                        var discoveryMom = momentBrowserState._discoveryMoment;
-                        if (discoveryMom) playMomentInContext(discoveryMom);
                     } else {
-                        // Grid/Wall/Collage/Cascade: popup player overlay
+                        // Grid/Collage: popup player overlay
                         showMomentPopupPlayer(moments[idx]);
                     }
                 }
@@ -4939,11 +5114,8 @@ const PlexdApp = (function() {
                 if (mode === 2) {
                     // Player: Space always plays random
                     advancePlayer();
-                } else if (mode === 4) {
-                    // Discovery: pick new random moment and re-render
-                    renderCurrentBrowserMode();
                 } else {
-                    // Grid/Wall/Collage/Cascade: play/pause selected moment's source
+                    // Grid/Wall/Collage: play/pause selected moment's source
                     toggleSelectedPlayback();
                 }
                 return true;
@@ -4991,11 +5163,11 @@ const PlexdApp = (function() {
 
     function closeMomentBrowser() {
         momentBrowserState.open = false;
+        wallEditMode = false;
         closeMomentPopupPlayer();
         stopReelMirror();
         stopWallMirrors();
         stopCollageMirrors();
-        stopDiscoveryMirror();
         var overlay = document.getElementById('encore-overlay');
         if (overlay) {
             overlay.querySelectorAll('video').forEach(function(v) {
@@ -9546,8 +9718,8 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Space</kbd> Next scene (Theater) · Play/Pause (Adv)</div>
                         <div class="plexd-shortcut"><kbd>Shift+Space</kbd> Previous scene (Theater)</div>
                         <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene (Theater)</div>
+                        <div class="plexd-shortcut"><kbd>K</kbd> Capture Moment · <kbd>J</kbd> Moment Browser</div>
                         <div class="plexd-shortcut"><kbd>N</kbd> Toggle Encore view</div>
-                        <div class="plexd-shortcut"><kbd>K</kbd> Capture moment</div>
                         <div class="plexd-shortcut"><kbd>E</kbd> Cycle Climax sub-mode · <kbd>Shift+E</kbd> Reverse</div>
                         <div class="plexd-shortcut"><kbd>Space·Space</kbd> Random seek</div>
                         <div class="plexd-shortcut"><kbd>←</kbd><kbd>→</kbd> Rotate hero (Stage)</div>
@@ -9582,6 +9754,9 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Space</kbd> Play moment</div>
                         <div class="plexd-shortcut"><kbd>/</kbd> Random moment · <kbd>Shift+/</kbd> Random seek all</div>
                         <div class="plexd-shortcut"><kbd>R</kbd> Toggle shuffle (Player mode)</div>
+                        <div class="plexd-shortcut"><kbd>Opt+←→</kbd> Nudge in-point ±0.5s (Wall)</div>
+                        <div class="plexd-shortcut"><kbd>Opt+Shift+←→</kbd> Adjust duration ±0.5s (Wall)</div>
+                        <div class="plexd-shortcut"><kbd>Drag handles</kbd> Drag in/out points (Wall)</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>UI</h4>

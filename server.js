@@ -188,7 +188,31 @@ try {
     console.log('[Server] ffmpeg not found - HLS transcoding disabled');
 }
 
-// Ollama LLM integration (optional — for AI analysis of moment thumbnails)
+// === AI Integration (Skier + Ollama) ===
+// Skier: local NSFW tagger (structured tags with confidence scores)
+// Ollama: local LLM (natural language descriptions)
+// Both optional, auto-detected on startup and every 5 minutes.
+
+let skierAvailable = false;
+const SKIER_BASE = 'http://localhost:8000';
+
+async function checkSkier() {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(SKIER_BASE + '/openapi.json', { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+            if (!skierAvailable) console.log('[Server] Skier model server available at', SKIER_BASE);
+            skierAvailable = true;
+        } else {
+            skierAvailable = false;
+        }
+    } catch (e) {
+        skierAvailable = false;
+    }
+}
+
 let ollamaAvailable = false;
 let ollamaModel = null;
 const OLLAMA_BASE = 'http://localhost:11434';
@@ -203,29 +227,82 @@ async function checkOllama() {
         const data = await res.json();
         if (!data.models || data.models.length === 0) return;
 
-        // Prefer vision-capable models (llava, bakllava, llama3.2-vision, minicpm-v)
         const visionModels = data.models.filter(m =>
-            /llava|bakllava|vision|minicpm/i.test(m.name)
+            /llava|bakllava|vision|minicpm|qwen.*vl|abliterated/i.test(m.name)
         );
 
         if (visionModels.length > 0) {
-            ollamaModel = visionModels[0].name;
+            const preferred = visionModels.find(m => /qwen/i.test(m.name))
+                || visionModels.find(m => /llava/i.test(m.name))
+                || visionModels[0];
+            ollamaModel = preferred.name;
             ollamaAvailable = true;
             console.log('[Server] Ollama available with vision model:', ollamaModel);
         } else {
             ollamaModel = null;
             ollamaAvailable = false;
-            // Only log on first check or state change
         }
     } catch (e) {
         ollamaModel = null;
         ollamaAvailable = false;
-        // Ollama not running — that's fine, it's optional
     }
 }
 
-// Check on startup, re-check every 5 minutes (user might start Ollama later)
+// Skier analysis: send thumbnail file path, get structured tags
+async function analyzeWithSkier(thumbPath) {
+    const res = await fetch(SKIER_BASE + '/process_images/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            paths: [thumbPath],
+            return_confidence: true
+        })
+    });
+    if (!res.ok) throw new Error('Skier returned ' + res.status);
+    const data = await res.json();
+    const actions = data.result?.[0]?.actions || [];
+    // Flatten to { tags: [...], confidences: {...} }
+    const tags = [];
+    const confidences = {};
+    for (const [tag, confidence] of actions) {
+        const clean = tag.replace(/_AI$/i, '').toLowerCase().replace(/_/g, ' ');
+        tags.push(clean);
+        confidences[clean] = confidence;
+    }
+    return { tags, confidences, provider: 'skier' };
+}
+
+// Ollama analysis: send thumbnail base64, get description + parsed tags
+async function analyzeWithOllama(thumbPath) {
+    const thumbBuffer = await fs.promises.readFile(thumbPath);
+    const thumbBase64 = thumbBuffer.toString('base64');
+    const res = await fetch(OLLAMA_BASE + '/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            model: ollamaModel,
+            prompt: 'Describe this video frame in 1-2 sentences. Then list 3-5 descriptive tags as a comma-separated list on a new line starting with "Tags: ". Be concise and specific about what you see.',
+            images: [thumbBase64],
+            stream: false
+        })
+    });
+    if (!res.ok) throw new Error('Ollama returned ' + res.status);
+    const data = await res.json();
+    const response = data.response || '';
+    let description = response;
+    let tags = [];
+    const tagsMatch = response.match(/Tags?:\s*(.+)/i);
+    if (tagsMatch) {
+        description = response.slice(0, tagsMatch.index).trim();
+        tags = tagsMatch[1].split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
+    }
+    return { description, tags, provider: 'ollama' };
+}
+
+// Check both on startup, re-check every 5 minutes
+checkSkier();
 checkOllama();
+setInterval(checkSkier, 5 * 60 * 1000);
 setInterval(checkOllama, 5 * 60 * 1000);
 
 // Check available disk space (returns MB)
@@ -2492,21 +2569,20 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // === AI Analysis API (Ollama) ===
+    // === AI Analysis API (Skier + Ollama) ===
 
-    // GET /api/ai/status — Check Ollama availability
+    // GET /api/ai/status — Check availability of AI backends
     if (pathname === '/api/ai/status' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            available: ollamaAvailable,
-            model: ollamaModel,
-            provider: 'ollama',
-            endpoint: OLLAMA_BASE
+            skier: { available: skierAvailable, endpoint: SKIER_BASE },
+            ollama: { available: ollamaAvailable, model: ollamaModel, endpoint: OLLAMA_BASE },
+            available: skierAvailable || ollamaAvailable
         }));
         return;
     }
 
-    // POST /api/moments/:id/analyze — Run AI analysis on moment thumbnail
+    // POST /api/moments/:id/analyze — Analyze single moment (Skier first, Ollama fallback)
     const analyzeMatch = pathname.match(/^\/api\/moments\/([^/]+)\/analyze$/);
     if (analyzeMatch && req.method === 'POST') {
         const momentId = decodeURIComponent(analyzeMatch[1]);
@@ -2517,15 +2593,13 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (!ollamaAvailable || !ollamaModel) {
+        if (!skierAvailable && !ollamaAvailable) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Ollama not available or no vision model found' }));
+            res.end(JSON.stringify({ error: 'No AI backend available (Skier or Ollama)' }));
             return;
         }
 
-        // Find thumbnail
         const thumbPath = path.join(MOMENTS_THUMBS, momentId + '.jpg');
-
         try {
             await fs.promises.access(thumbPath);
         } catch {
@@ -2535,38 +2609,37 @@ const server = http.createServer(async (req, res) => {
         }
 
         try {
-            // Read thumbnail as base64
-            const thumbBuffer = await fs.promises.readFile(thumbPath);
-            const thumbBase64 = thumbBuffer.toString('base64');
+            let aiTags = [];
+            let aiDescription = '';
+            let confidences = {};
+            let providers = [];
 
-            // Call Ollama vision API
-            const ollamaRes = await fetch(OLLAMA_BASE + '/api/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: ollamaModel,
-                    prompt: 'Describe this video frame in 1-2 sentences. Then list 3-5 descriptive tags as a comma-separated list on a new line starting with "Tags: ". Be concise and specific about what you see.',
-                    images: [thumbBase64],
-                    stream: false
-                })
-            });
-
-            if (!ollamaRes.ok) {
-                const errText = await ollamaRes.text();
-                throw new Error('Ollama returned ' + ollamaRes.status + ': ' + errText);
+            // Skier: structured tags with confidence
+            if (skierAvailable) {
+                try {
+                    const skierResult = await analyzeWithSkier(thumbPath);
+                    aiTags = skierResult.tags;
+                    confidences = skierResult.confidences;
+                    providers.push('skier');
+                } catch (err) {
+                    console.warn('[Server] Skier analysis failed, trying Ollama:', err.message);
+                }
             }
 
-            const ollamaData = await ollamaRes.json();
-            const response = ollamaData.response || '';
+            // Ollama: natural language description (+ tags if Skier didn't provide any)
+            if (ollamaAvailable && ollamaModel) {
+                try {
+                    const ollamaResult = await analyzeWithOllama(thumbPath);
+                    aiDescription = ollamaResult.description;
+                    if (aiTags.length === 0) aiTags = ollamaResult.tags;
+                    providers.push('ollama');
+                } catch (err) {
+                    console.warn('[Server] Ollama analysis failed:', err.message);
+                }
+            }
 
-            // Parse description and tags from response
-            let aiDescription = response;
-            let aiTags = [];
-
-            const tagsMatch = response.match(/Tags?:\s*(.+)/i);
-            if (tagsMatch) {
-                aiDescription = response.slice(0, tagsMatch.index).trim();
-                aiTags = tagsMatch[1].split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
+            if (providers.length === 0) {
+                throw new Error('All AI backends failed');
             }
 
             // Update moment in server store
@@ -2574,25 +2647,76 @@ const server = http.createServer(async (req, res) => {
             if (moment) {
                 moment.aiDescription = aiDescription;
                 moment.aiTags = aiTags;
+                if (Object.keys(confidences).length > 0) moment.aiConfidences = confidences;
                 moment.updatedAt = Date.now();
                 saveMomentsDb();
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
-                momentId: momentId,
-                description: aiDescription,
-                tags: aiTags,
-                model: ollamaModel
+                momentId, description: aiDescription, tags: aiTags,
+                confidences, providers
             }));
 
-            console.log('[Server] AI analysis complete for', momentId, '- tags:', aiTags.join(', '));
+            console.log('[Server] AI analysis complete for', momentId,
+                '- providers:', providers.join('+'),
+                '- tags:', aiTags.join(', '));
 
         } catch (err) {
             console.error('[Server] AI analysis failed:', err.message);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'AI analysis failed: ' + err.message }));
         }
+        return;
+    }
+
+    // POST /api/moments/analyze-batch — Analyze all untagged moments
+    if (pathname === '/api/moments/analyze-batch' && req.method === 'POST') {
+        if (!skierAvailable && !ollamaAvailable) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No AI backend available' }));
+            return;
+        }
+
+        const untagged = momentsDb.filter(m =>
+            (!m.aiTags || m.aiTags.length === 0) && m.thumbnailPath
+        );
+
+        // Respond immediately with count, process in background
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ queued: untagged.length, total: momentsDb.length }));
+
+        // Process sequentially in background (don't overwhelm the AI servers)
+        (async () => {
+            let done = 0;
+            for (const mom of untagged) {
+                const thumbPath = path.join(MOMENTS_THUMBS, mom.id + '.jpg');
+                try {
+                    await fs.promises.access(thumbPath);
+                } catch { continue; }
+
+                try {
+                    if (skierAvailable) {
+                        const result = await analyzeWithSkier(thumbPath);
+                        mom.aiTags = result.tags;
+                        if (Object.keys(result.confidences).length > 0) mom.aiConfidences = result.confidences;
+                    }
+                    if (ollamaAvailable && ollamaModel) {
+                        const result = await analyzeWithOllama(thumbPath);
+                        mom.aiDescription = result.description;
+                        if (!mom.aiTags || mom.aiTags.length === 0) mom.aiTags = result.tags;
+                    }
+                    mom.updatedAt = Date.now();
+                    done++;
+                    // Save every 5 to avoid data loss
+                    if (done % 5 === 0) saveMomentsDb();
+                } catch (err) {
+                    console.warn('[Server] Batch analyze failed for', mom.id, ':', err.message);
+                }
+            }
+            if (done > 0) saveMomentsDb();
+            console.log('[Server] Batch analyze complete:', done + '/' + untagged.length, 'moments tagged');
+        })();
         return;
     }
 

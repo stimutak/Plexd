@@ -7646,6 +7646,21 @@ const PlexdApp = (function() {
             }
         });
 
+        // Collect moment IDs associated with these streams
+        const momentIds = [];
+        if (typeof PlexdMoments !== 'undefined') {
+            const allMoments = PlexdMoments.getAllMoments();
+            const savedUrls = new Set(urls);
+            const savedFileNames = new Set(localFiles);
+            allMoments.forEach(m => {
+                if (savedUrls.has(m.sourceUrl)) {
+                    momentIds.push(m.id);
+                } else if (m.sourceTitle && savedFileNames.has(m.sourceTitle)) {
+                    momentIds.push(m.id);
+                }
+            });
+        }
+
         combinations[name] = {
             urls: urls,
             localFiles: localFiles,
@@ -7655,6 +7670,7 @@ const PlexdApp = (function() {
             favoriteUrls: favoriteUrls.length > 0 ? favoriteUrls : undefined,
             favoriteFileNames: favoriteFileNames.length > 0 ? favoriteFileNames : undefined,
             positions: Object.keys(positions).length > 0 ? positions : undefined,
+            momentIds: momentIds.length > 0 ? momentIds : undefined,
             savedAt: Date.now()
         };
 
@@ -7689,6 +7705,9 @@ const PlexdApp = (function() {
         }
         if (favCount > 0) {
             msg += ` | ${favCount} fav`;
+        }
+        if (momentIds.length > 0) {
+            msg += ` | ${momentIds.length} moment${momentIds.length !== 1 ? 's' : ''}`;
         }
         if (shortVideos > 0) {
             msg += ` | excluded: ${shortVideos} short`;
@@ -8555,6 +8574,14 @@ const PlexdApp = (function() {
             }, 100);
         }
 
+        // Note associated moments
+        const momentIds = combo.momentIds || [];
+        if (momentIds.length > 0) {
+            console.log(`[Plexd] Set "${name}" has ${momentIds.length} associated moment(s)`);
+            // Moments are already in localStorage/PlexdMoments — just log the association
+            // Future: could filter Moment Browser to show only these moments
+        }
+
         // Save to current streams (only URL streams, not local files)
         var savableUrls = (combo.urls || []).filter(url => url && isValidUrl(url));
         localStorage.setItem('plexd_streams', JSON.stringify(savableUrls));
@@ -9351,8 +9378,8 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Space</kbd> Next scene (Theater) · Play/Pause (Adv)</div>
                         <div class="plexd-shortcut"><kbd>Shift+Space</kbd> Previous scene (Theater)</div>
                         <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene (Theater)</div>
-                        <div class="plexd-shortcut"><kbd>J</kbd> Toggle Encore view</div>
-                        <div class="plexd-shortcut"><kbd>K</kbd> Bookmark moment</div>
+                        <div class="plexd-shortcut"><kbd>N</kbd> Toggle Encore view</div>
+                        <div class="plexd-shortcut"><kbd>K</kbd> Capture moment</div>
                         <div class="plexd-shortcut"><kbd>E</kbd> Cycle Climax sub-mode · <kbd>Shift+E</kbd> Reverse</div>
                         <div class="plexd-shortcut"><kbd>Space·Space</kbd> Random seek</div>
                         <div class="plexd-shortcut"><kbd>←</kbd><kbd>→</kbd> Rotate hero (Stage)</div>
@@ -9376,6 +9403,17 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>L</kbd> Force relayout (L = Layout)</div>
                         <div class="plexd-shortcut"><kbd>B</kbd> Toggle Bug Eye</div>
                         <div class="plexd-shortcut"><kbd>G</kbd> Toggle Mosaic</div>
+                    </div>
+                    <div class="plexd-shortcuts-section">
+                        <h4>Moments</h4>
+                        <div class="plexd-shortcut"><kbd>K</kbd> Capture moment · <kbd>Shift+K</kbd> Capture all</div>
+                        <div class="plexd-shortcut"><kbd>J</kbd> Open Moment Browser</div>
+                        <div class="plexd-shortcut"><kbd>E</kbd> / <kbd>Shift+E</kbd> Cycle browser mode</div>
+                        <div class="plexd-shortcut"><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> Cycle mode (alias)</div>
+                        <div class="plexd-shortcut"><kbd>Arrows</kbd> Navigate / Pan / Browse</div>
+                        <div class="plexd-shortcut"><kbd>Space</kbd> Play moment</div>
+                        <div class="plexd-shortcut"><kbd>/</kbd> Random moment · <kbd>Shift+/</kbd> Random seek all</div>
+                        <div class="plexd-shortcut"><kbd>R</kbd> Toggle shuffle (Player mode)</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>UI</h4>

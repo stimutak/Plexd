@@ -421,6 +421,33 @@ For panels with selectable items:
 4. Reset index when panel opens/closes
 5. Call navigation handler early in main `handleKeyboard()`
 
+### Moments System
+
+**Architecture:** Offline-first with server sync. localStorage is the source of truth, with 30-second dirty-checking sync to the server (`/api/moments/sync`). Thumbnails stored as JPEG files on disk.
+
+**Key globals:**
+- `PlexdMoments` — Data store IIFE (moments.js). CRUD + filter/sort/reorder + server sync.
+- `momentBrowserState` — UI state object in app.js. Tracks open/mode/selectedIndex/filters/sort.
+
+**Moment Browser modes (6):** Grid, Wall, Player, Collage, Discovery, Cascade. Cycled with E/Shift+E or Tab/Shift+Tab.
+
+**Canvas mirror pattern:** Moments play by mirroring already-loaded `<video>` elements onto `<canvas>` via rAF loop — zero extra network connections. Each mode manages its own rAF loop and MUST clean up via `stop*Mirrors()` on mode switch or browser close.
+
+**Key bindings:**
+- `K` — Capture moment from selected/fullscreen stream (peak ±5s)
+- `Shift+K` — Capture from ALL visible streams
+- `J` — Toggle Moment Browser overlay
+- `E` / `Shift+E` — Cycle browser modes (also Tab/Shift+Tab)
+- `/` — Random moment in browser
+
+**Set integration:** Saved sets (`plexd_combinations`) include `momentIds` array linking to associated moments.
+
+**Server API:**
+- `GET /api/moments` — List (with filters)
+- `POST /api/moments` — Upsert single moment
+- `POST /api/moments/sync` — Bulk sync (dirty moments)
+- `DELETE /api/moments/:id` — Remove moment + thumbnail
+
 ### HLS Transcoding System
 
 **Architecture:**

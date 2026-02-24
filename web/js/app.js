@@ -5169,6 +5169,167 @@ const PlexdApp = (function() {
             probe.removeAttribute('src');
             probe.load();
             probe = null;
+
+            // Tier 2: Audio analysis refinement (runs asynchronously while video plays)
+            if (stream.video && !stream.video.paused) {
+                audioAnalyzeRange(momentId, stream);
+            }
+        }
+    }
+
+    /**
+     * Tier 2 audio level analysis for moment range refinement.
+     * Uses Web Audio API to sample frequency data within a moment's range,
+     * finds the loudest 2-second window, and adjusts the peak if the audio
+     * hot zone differs significantly (>3s) from the visual peak.
+     * Called from autoDetectRange after visual analysis completes.
+     *
+     * IMPORTANT: createMediaElementSource can only be called once per video
+     * element. We cache the audio nodes on the video element (_plexdAudioSource,
+     * _plexdAudioCtx, _plexdAnalyser) so repeated calls reuse them.
+     */
+    function audioAnalyzeRange(momentId, stream) {
+        var mom = PlexdMoments.getMoment(momentId);
+        if (!mom || !stream || !stream.video) return;
+
+        var video = stream.video;
+
+        // Need the video to be playing for AudioContext to sample
+        if (video.paused) return;
+
+        // CORS-tainted videos block audio access — skip gracefully
+        // (crossOrigin must be set AND the server must send CORS headers;
+        // if it's a cross-origin video without crossOrigin attribute, audio will fail)
+        try {
+            var AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+
+            // Reuse existing audio nodes if already attached to this video,
+            // since createMediaElementSource throws on second call
+            var ctx = video._plexdAudioCtx;
+            var source = video._plexdAudioSource;
+            var analyser = video._plexdAnalyser;
+
+            if (!ctx || ctx.state === 'closed') {
+                ctx = new AudioCtx();
+                try {
+                    source = ctx.createMediaElementSource(video);
+                } catch (e) {
+                    // Already has a source on a different context, or CORS blocked
+                    console.warn('[Moments] Audio analysis: cannot create source:', e.message);
+                    ctx.close();
+                    return;
+                }
+                analyser = ctx.createAnalyser();
+                analyser.fftSize = 256;
+
+                source.connect(analyser);
+                analyser.connect(ctx.destination); // Still output audio
+
+                // Cache on the video element for reuse
+                video._plexdAudioCtx = ctx;
+                video._plexdAudioSource = source;
+                video._plexdAnalyser = analyser;
+            }
+
+            var bufferLength = analyser.frequencyBinCount;
+            var dataArray = new Uint8Array(bufferLength);
+            var samples = []; // { time, level }
+
+            // Sample every 100ms within the moment range
+            var sampleInterval = setInterval(function() {
+                if (!PlexdMoments.getMoment(momentId)) {
+                    // Moment was deleted during analysis
+                    cleanupAudio();
+                    return;
+                }
+
+                var currentTime = video.currentTime;
+
+                // Only sample within the moment's range
+                if (currentTime >= mom.start && currentTime <= mom.end) {
+                    analyser.getByteFrequencyData(dataArray);
+
+                    // Calculate average level across frequency bins
+                    var sum = 0;
+                    for (var i = 0; i < bufferLength; i++) {
+                        sum += dataArray[i];
+                    }
+                    var avgLevel = sum / bufferLength;
+
+                    samples.push({ time: currentTime, level: avgLevel });
+                }
+
+                // Once we've passed the end of the range, or collected enough, process results
+                if (currentTime > mom.end + 1 || samples.length > 300) {
+                    processAudioSamples();
+                    cleanupAudio();
+                }
+            }, 100);
+
+            // Process collected samples to find the audio hot zone
+            function processAudioSamples() {
+                if (samples.length < 5) return; // Not enough data
+
+                // Find the loudest sliding window (2-second window)
+                var windowSize = Math.max(1, Math.round(2 / 0.1)); // 2s at 100ms intervals = 20 samples
+                if (windowSize > samples.length) windowSize = samples.length;
+                var bestStart = 0;
+                var bestAvg = 0;
+
+                for (var i = 0; i <= samples.length - windowSize; i++) {
+                    var windowSum = 0;
+                    for (var j = i; j < i + windowSize; j++) {
+                        windowSum += samples[j].level;
+                    }
+                    var windowAvg = windowSum / windowSize;
+                    if (windowAvg > bestAvg) {
+                        bestAvg = windowAvg;
+                        bestStart = i;
+                    }
+                }
+
+                // Audio peak is the center of the loudest window
+                var audioPeakIdx = bestStart + Math.floor(windowSize / 2);
+                if (audioPeakIdx >= samples.length) audioPeakIdx = samples.length - 1;
+                var audioPeakTime = samples[audioPeakIdx].time;
+
+                // Re-read moment in case visual analysis updated it
+                var freshMom = PlexdMoments.getMoment(momentId);
+                if (!freshMom) return;
+
+                // Only adjust if audio peak differs significantly from visual peak (>3s)
+                var visualPeak = freshMom.peak;
+                if (Math.abs(audioPeakTime - visualPeak) > 3) {
+                    // Average visual and audio peaks
+                    var newPeak = (visualPeak + audioPeakTime) / 2;
+                    // Clamp to moment range
+                    newPeak = Math.max(freshMom.start + 0.5, Math.min(newPeak, freshMom.end - 0.5));
+
+                    PlexdMoments.updateMoment(momentId, { peak: newPeak });
+                    console.log('[Moments] Audio analysis adjusted peak:', visualPeak.toFixed(1), '->',
+                        newPeak.toFixed(1), '(audio peak at', audioPeakTime.toFixed(1),
+                        ', avg level:', bestAvg.toFixed(0), ')');
+                } else {
+                    console.log('[Moments] Audio analysis: peak confirmed at', visualPeak.toFixed(1),
+                        '(audio peak at', audioPeakTime.toFixed(1), ', delta:', Math.abs(audioPeakTime - visualPeak).toFixed(1), 's)');
+                }
+            }
+
+            function cleanupAudio() {
+                clearInterval(sampleInterval);
+                // Do NOT close the AudioContext or disconnect nodes —
+                // they are cached on the video element for reuse and
+                // closing would kill audio output for the stream.
+            }
+
+            // Safety timeout — clean up after 60 seconds regardless
+            setTimeout(function() {
+                if (sampleInterval) cleanupAudio();
+            }, 60000);
+
+        } catch (e) {
+            console.warn('[Moments] Audio analysis unavailable:', e.message);
         }
     }
 

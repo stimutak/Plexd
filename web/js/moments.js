@@ -61,6 +61,7 @@ const PlexdMoments = (function() {
             rating: opts.rating || 0,
             loved: opts.loved || false,
             tags: opts.tags || [],
+            userTags: opts.userTags || [],
             notes: opts.notes || '',
             aiDescription: opts.aiDescription || '',
             aiTags: opts.aiTags || [],
@@ -247,6 +248,15 @@ const PlexdMoments = (function() {
                 break;
             case 'manual':
                 sorted.sort(function(a, b) { return a.sortOrder - b.sortOrder; });
+                break;
+            case 'unseen':
+                sorted.sort(function(a, b) { return (a.playCount || 0) - (b.playCount || 0); });
+                break;
+            case 'random':
+                for (var i = sorted.length - 1; i > 0; i--) {
+                    var j = Math.floor(Math.random() * (i + 1));
+                    var tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp;
+                }
                 break;
         }
         return sorted;
@@ -443,26 +453,22 @@ const PlexdMoments = (function() {
                 // New from server — add locally
                 moments.push(sm);
             } else {
-                // Exists locally — merge based on updatedAt
+                // Exists locally — merge INTO existing object (preserves references)
                 var local = moments[localIdx];
                 var serverTime = sm.updatedAt || 0;
                 var localTime = local.updatedAt || 0;
 
                 if (serverTime > localTime) {
-                    // Server is newer: take server version, but preserve client range if local is dirty
-                    var merged = {};
+                    // Server is newer: apply server fields to local object
                     var sKeys = Object.keys(sm);
                     for (var k = 0; k < sKeys.length; k++) {
-                        merged[sKeys[k]] = sm[sKeys[k]];
+                        var key = sKeys[k];
+                        // Client wins for range/edit fields if locally modified
+                        if (_dirtyIds[sm.id] && (key === 'start' || key === 'end' || key === 'peak' || key === 'peakEnd' || key === 'userTags')) {
+                            continue;
+                        }
+                        local[key] = sm[key];
                     }
-                    // Client wins for range fields if this moment was locally modified
-                    if (_dirtyIds[sm.id]) {
-                        merged.start = local.start;
-                        merged.end = local.end;
-                        merged.peak = local.peak;
-                        merged.peakEnd = local.peakEnd;
-                    }
-                    moments[localIdx] = merged;
                 }
                 // else: local is newer or same, keep local version
             }

@@ -3139,19 +3139,30 @@ const PlexdApp = (function() {
         sortLabel.textContent = 'Sort';
         sortGroup.appendChild(sortLabel);
 
-        var sortNames = { created: 'Newest', rating: 'Top rated', played: 'Recent', playCount: 'Most played', duration: 'Longest', manual: 'Custom' };
-        var sortBtn = document.createElement('button');
-        sortBtn.className = 'moment-filter-btn moment-sort-btn';
-        sortBtn.textContent = sortNames[momentBrowserState.sortBy] || momentBrowserState.sortBy;
-        sortBtn.title = 'Click to cycle sort order';
-        sortBtn.addEventListener('click', function() {
-            var sorts = ['created', 'rating', 'played', 'playCount', 'duration', 'manual'];
-            var idx = sorts.indexOf(momentBrowserState.sortBy);
-            momentBrowserState.sortBy = sorts[(idx + 1) % sorts.length];
-            sortBtn.textContent = sortNames[momentBrowserState.sortBy] || momentBrowserState.sortBy;
+        var sortSelect = document.createElement('select');
+        sortSelect.className = 'moment-filter-btn moment-sort-select';
+        var sortOpts = [
+            ['created', 'Newest'],
+            ['rating', 'Top Rated'],
+            ['unseen', 'Never Seen'],
+            ['played', 'Recently Played'],
+            ['playCount', 'Most Played'],
+            ['duration', 'Longest'],
+            ['random', 'Random'],
+            ['manual', 'Custom Order']
+        ];
+        sortOpts.forEach(function(opt) {
+            var o = document.createElement('option');
+            o.value = opt[0];
+            o.textContent = opt[1];
+            if (opt[0] === momentBrowserState.sortBy) o.selected = true;
+            sortSelect.appendChild(o);
+        });
+        sortSelect.addEventListener('change', function() {
+            momentBrowserState.sortBy = sortSelect.value;
             refreshMomentBrowser();
         });
-        sortGroup.appendChild(sortBtn);
+        sortGroup.appendChild(sortSelect);
         controls.appendChild(sortGroup);
 
         // --- Selected moment status (reflects keyboard rating/love) ---
@@ -3159,6 +3170,12 @@ const PlexdApp = (function() {
         statusEl.className = 'moment-selected-status';
         statusEl.id = 'moment-selected-status';
         controls.appendChild(statusEl);
+
+        // --- AI tags bar (below header, full width) ---
+        var tagsBar = document.createElement('div');
+        tagsBar.className = 'moment-tags-bar';
+        tagsBar.id = 'moment-tags-bar';
+        // Inserted after header in the overlay build below
 
         // Overflow "..." menu
         var overflowWrap = document.createElement('div');
@@ -3216,6 +3233,7 @@ const PlexdApp = (function() {
 
         header.appendChild(controls);
         overlay.appendChild(header);
+        overlay.appendChild(tagsBar);
 
         // Content area
         var content = document.createElement('div');
@@ -3238,24 +3256,38 @@ const PlexdApp = (function() {
 
     function updateSelectedMomentStatus() {
         var el = document.getElementById('moment-selected-status');
-        if (!el) return;
+        var tagsBar = document.getElementById('moment-tags-bar');
         var moments = momentBrowserState.filteredMoments;
         var idx = momentBrowserState.selectedIndex;
         if (moments.length === 0 || !moments[idx]) {
-            el.textContent = '';
+            if (el) el.textContent = '';
+            if (tagsBar) { tagsBar.textContent = ''; tagsBar.style.display = 'none'; }
             return;
         }
         var mom = moments[idx];
-        var parts = [];
-        if (mom.loved) parts.push('\u2665');
-        if (mom.rating > 0) parts.push('\u2605' + mom.rating);
-        el.textContent = parts.length > 0 ? parts.join(' ') : '';
-        el.classList.toggle('has-love', !!mom.loved);
-        el.classList.toggle('has-rating', mom.rating > 0);
-        // Flash effect
-        el.classList.remove('flash');
-        void el.offsetWidth;
-        el.classList.add('flash');
+        // Status badge: rating + love
+        if (el) {
+            var parts = [];
+            if (mom.loved) parts.push('\u2665');
+            if (mom.rating > 0) parts.push('\u2605' + mom.rating);
+            el.textContent = parts.length > 0 ? parts.join(' ') : '';
+            el.classList.toggle('has-love', !!mom.loved);
+            el.classList.toggle('has-rating', mom.rating > 0);
+            el.classList.remove('flash');
+            void el.offsetWidth;
+            el.classList.add('flash');
+        }
+        // Tags bar: full-width row showing AI tags
+        if (tagsBar) {
+            var tags = mom.aiTags || [];
+            if (tags.length > 0) {
+                tagsBar.textContent = tags.join(' \u00b7 ');
+                tagsBar.style.display = 'block';
+            } else {
+                tagsBar.textContent = '';
+                tagsBar.style.display = 'none';
+            }
+        }
     }
 
     function refreshMomentBrowser() {
@@ -3337,59 +3369,21 @@ const PlexdApp = (function() {
             card.dataset.index = idx;
             card.draggable = true;
 
-            if (mom.thumbnailDataUrl) {
-                var img = document.createElement('img');
-                img.src = mom.thumbnailDataUrl;
-                img.draggable = false;
-                img.loading = 'lazy';
-                card.appendChild(img);
-            } else {
-                // Try extracted clip — load a poster frame via hidden video + canvas
-                var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
-                var poster = document.createElement('canvas');
-                poster.className = 'moment-card-poster';
-                poster.width = 320;
-                poster.height = 180;
-                card.appendChild(poster);
-                // Load clip in a temporary video to grab one frame
-                (function(canvas, url, moment) {
-                    var tmp = document.createElement('video');
-                    tmp.preload = 'auto';
-                    tmp.muted = true;
-                    tmp.playsInline = true;
-                    tmp.crossOrigin = 'anonymous';
-                    tmp.addEventListener('loadeddata', function() {
-                        tmp.currentTime = 0.5; // skip past any black leader
-                    });
-                    tmp.addEventListener('seeked', function() {
-                        try {
-                            var ctx = canvas.getContext('2d');
-                            ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
-                            // Cache as thumbnailDataUrl on the in-memory moment
-                            moment.thumbnailDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-                        } catch (e) {}
-                        // Cleanup
-                        tmp.pause();
-                        tmp.removeAttribute('src');
-                        tmp.load();
-                        if (!moment.extracted) {
-                            PlexdMoments.updateMoment(moment.id, {
-                                extracted: true,
-                                extractedPath: url
-                            });
-                        }
-                    });
-                    tmp.addEventListener('error', function() {
-                        // Clip doesn't exist — show placeholder
-                        var ph = document.createElement('div');
-                        ph.className = 'moment-card-placeholder';
-                        var ts = Math.floor(moment.peak / 60) + ':' + String(Math.floor(moment.peak % 60)).padStart(2, '0');
-                        ph.textContent = ts;
-                        canvas.replaceWith(ph);
-                    });
-                    tmp.src = url;
-                })(poster, clipUrl, mom);
-            }
+            // Server-side thumbnails — no client-side video elements needed
+            var img = document.createElement('img');
+            img.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            img.draggable = false;
+            img.loading = 'lazy';
+            img.className = 'moment-card-poster';
+            img.addEventListener('error', function() {
+                // No thumbnail available — show timestamp placeholder
+                var ph = document.createElement('div');
+                ph.className = 'moment-card-placeholder';
+                var ts = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
+                ph.textContent = ts;
+                img.replaceWith(ph);
+            });
+            card.appendChild(img);
 
             // Info overlay: sourceTitle, duration, rating, loved
             var info = document.createElement('div');
@@ -3408,6 +3402,14 @@ const PlexdApp = (function() {
             var metaSpan = document.createElement('div');
             metaSpan.textContent = dur + ratingText + lovedText;
             info.appendChild(metaSpan);
+            // Tags (user + AI)
+            var allTags = (mom.userTags || []).concat(mom.aiTags || []);
+            if (allTags.length > 0) {
+                var tagSpan = document.createElement('div');
+                tagSpan.className = 'moment-card-tags';
+                tagSpan.textContent = allTags.slice(0, 4).join(' \u00b7 ');
+                info.appendChild(tagSpan);
+            }
             card.appendChild(info);
 
             // Drag-to-reorder (same pattern as Player filmstrip)
@@ -3468,6 +3470,7 @@ const PlexdApp = (function() {
             cancelAnimationFrame(wallMirrorState.rafId);
             wallMirrorState.rafId = null;
         }
+        wallMirrorState._initCell = null;
         // Remove timeupdate loop handlers from source videos
         wallMirrorState.handlers.forEach(function(h) {
             if (h.video && h.handler) h.video.removeEventListener('timeupdate', h.handler);
@@ -3542,6 +3545,15 @@ const PlexdApp = (function() {
         t.peakDot.style.left = peakPct + '%';
         t.handleL.style.left = startPct + '%';
         t.handleR.style.left = endPct + '%';
+
+        // Update time readout if present
+        var timeEl = cell.querySelector('.wall-edit-time');
+        if (timeEl) {
+            var inM = Math.floor(mom.start / 60);
+            var inS = Math.floor(mom.start % 60);
+            var dur = (mom.end - mom.start).toFixed(1);
+            timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+        }
     }
 
     function setupTimelineDrag(cell) {
@@ -3553,7 +3565,68 @@ const PlexdApp = (function() {
         if (cell._dragBound) return;
         cell._dragBound = true;
 
+        function drawVidToCanvas(vid) {
+            var canvas = cell.querySelector('canvas');
+            if (!canvas || !vid || vid.readyState < 2) return;
+            var ctx = canvas.getContext('2d');
+            var vw = vid.videoWidth || 320, vh = vid.videoHeight || 180;
+            var cAR = 320 / 180, vAR = vw / vh;
+            var sx, sy, sw, sh;
+            if (vAR > cAR) { sh = vh; sw = vh * cAR; sx = (vw - sw) / 2; sy = 0; }
+            else { sw = vw; sh = vw / cAR; sx = 0; sy = (vh - sh) / 2; }
+            ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, 320, 180);
+        }
+
         function handleDrag(handle, side) {
+            function getSourceVid() {
+                var refs = wallMirrorState.canvasRefs;
+                if (!refs) return null;
+                for (var i = 0; i < refs.length; i++) {
+                    if (refs[i].mom.id === mom.id) return refs[i].sourceVid;
+                }
+                return null;
+            }
+
+            function fmtTime(s) {
+                var m = Math.floor(s / 60);
+                var sec = Math.floor(s % 60);
+                return m + ':' + String(sec).padStart(2, '0');
+            }
+
+            function showDragTooltip(clientX, clientY) {
+                var tip = document.getElementById('wall-drag-tooltip');
+                if (!tip) {
+                    tip = document.createElement('div');
+                    tip.id = 'wall-drag-tooltip';
+                    tip.className = 'wall-drag-tooltip';
+                    document.body.appendChild(tip);
+                }
+                var dur = (mom.end - mom.start).toFixed(1);
+                tip.textContent = fmtTime(side === 'left' ? mom.start : mom.end) + ' | ' + dur + 's';
+                tip.style.left = clientX + 'px';
+                tip.style.top = (clientY - 32) + 'px';
+                tip.style.display = 'block';
+            }
+
+            function hideDragTooltip() {
+                var tip = document.getElementById('wall-drag-tooltip');
+                if (tip) tip.style.display = 'none';
+            }
+
+            var _lastSeekTime = 0;
+            var _pendingSeek = null;
+
+            function seekAndDraw(vid, seekTarget) {
+                vid.currentTime = seekTarget;
+                // Listen for seek completion to draw the correct frame
+                vid.removeEventListener('seeked', vid._plexdSeekedDraw);
+                vid._plexdSeekedDraw = function() {
+                    vid.removeEventListener('seeked', vid._plexdSeekedDraw);
+                    drawVidToCanvas(vid);
+                };
+                vid.addEventListener('seeked', vid._plexdSeekedDraw);
+            }
+
             function onMove(e) {
                 e.preventDefault();
                 if (!cell._dragWin) return;
@@ -3561,6 +3634,7 @@ const PlexdApp = (function() {
                 var winDur = win.winEnd - win.winStart;
                 var rect = t.bar.getBoundingClientRect();
                 var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                var clientY = e.touches ? e.touches[0].clientY : e.clientY;
                 var pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
                 var time = win.winStart + pct * winDur;
 
@@ -3571,7 +3645,30 @@ const PlexdApp = (function() {
                     mom.end = Math.max(mom.start + 1, Math.min(time, win.winEnd));
                     if (mom.peak > mom.end) mom.peak = mom.end;
                 }
+                // Update timeline bar immediately (no video seek needed)
                 updateCellTimeline(cell);
+                showDragTooltip(clientX, clientY);
+
+                // Throttle video seeks to ~60ms to avoid decode backlog ("resistance")
+                var vid = getSourceVid();
+                if (vid) {
+                    var seekTarget = (side === 'left') ? mom.start : mom.end;
+                    var now = performance.now();
+                    if (now - _lastSeekTime >= 60) {
+                        _lastSeekTime = now;
+                        clearTimeout(_pendingSeek);
+                        _pendingSeek = null;
+                        seekAndDraw(vid, seekTarget);
+                    } else if (!_pendingSeek) {
+                        // Schedule a trailing seek so the final position always resolves
+                        _pendingSeek = setTimeout(function() {
+                            _pendingSeek = null;
+                            _lastSeekTime = performance.now();
+                            var finalTarget = (side === 'left') ? mom.start : mom.end;
+                            seekAndDraw(vid, finalTarget);
+                        }, 60 - (now - _lastSeekTime));
+                    }
+                }
             }
 
             function onEnd() {
@@ -3580,15 +3677,33 @@ const PlexdApp = (function() {
                 document.removeEventListener('touchmove', onMove);
                 document.removeEventListener('touchend', onEnd);
                 cell._dragWin = null;
+                clearTimeout(_pendingSeek);
+                _pendingSeek = null;
+                hideDragTooltip();
+                // Resume playback from new start
+                var vid = getSourceVid();
+                if (vid) {
+                    vid._plexdDragging = false;
+                    vid.removeEventListener('seeked', vid._plexdSeekedDraw);
+                    vid.currentTime = mom.start;
+                    vid.play().catch(function() {});
+                }
                 PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
                 var durStr = (mom.end - mom.start).toFixed(1) + 's';
-                var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                var inStr = fmtTime(mom.start);
                 showMessage('In: ' + inStr + ' | Dur: ' + durStr, 'info');
+                statusLog('Edit: ' + (mom.sourceTitle || mom.id).substring(0, 25) + ' \u2192 ' + inStr + ' | ' + durStr, 'info');
             }
 
             function startDrag(e) {
                 e.preventDefault();
                 e.stopPropagation();
+                // Pause video during drag for clean scrub
+                var vid = getSourceVid();
+                if (vid) {
+                    vid._plexdDragging = true;
+                    if (!vid.paused) vid.pause();
+                }
                 // Snapshot window once — stays stable during entire drag
                 cell._dragWin = getTimelineWindow(mom);
                 updateCellTimeline(cell);
@@ -3696,6 +3811,9 @@ const PlexdApp = (function() {
                     ref.sourceVid.addEventListener('timeupdate', ref._origLoopHandler.handler);
                     wallMirrorState.handlers.push(ref._origLoopHandler);
                 }
+                // Update extraction boundaries to match the edited range
+                ref.mom._extractedStart = ref.mom.start;
+                ref.mom._extractedEnd = ref.mom.end;
                 ref._origExtractedVid = null;
                 ref._origLoopHandler = null;
                 ref._editLoopHandler = null;
@@ -3731,16 +3849,30 @@ const PlexdApp = (function() {
         var dragSrcIdx = null;
         var wallSourceHandled = {}; // Track which source videos already have loop handlers
 
+        // --- Phase 1: Create lightweight cells with thumbnail posters (no video elements) ---
         moments.forEach(function(mom, idx) {
             var cell = document.createElement('div');
             cell.className = 'moment-wall-cell' + (idx === momentBrowserState.selectedIndex ? ' selected' : '');
             cell.dataset.index = idx;
             cell.draggable = true;
 
-            var canvas = document.createElement('canvas');
-            canvas.width = 320;
-            canvas.height = 180;
-            cell.appendChild(canvas);
+            // Poster image — replaced with canvas on lazy init
+            var poster = document.createElement('img');
+            poster.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            poster.loading = 'lazy';
+            poster.draggable = false;
+            poster.className = 'wall-cell-poster';
+            poster.addEventListener('error', function() {
+                // No thumbnail — show timestamp
+                var ph = document.createElement('div');
+                ph.className = 'moment-card-placeholder';
+                ph.style.width = '100%';
+                ph.style.aspectRatio = '16/9';
+                var ts = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
+                ph.textContent = ts;
+                poster.replaceWith(ph);
+            });
+            cell.appendChild(poster);
 
             // Timeline bar showing moment range within source duration
             var timeline = document.createElement('div');
@@ -3759,60 +3891,17 @@ const PlexdApp = (function() {
             timeline.appendChild(handleR);
             cell.appendChild(timeline);
             cell._timeline = { fill: fill, peakDot: peakDot, handleL: handleL, handleR: handleR, bar: timeline };
-            cell._moment = mom;
 
-            var loadedStream = resolveMomentStream(mom);
-            var ctx = canvas.getContext('2d');
-
-            if (loadedStream && loadedStream.video) {
-                var sourceVid = loadedStream.video;
-                var isExtracted = !!loadedStream._isExtracted;
-                canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom });
-
-                // Save play state before forcing play
-                if (wallMirrorState.prevPlayStates[loadedStream.id] === undefined) {
-                    wallMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
-                }
-                if (sourceVid.paused) sourceVid.play().catch(function() {});
-
-                // Only add one timeupdate handler per source video to prevent seek-fighting
-                var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
-                if (!wallSourceHandled[sourceKey]) {
-                    var loopHandler = (function(vid, m, extracted) {
-                        return function() {
-                            if (extracted) {
-                                var origStart = m._extractedStart !== undefined ? m._extractedStart : m.start;
-                                var clipStart = m.start - origStart;
-                                var clipEnd = m.end - origStart;
-                                if (vid.currentTime >= clipEnd - 0.1 || vid.currentTime < clipStart) vid.currentTime = clipStart;
-                            } else {
-                                if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
-                            }
-                        };
-                    })(sourceVid, mom, isExtracted);
-                    sourceVid.addEventListener('timeupdate', loopHandler);
-                    wallMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
-                    wallSourceHandled[sourceKey] = true;
-                } else {
-                    // Shared source: seek to this moment's start for initial frame
-                    sourceVid.currentTime = mom.start;
-                }
-            } else if (mom.thumbnailDataUrl) {
-                // Fallback: draw thumbnail on canvas
-                var thumbImg = new Image();
-                thumbImg.onload = function() {
-                    ctx.drawImage(thumbImg, 0, 0, 320, 180);
-                };
-                thumbImg.src = mom.thumbnailDataUrl;
-            } else {
-                ctx.fillStyle = 'rgba(237, 232, 224, 0.08)';
-                ctx.fillRect(0, 0, 320, 180);
-                ctx.fillStyle = 'rgba(237, 232, 224, 0.3)';
-                ctx.font = '14px sans-serif';
-                ctx.textAlign = 'center';
-                var timeStr = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
-                ctx.fillText(timeStr, 160, 95);
+            // Tag labels (user + AI)
+            var tags = (mom.userTags || []).concat(mom.aiTags || []);
+            if (tags.length > 0) {
+                var tagLabel = document.createElement('div');
+                tagLabel.className = 'wall-cell-tags';
+                tagLabel.textContent = tags.slice(0, 3).join(' \u00b7 ');
+                cell.appendChild(tagLabel);
             }
+            cell._moment = mom;
+            cell._wallInitialized = false;
 
             // Click selects
             cell.addEventListener('click', function() {
@@ -3857,9 +3946,6 @@ const PlexdApp = (function() {
             })(cell, idx);
 
             updateCellTimeline(cell);
-            if (wallEditMode && idx === momentBrowserState.selectedIndex) {
-                setupTimelineDrag(cell);
-            }
             grid.appendChild(cell);
         });
 
@@ -3869,7 +3955,85 @@ const PlexdApp = (function() {
         // Apply initial viewport pan
         applyWallViewport(grid);
 
-        // Start rAF mirror loop for all canvases with live sources
+        // --- Phase 2: Lazy-initialize visible cells via IntersectionObserver ---
+        function initWallCell(cell) {
+            if (cell._wallInitialized) return;
+            cell._wallInitialized = true;
+            var mom = cell._moment;
+            if (!mom) return;
+
+            // Replace poster with canvas
+            var poster = cell.querySelector('img.wall-cell-poster, .moment-card-placeholder');
+            var canvas = document.createElement('canvas');
+            canvas.width = 320;
+            canvas.height = 180;
+            if (poster) poster.replaceWith(canvas);
+            else cell.insertBefore(canvas, cell.firstChild);
+
+            var ctx = canvas.getContext('2d');
+            var loadedStream = resolveMomentStream(mom);
+
+            if (loadedStream && loadedStream.video) {
+                var sourceVid = loadedStream.video;
+                var isExtracted = !!loadedStream._isExtracted;
+                canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom });
+
+                // Save play state before forcing play
+                if (wallMirrorState.prevPlayStates[loadedStream.id] === undefined) {
+                    wallMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
+                }
+                if (sourceVid.paused) sourceVid.play().catch(function() {});
+
+                // Only add one timeupdate handler per source video to prevent seek-fighting
+                var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
+                if (!wallSourceHandled[sourceKey]) {
+                    var loopHandler = (function(vid, m, extracted) {
+                        return function() {
+                            if (vid._plexdDragging) return;
+                            if (extracted) {
+                                var origStart = m._extractedStart !== undefined ? m._extractedStart : m.start;
+                                var clipStart = m.start - origStart;
+                                var clipEnd = m.end - origStart;
+                                if (vid.currentTime >= clipEnd - 0.1 || vid.currentTime < clipStart) vid.currentTime = clipStart;
+                            } else {
+                                if (vid.currentTime >= m.end || vid.currentTime < m.start) vid.currentTime = m.start;
+                            }
+                        };
+                    })(sourceVid, mom, isExtracted);
+                    sourceVid.addEventListener('timeupdate', loopHandler);
+                    wallMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
+                    wallSourceHandled[sourceKey] = true;
+                } else {
+                    sourceVid.currentTime = mom.start;
+                }
+
+                // Start rAF loop if this is the first canvasRef
+                if (canvasRefs.length === 1 && !wallMirrorState.rafId) {
+                    wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
+                }
+            } else {
+                // Draw thumbnail on canvas as static fallback
+                var thumbImg = new Image();
+                thumbImg.onload = function() { ctx.drawImage(thumbImg, 0, 0, 320, 180); };
+                thumbImg.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            }
+        }
+
+        // Expose initWallCell for edit mode (updateWallSelection / toggleWallEditMode)
+        wallMirrorState._initCell = initWallCell;
+
+        // Only init video for the selected cell in edit mode — all others stay as thumbnails
+        if (wallEditMode) {
+            var selectedCell = grid.querySelector('.moment-wall-cell.selected');
+            if (selectedCell) {
+                initWallCell(selectedCell);
+                setupTimelineDrag(selectedCell);
+                var selMom = selectedCell._moment;
+                if (selMom && selMom.extracted) upgradeEditCellToSource(selMom);
+            }
+        }
+
+        // rAF mirror loop — draws only initialized canvasRefs (visible cells)
         var wallFrameSkip = 0;
         function wallMirrorLoop() {
             if (!momentBrowserState.open || momentBrowserState.mode !== 1) {
@@ -3888,6 +4052,8 @@ const PlexdApp = (function() {
                 var ref = canvasRefs[i];
                 // Edit mode: only draw the selected cell's canvas
                 if (selectedMom && ref.mom.id !== selectedMom.id) continue;
+                // Skip drawing while drag-seeking — let seeked handler control the canvas
+                if (ref.sourceVid._plexdDragging) continue;
                 if (ref.sourceVid.readyState >= 2) {
                     // Cover-crop: draw source video centered/cropped into 320x180 canvas
                     var vw = ref.sourceVid.videoWidth || 320;
@@ -3911,9 +4077,6 @@ const PlexdApp = (function() {
             }
             wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
         }
-        if (canvasRefs.length > 0) {
-            wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
-        }
     }
 
     function applyWallViewport(gridEl) {
@@ -3934,6 +4097,22 @@ const PlexdApp = (function() {
             wallEditMode = false;
             var vp = document.querySelector('.moment-wall-viewport');
             if (vp) vp.classList.remove('wall-edit-mode');
+            // Commit any pending tag input before removing overlays
+            var oldTagInput = document.querySelector('.wall-edit-tags-input');
+            if (oldTagInput) {
+                var oldCell = oldTagInput.closest('.moment-wall-cell');
+                if (oldCell && oldCell._moment) {
+                    var raw = oldTagInput.value.trim();
+                    var pendingTags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+                    oldCell._moment.userTags = pendingTags;
+                    PlexdMoments.updateMoment(oldCell._moment.id, { userTags: pendingTags });
+                }
+            }
+            // Remove edit overlays
+            var oldTagBar = document.querySelector('.wall-edit-tags');
+            if (oldTagBar) oldTagBar.remove();
+            var oldTime = document.querySelector('.wall-edit-time');
+            if (oldTime) oldTime.remove();
             // Re-enable drag-to-reorder
             cells.forEach(function(c) { c.draggable = true; });
             showMessage('Browse mode', 'info');
@@ -3943,11 +4122,15 @@ const PlexdApp = (function() {
             if (vp) vp.classList.add('wall-edit-mode');
             // Disable native drag so handle drag works
             cells.forEach(function(c) { c.draggable = false; });
+            // Lazy-init selected cell (replace thumbnail with live canvas)
+            var selCell = document.querySelector('.moment-wall-cell.selected');
+            if (selCell && !selCell._wallInitialized && wallMirrorState._initCell) {
+                wallMirrorState._initCell(selCell);
+            }
             // Upgrade extracted clip to full source for wider editing
             if (mom && mom.extracted) {
                 var upgraded = upgradeEditCellToSource(mom);
                 if (upgraded) {
-                    // Rerender timeline with source-based window
                     var selected = document.querySelector('.moment-wall-cell.selected');
                     if (selected) updateCellTimeline(selected);
                 }
@@ -3955,7 +4138,43 @@ const PlexdApp = (function() {
             // Re-attach drag handlers for selected cell
             var selected = document.querySelector('.moment-wall-cell.selected');
             if (selected && selected._timeline) setupTimelineDrag(selected);
-            showMessage('Edit mode — drag handles or Opt+Arrows', 'info');
+            // Add tag input on selected cell
+            if (selected && mom) {
+                var tagBar = document.createElement('div');
+                tagBar.className = 'wall-edit-tags';
+                var tagInput = document.createElement('input');
+                tagInput.type = 'text';
+                tagInput.className = 'wall-edit-tags-input';
+                tagInput.placeholder = 'tags (comma separated)';
+                tagInput.value = (mom.userTags || []).join(', ');
+                tagInput.addEventListener('keydown', function(ev) {
+                    ev.stopPropagation(); // don't trigger app keyboard shortcuts
+                    if (ev.key === 'Enter' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
+                        ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+                        tagInput.blur();
+                    } else if (ev.key === 'Escape') {
+                        tagInput.value = (mom.userTags || []).join(', ');
+                        tagInput.blur();
+                    }
+                });
+                tagInput.addEventListener('blur', function() {
+                    var raw = tagInput.value.trim();
+                    var tags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+                    mom.userTags = tags;
+                    PlexdMoments.updateMoment(mom.id, { userTags: tags });
+                });
+                tagBar.appendChild(tagInput);
+                selected.appendChild(tagBar);
+                // Add time readout
+                var timeEl = document.createElement('div');
+                timeEl.className = 'wall-edit-time';
+                var inM = Math.floor(mom.start / 60);
+                var inS = Math.floor(mom.start % 60);
+                var dur = (mom.end - mom.start).toFixed(1);
+                timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+                selected.appendChild(timeEl);
+            }
+            showMessage('Edit mode — drag handles, tags, Opt+Arrows', 'info');
         }
     }
 
@@ -3965,13 +4184,70 @@ const PlexdApp = (function() {
             var idx = parseInt(cell.dataset.index, 10);
             cell.classList.toggle('selected', idx === momentBrowserState.selectedIndex);
         });
-        // Re-attach drag handlers in edit mode
         if (wallEditMode) {
+            var moments = momentBrowserState.filteredMoments;
+            var mom = moments[momentBrowserState.selectedIndex] || null;
             var selected = document.querySelector('.moment-wall-cell.selected');
+            // Ensure selected cell is lazy-initialized (needs canvas for edit mode)
+            if (selected && !selected._wallInitialized && wallMirrorState._initCell) {
+                wallMirrorState._initCell(selected);
+            }
+            // Commit any pending tag input value before removing it
+            var oldTagInput = document.querySelector('.wall-edit-tags-input');
+            if (oldTagInput) {
+                var oldCell = oldTagInput.closest('.moment-wall-cell');
+                if (oldCell && oldCell._moment) {
+                    var raw = oldTagInput.value.trim();
+                    var pendingTags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+                    oldCell._moment.userTags = pendingTags;
+                    PlexdMoments.updateMoment(oldCell._moment.id, { userTags: pendingTags });
+                }
+            }
+            // Move edit overlays to newly selected cell
+            var oldTime = document.querySelector('.wall-edit-time');
+            if (oldTime) oldTime.remove();
+            var oldTags = document.querySelector('.wall-edit-tags');
+            if (oldTags) oldTags.remove();
             if (selected && selected._timeline) setupTimelineDrag(selected);
+            if (selected && mom) {
+                // Upgrade extracted source if needed
+                if (mom.extracted) upgradeEditCellToSource(mom);
+                // Time readout
+                var timeEl = document.createElement('div');
+                timeEl.className = 'wall-edit-time';
+                var inM = Math.floor(mom.start / 60);
+                var inS = Math.floor(mom.start % 60);
+                var dur = (mom.end - mom.start).toFixed(1);
+                timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+                selected.appendChild(timeEl);
+                // Tag input
+                var tagBar = document.createElement('div');
+                tagBar.className = 'wall-edit-tags';
+                var tagInput = document.createElement('input');
+                tagInput.type = 'text';
+                tagInput.className = 'wall-edit-tags-input';
+                tagInput.placeholder = 'tags (comma separated)';
+                tagInput.value = (mom.userTags || []).join(', ');
+                tagInput.addEventListener('keydown', function(ev) {
+                    ev.stopPropagation();
+                    if (ev.key === 'Enter' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
+                        ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') tagInput.blur();
+                    else if (ev.key === 'Escape') { tagInput.value = (mom.userTags || []).join(', '); tagInput.blur(); }
+                });
+                tagInput.addEventListener('blur', function() {
+                    var raw = tagInput.value.trim();
+                    var tags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+                    mom.userTags = tags;
+                    PlexdMoments.updateMoment(mom.id, { userTags: tags });
+                });
+                tagBar.appendChild(tagInput);
+                selected.appendChild(tagBar);
+                updateCellTimeline(selected);
+            }
         }
         var selected = document.querySelector('.moment-wall-cell.selected');
         if (selected) selected.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        updateSelectedMomentStatus();
     }
 
     // Reel canvas mirror state
@@ -4053,12 +4329,10 @@ const PlexdApp = (function() {
             thumb.className = classes;
             thumb.dataset.index = idx;
             thumb.draggable = true;
-            if (mom.thumbnailDataUrl) {
-                var img = document.createElement('img');
-                img.src = mom.thumbnailDataUrl;
-                img.draggable = false;
-                thumb.appendChild(img);
-            }
+            var img = document.createElement('img');
+            img.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            img.draggable = false;
+            thumb.appendChild(img);
             // Click: move cursor AND play
             thumb.addEventListener('click', function() {
                 momentBrowserState.playerCursor = idx;
@@ -4254,6 +4528,7 @@ const PlexdApp = (function() {
         });
         var hlThumb = document.querySelector('.moment-reel-thumb.highlighted');
         if (hlThumb) hlThumb.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+        updateSelectedMomentStatus();
     }
 
     // Navigate playback history (direction: -1 = back/older, +1 = forward/newer)
@@ -4384,12 +4659,13 @@ const PlexdApp = (function() {
 
                 // Solo audio: mute all except selected
                 sourceVid.muted = !isSelected;
-            } else if (mom.thumbnailDataUrl) {
+            } else {
+                // Static thumbnail fallback (server-side or cached)
                 var thumbImg = new Image();
                 (function(c, cx) {
                     thumbImg.onload = function() { cx.drawImage(c, 0, 0, 320, 180); };
                 })(thumbImg, ctx);
-                thumbImg.src = mom.thumbnailDataUrl;
+                thumbImg.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
             }
 
             var info = document.createElement('div');
@@ -4560,6 +4836,14 @@ const PlexdApp = (function() {
         info.textContent = (title ? title + ' \u2014 ' : '') + dur + rating + loved;
         panel.appendChild(info);
 
+        // AI tags row
+        if (mom.aiTags && mom.aiTags.length > 0) {
+            var popupTags = document.createElement('div');
+            popupTags.className = 'moment-popup-tags';
+            popupTags.textContent = mom.aiTags.join(' \u00b7 ');
+            panel.appendChild(popupTags);
+        }
+
         // Video element — fetch clip as blob first, then play via blob URL.
         // This bypasses Chrome's media URL resolution which can spuriously error.
         var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
@@ -4568,7 +4852,7 @@ const PlexdApp = (function() {
         video.playsInline = true;
         video.loop = true; // Extracted clips loop natively
         video.muted = true; // Mute initially to satisfy autoplay policy
-        if (mom.thumbnailDataUrl) video.poster = mom.thumbnailDataUrl;
+        video.poster = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
         panel.appendChild(video);
 
         console.log('[PopupPlayer] Fetching clip:', clipUrl);
@@ -4842,28 +5126,74 @@ const PlexdApp = (function() {
                 // Reserved for future use
                 return true;
 
+            case 'w':
+                // w = Toggle Wall edit mode (jump in to edit selected clip, press again to go back)
+                e.preventDefault();
+                if (moments.length > 0) {
+                    if (mode !== 1) {
+                        closeMomentPopupPlayer();
+                        momentBrowserState._prevMode = mode;
+                        momentBrowserState.mode = 1;
+                        renderCurrentBrowserMode();
+                        updateMomentBrowserTitle();
+                        // Auto-enter edit mode on the selected clip
+                        toggleWallEditMode();
+                        showMessage('Wall edit \u2014 W to return', 'info');
+                    } else {
+                        // Return to previous mode, clean up edit mode first
+                        if (wallEditMode) toggleWallEditMode(true);
+                        var prev = momentBrowserState._prevMode;
+                        momentBrowserState.mode = (prev !== undefined && prev !== 1) ? prev : 0;
+                        delete momentBrowserState._prevMode;
+                        renderCurrentBrowserMode();
+                        updateMomentBrowserTitle();
+                    }
+                }
+                return true;
+
+            case 'i':
+                // i = Toggle status log panel
+                e.preventDefault();
+                toggleStatusLog();
+                return true;
+
             case 'a':
                 // a = AI analyze selected moment
                 e.preventDefault();
                 if (moments.length > 0 && moments[idx]) {
                     var analyzeMom = moments[idx];
-                    showMessage('Analyzing...', 'info');
+                    var momLabel = (analyzeMom.sourceTitle || analyzeMom.id).substring(0, 30);
+                    showMessage('Analyzing \u2026 (Skier)', 'info');
+                    statusLog('AI: analyzing "' + momLabel + '" ...', 'info');
                     fetch('/api/moments/' + encodeURIComponent(analyzeMom.id) + '/analyze', { method: 'POST' })
-                        .then(function(r) { return r.json(); })
+                        .then(function(r) {
+                            if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'HTTP ' + r.status); });
+                            return r.json();
+                        })
                         .then(function(data) {
                             if (data.error) {
                                 showMessage('Analysis failed: ' + data.error, 'error');
+                                statusLog('AI FAIL: ' + data.error, 'error');
                             } else {
-                                var tagStr = (data.tags || []).join(', ');
-                                PlexdMoments.updateMoment(analyzeMom.id, {
-                                    aiTags: data.tags || [],
-                                    aiDescription: data.description || '',
-                                    aiConfidences: data.confidences || {}
-                                });
-                                showMessage('Tags: ' + (tagStr || 'none'), 'info');
+                                var tags = data.tags || [];
+                                var tagStr = tags.join(', ');
+                                var provStr = (data.providers || []).join('+');
+                                // Only update if Skier returned tags — don't wipe existing
+                                if (tags.length > 0) {
+                                    PlexdMoments.updateMoment(analyzeMom.id, {
+                                        aiTags: tags,
+                                        aiConfidences: data.confidences || {}
+                                    });
+                                }
+                                showMessage('[' + provStr + '] ' + (tagStr || 'no tags'), 'info');
+                                statusLog('AI [' + provStr + ']: ' + (tagStr || 'no new tags \u2014 kept existing'), tags.length > 0 ? 'success' : 'warn');
+                                renderCurrentBrowserMode();
                             }
                         })
-                        .catch(function(err) { showMessage('Analysis error: ' + err.message, 'error'); });
+                        .catch(function(err) {
+                            showMessage('Analysis error: ' + err.message, 'error');
+                            statusLog('AI ERROR: ' + err.message, 'error');
+                        });
                 }
                 return true;
 
@@ -4871,16 +5201,24 @@ const PlexdApp = (function() {
                 // Shift+A = AI analyze ALL untagged moments (batch)
                 e.preventDefault();
                 showMessage('Batch analyzing...', 'info');
+                statusLog('AI BATCH: starting...', 'info');
                 fetch('/api/moments/analyze-batch', { method: 'POST' })
                     .then(function(r) { return r.json(); })
                     .then(function(data) {
                         if (data.error) {
                             showMessage('Batch failed: ' + data.error, 'error');
+                            statusLog('AI BATCH FAIL: ' + data.error, 'error');
                         } else {
                             showMessage('Queued ' + data.queued + ' of ' + data.total + ' moments', 'info');
+                            statusLog('AI BATCH: queued ' + data.queued + '/' + data.total, 'success');
+                            // Poll for progress updates
+                            if (data.queued > 0) pollBatchProgress();
                         }
                     })
-                    .catch(function(err) { showMessage('Batch error: ' + err.message, 'error'); });
+                    .catch(function(err) {
+                        showMessage('Batch error: ' + err.message, 'error');
+                        statusLog('AI BATCH ERROR: ' + err.message, 'error');
+                    });
                 return true;
 
             case 'ArrowRight':
@@ -5105,17 +5443,32 @@ const PlexdApp = (function() {
 
             case ' ':
                 e.preventDefault();
-                // Popup open: toggle play/pause of the popup's source video
-                if (momentBrowserState.popupOpen && popupMirror.sourceVid) {
-                    if (popupMirror.sourceVid.paused) popupMirror.sourceVid.play().catch(function() {});
-                    else popupMirror.sourceVid.pause();
+                // Popup open: random clip (matches Player behavior)
+                if (momentBrowserState.popupOpen) {
+                    if (moments.length > 1) {
+                        var randIdx = Math.floor(Math.random() * moments.length);
+                        // Avoid picking the same one
+                        if (randIdx === momentBrowserState.selectedIndex && moments.length > 1) {
+                            randIdx = (randIdx + 1) % moments.length;
+                        }
+                        momentBrowserState.selectedIndex = randIdx;
+                        if (mode === 0) updateMomentGridSelection();
+                        else if (mode === 1) updateWallSelection();
+                        showMomentPopupPlayer(moments[randIdx]);
+                    }
                     return true;
                 }
-                if (mode === 2) {
+                if (mode === 0) {
+                    // Grid: Space = jump to random moment
+                    if (moments.length > 0) {
+                        momentBrowserState.selectedIndex = Math.floor(Math.random() * moments.length);
+                        updateMomentGridSelection();
+                    }
+                } else if (mode === 2) {
                     // Player: Space always plays random
                     advancePlayer();
                 } else {
-                    // Grid/Wall/Collage: play/pause selected moment's source
+                    // Wall/Collage: play/pause selected moment's source
                     toggleSelectedPlayback();
                 }
                 return true;
@@ -7648,6 +8001,89 @@ const PlexdApp = (function() {
         setTimeout(() => {
             messageEl.style.opacity = '0';
         }, 2000);
+    }
+
+    // --- Status Log (persistent scrollable debug panel) ---
+    var _statusLogVisible = false;
+    function statusLog(msg, type) {
+        type = type || 'info';
+        var panel = document.getElementById('plexd-status-log');
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = 'plexd-status-log';
+            panel.className = 'plexd-status-log';
+            // Build DOM safely (no innerHTML with untrusted content)
+            var header = document.createElement('div');
+            header.className = 'status-log-header';
+            var headerTitle = document.createElement('span');
+            headerTitle.textContent = 'Status Log';
+            var clearBtn = document.createElement('span');
+            clearBtn.className = 'status-log-clear';
+            clearBtn.title = 'Clear';
+            clearBtn.textContent = '\u2715';
+            header.appendChild(headerTitle);
+            header.appendChild(clearBtn);
+            var body = document.createElement('div');
+            body.className = 'status-log-body';
+            panel.appendChild(header);
+            panel.appendChild(body);
+            document.body.appendChild(panel);
+            clearBtn.addEventListener('click', function() {
+                while (body.firstChild) body.removeChild(body.firstChild);
+            });
+        }
+        var body = panel.querySelector('.status-log-body');
+        var line = document.createElement('div');
+        line.className = 'status-log-line status-log-' + type;
+        var ts = new Date();
+        var tStr = String(ts.getHours()).padStart(2, '0') + ':' + String(ts.getMinutes()).padStart(2, '0') + ':' + String(ts.getSeconds()).padStart(2, '0');
+        line.textContent = tStr + '  ' + msg;
+        body.appendChild(line);
+        body.scrollTop = body.scrollHeight;
+        // Auto-show on first log
+        if (!_statusLogVisible) toggleStatusLog(true);
+    }
+
+    var _batchPollTimer = null;
+    function pollBatchProgress() {
+        clearInterval(_batchPollTimer);
+        var lastDone = -1;
+        _batchPollTimer = setInterval(function() {
+            fetch('/api/moments/analyze-progress')
+                .then(function(r) { return r.json(); })
+                .then(function(p) {
+                    if (p.done !== lastDone) {
+                        lastDone = p.done;
+                        var msg = 'AI BATCH: ' + p.done + '/' + p.total;
+                        if (p.current) msg += ' \u2014 ' + p.current;
+                        if (p.lastTags) msg += ' [' + p.lastTags + ']';
+                        if (p.errors > 0) msg += ' (' + p.errors + ' errors)';
+                        statusLog(msg, p.errors > 0 ? 'warn' : 'info');
+                    }
+                    if (!p.running) {
+                        clearInterval(_batchPollTimer);
+                        statusLog('AI BATCH: complete \u2014 ' + p.done + ' processed, ' + p.errors + ' errors', p.errors > 0 ? 'warn' : 'success');
+                        renderCurrentBrowserMode();
+                    }
+                })
+                .catch(function() {});
+        }, 2000);
+    }
+
+    function toggleStatusLog(forceOn) {
+        var panel = document.getElementById('plexd-status-log');
+        if (!panel) {
+            if (forceOn) statusLog('Status log opened', 'info');
+            return;
+        }
+        if (forceOn === true) {
+            _statusLogVisible = true;
+        } else if (forceOn === false) {
+            _statusLogVisible = false;
+        } else {
+            _statusLogVisible = !_statusLogVisible;
+        }
+        panel.style.display = _statusLogVisible ? 'flex' : 'none';
     }
 
     /**

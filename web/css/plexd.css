@@ -3113,8 +3113,21 @@ body {
     text-shadow: 0 0 8px rgba(231, 76, 111, 0.6);
 }
 
-/* Sort button */
-.moment-sort-btn { min-width: 80px; text-align: center; }
+/* Sort dropdown */
+.moment-sort-select {
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    min-width: 100px;
+    padding-right: 20px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23999'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+}
+.moment-sort-select option {
+    background: #1a1a1a;
+    color: var(--text-sub, #aaa);
+}
 
 /* Selected moment status indicator */
 .moment-selected-status {
@@ -3135,6 +3148,21 @@ body {
 @keyframes moment-status-flash {
     0% { background: rgba(201, 163, 85, 0.3); }
     100% { background: transparent; }
+}
+/* Moment Browser — AI Tags bar */
+.moment-tags-bar {
+    display: none;
+    width: 100%;
+    padding: 4px 12px;
+    background: rgba(201, 163, 85, 0.12);
+    color: var(--gold);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-sizing: border-box;
 }
 /* Moment Browser — Overflow menu */
 .moment-overflow-wrap {
@@ -3350,9 +3378,12 @@ body {
     cursor: pointer;
     border: 2px solid transparent;
 }
-.moment-wall-cell canvas {
+.moment-wall-cell canvas,
+.moment-wall-cell img.wall-cell-poster {
     width: 100%;
     height: 100%;
+    object-fit: cover;
+    display: block;
 }
 .moment-wall-cell.selected {
     outline: 2px solid #fff;
@@ -3365,6 +3396,22 @@ body {
 .moment-wall-cell.drag-over {
     border-color: var(--gold);
     box-shadow: 0 0 8px rgba(201, 163, 85, 0.4);
+}
+
+/* Tag labels on wall cells */
+.wall-cell-tags {
+    position: absolute;
+    top: 2px;
+    left: 3px;
+    right: 3px;
+    font-size: 9px;
+    color: rgba(237, 232, 224, 0.7);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    z-index: 2;
 }
 
 /* Wall moment timeline bar — always visible passively */
@@ -3432,6 +3479,7 @@ body {
     outline-offset: -2px;
     transform: scale(1.8);
     z-index: 10;
+    overflow: visible;
     box-shadow: 0 0 24px rgba(0, 0, 0, 0.7);
 }
 .wall-edit-mode .moment-wall-cell.selected .wall-timeline-fill {
@@ -3443,6 +3491,125 @@ body {
 }
 .wall-edit-mode .moment-wall-cell.selected .wall-timeline-handle {
     display: block;
+    width: 18px;
+    height: 18px;
+}
+/* Time readout in edit mode */
+.wall-edit-time {
+    position: absolute;
+    top: 2px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 11px;
+    font-family: monospace;
+    color: var(--gold);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    z-index: 5;
+    pointer-events: none;
+}
+/* Tag input in edit mode */
+.wall-edit-tags {
+    position: absolute;
+    bottom: 16px;
+    left: 4px;
+    right: 4px;
+    z-index: 5;
+}
+.wall-edit-tags-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    background: rgba(0, 0, 0, 0.7);
+    color: var(--text);
+    border: 1px solid rgba(201, 163, 85, 0.5);
+    border-radius: 3px;
+    outline: none;
+}
+.wall-edit-tags-input:focus {
+    border-color: var(--gold);
+    background: rgba(0, 0, 0, 0.85);
+}
+.wall-edit-tags-input::placeholder {
+    color: rgba(237, 232, 224, 0.35);
+}
+/* Status log panel — persistent scrollable debug output */
+.plexd-status-log {
+    position: fixed;
+    bottom: 0;
+    right: 0;
+    width: 380px;
+    max-height: 260px;
+    display: flex;
+    flex-direction: column;
+    background: rgba(10, 8, 16, 0.92);
+    border: 1px solid rgba(201, 163, 85, 0.25);
+    border-bottom: none;
+    border-right: none;
+    border-radius: 8px 0 0 0;
+    z-index: 200000;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    backdrop-filter: blur(8px);
+}
+.status-log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(201, 163, 85, 0.15);
+    color: var(--gold);
+    font-weight: 600;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.status-log-clear {
+    cursor: pointer;
+    opacity: 0.5;
+    font-size: 13px;
+}
+.status-log-clear:hover { opacity: 1; }
+.status-log-body {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0;
+}
+.status-log-line {
+    padding: 2px 10px;
+    color: rgba(237, 232, 224, 0.7);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.status-log-success { color: #7ec97e; }
+.status-log-error { color: #e74c6f; }
+.status-log-warn { color: #e7a84c; }
+
+/* Drag tooltip — follows cursor during handle drag */
+.wall-drag-tooltip {
+    position: fixed;
+    display: none;
+    padding: 3px 8px;
+    background: rgba(0, 0, 0, 0.85);
+    color: var(--gold);
+    font-size: 12px;
+    font-family: monospace;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 9999;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+/* AI tag pills on Grid cards */
+.moment-card-tags {
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Moment Browser — Reel mode */
@@ -3600,6 +3767,12 @@ body {
     border-bottom: 1px solid rgba(201, 163, 85, 0.12);
     flex-shrink: 0;
 }
+.moment-popup-tags {
+    padding: 4px 16px 6px;
+    font-size: 12px;
+    color: var(--gold);
+    opacity: 0.8;
+}
 .moment-popup-video {
     display: block;
     width: 100%;
@@ -3627,7 +3800,8 @@ body {
     background: #000;
 }
 .moment-popup-panel.fullscreen .moment-popup-info,
-.moment-popup-panel.fullscreen .moment-popup-actions {
+.moment-popup-panel.fullscreen .moment-popup-actions,
+.moment-popup-panel.fullscreen .moment-popup-tags {
     display: none;
 }
 .moment-popup-panel.fullscreen .moment-popup-video {

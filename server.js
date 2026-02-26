@@ -90,6 +90,7 @@ if (!fs.existsSync(MOMENTS_THUMBS)) {
 // Load moments database from JSON
 let momentsDb = [];
 try { momentsDb = JSON.parse(fs.readFileSync(MOMENTS_JSON, 'utf-8')); } catch (e) { momentsDb = []; }
+let batchProgress = { total: 0, done: 0, current: '', errors: 0, running: false };
 
 function saveMomentsDb() {
     fs.writeFileSync(MOMENTS_JSON, JSON.stringify(momentsDb, null, 2));
@@ -158,9 +159,14 @@ function upsertMoment(incoming) {
     // Strip aiEmbedding from storage
     delete incoming.aiEmbedding;
 
+    // AI fields are server-only — strip from client sync to prevent overwrites
+    delete incoming.aiTags;
+    delete incoming.aiDescription;
+    delete incoming.aiConfidences;
+
     const existingIdx = momentsDb.findIndex(m => m.id === incoming.id);
     if (existingIdx !== -1) {
-        // Merge: incoming wins, but preserve server-only fields
+        // Merge: incoming wins for user fields, server keeps AI + extracted data
         const existing = momentsDb[existingIdx];
         const merged = Object.assign({}, existing, incoming);
         if (existing.thumbnailPath && !incoming.thumbnailPath) {
@@ -188,10 +194,9 @@ try {
     console.log('[Server] ffmpeg not found - HLS transcoding disabled');
 }
 
-// === AI Integration (Skier + Ollama) ===
+// === AI Integration (Skier) ===
 // Skier: local NSFW tagger (structured tags with confidence scores)
-// Ollama: local LLM (natural language descriptions)
-// Both optional, auto-detected on startup and every 5 minutes.
+// Auto-detected on startup and every 5 minutes.
 
 let skierAvailable = false;
 const SKIER_BASE = 'http://localhost:8000';
@@ -213,41 +218,6 @@ async function checkSkier() {
     }
 }
 
-let ollamaAvailable = false;
-let ollamaModel = null;
-const OLLAMA_BASE = 'http://localhost:11434';
-
-async function checkOllama() {
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3000);
-        const res = await fetch(OLLAMA_BASE + '/api/tags', { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!data.models || data.models.length === 0) return;
-
-        const visionModels = data.models.filter(m =>
-            /llava|bakllava|vision|minicpm|qwen.*vl|abliterated/i.test(m.name)
-        );
-
-        if (visionModels.length > 0) {
-            const preferred = visionModels.find(m => /qwen/i.test(m.name))
-                || visionModels.find(m => /llava/i.test(m.name))
-                || visionModels[0];
-            ollamaModel = preferred.name;
-            ollamaAvailable = true;
-            console.log('[Server] Ollama available with vision model:', ollamaModel);
-        } else {
-            ollamaModel = null;
-            ollamaAvailable = false;
-        }
-    } catch (e) {
-        ollamaModel = null;
-        ollamaAvailable = false;
-    }
-}
-
 // Skier analysis: send thumbnail file path, get structured tags
 async function analyzeWithSkier(thumbPath) {
     const res = await fetch(SKIER_BASE + '/process_images/', {
@@ -260,11 +230,17 @@ async function analyzeWithSkier(thumbPath) {
     });
     if (!res.ok) throw new Error('Skier returned ' + res.status);
     const data = await res.json();
-    const actions = data.result?.[0]?.actions || [];
-    // Flatten to { tags: [...], confidences: {...} }
+    // Collect tags from ALL categories (actions, positions, etc. — varies by model)
+    const entry = data.result?.[0] || {};
+    const allPairs = [];
+    for (const key of Object.keys(entry)) {
+        if (Array.isArray(entry[key])) {
+            for (const pair of entry[key]) allPairs.push(pair);
+        }
+    }
     const tags = [];
     const confidences = {};
-    for (const [tag, confidence] of actions) {
+    for (const [tag, confidence] of allPairs) {
         const clean = tag.replace(/_AI$/i, '').toLowerCase().replace(/_/g, ' ');
         tags.push(clean);
         confidences[clean] = confidence;
@@ -272,38 +248,9 @@ async function analyzeWithSkier(thumbPath) {
     return { tags, confidences, provider: 'skier' };
 }
 
-// Ollama analysis: send thumbnail base64, get description + parsed tags
-async function analyzeWithOllama(thumbPath) {
-    const thumbBuffer = await fs.promises.readFile(thumbPath);
-    const thumbBase64 = thumbBuffer.toString('base64');
-    const res = await fetch(OLLAMA_BASE + '/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model: ollamaModel,
-            prompt: 'Describe this video frame in 1-2 sentences. Then list 3-5 descriptive tags as a comma-separated list on a new line starting with "Tags: ". Be concise and specific about what you see.',
-            images: [thumbBase64],
-            stream: false
-        })
-    });
-    if (!res.ok) throw new Error('Ollama returned ' + res.status);
-    const data = await res.json();
-    const response = data.response || '';
-    let description = response;
-    let tags = [];
-    const tagsMatch = response.match(/Tags?:\s*(.+)/i);
-    if (tagsMatch) {
-        description = response.slice(0, tagsMatch.index).trim();
-        tags = tagsMatch[1].split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
-    }
-    return { description, tags, provider: 'ollama' };
-}
-
-// Check both on startup, re-check every 5 minutes
+// Check on startup, re-check every 5 minutes
 checkSkier();
-checkOllama();
 setInterval(checkSkier, 5 * 60 * 1000);
-setInterval(checkOllama, 5 * 60 * 1000);
 
 // Check available disk space (returns MB)
 function getFreeDiskSpaceMB() {
@@ -2350,7 +2297,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /api/moments/:id — Get single moment (with thumbnail restored)
     if (pathname.startsWith('/api/moments/') && req.method === 'GET' &&
-        !pathname.includes('/clip') && !pathname.includes('/extract') && !pathname.includes('/status') && !pathname.includes('/sync')) {
+        !pathname.includes('/clip') && !pathname.includes('/extract') && !pathname.includes('/status') && !pathname.includes('/sync') && !pathname.includes('/analyze') && !pathname.includes('/thumb')) {
         const momentId = pathname.slice('/api/moments/'.length);
         if (!isValidMomentId(momentId)) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -2535,6 +2482,65 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Serve moment thumbnail — generate from clip via ffmpeg if not cached
+    if (pathname.startsWith('/api/moments/') && pathname.endsWith('/thumb.jpg') && req.method === 'GET') {
+        const momentId = pathname.slice('/api/moments/'.length, -'/thumb.jpg'.length);
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            return;
+        }
+        const thumbPath = path.join(MOMENTS_THUMBS, momentId + '.jpg');
+
+        // 1) Already cached on disk — serve it
+        if (fs.existsSync(thumbPath)) {
+            const stat = fs.statSync(thumbPath);
+            res.writeHead(200, {
+                'Content-Type': 'image/jpeg',
+                'Content-Length': stat.size,
+                'Cache-Control': 'public, max-age=86400'
+            });
+            fs.createReadStream(thumbPath).pipe(res);
+            return;
+        }
+
+        // 2) No cached thumb — extract from clip via ffmpeg
+        const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
+        if (!clipPath.startsWith(MOMENTS_DIR) || !fs.existsSync(clipPath)) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No clip or thumbnail for moment' }));
+            return;
+        }
+
+        const ffmpeg = spawn('ffmpeg', [
+            '-i', clipPath,
+            '-vframes', '1',
+            '-ss', '0.5',
+            '-vf', 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2',
+            '-q:v', '4',
+            '-y', thumbPath
+        ]);
+        ffmpeg.on('close', (code) => {
+            if (code !== 0 || !fs.existsSync(thumbPath)) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Thumbnail generation failed' }));
+                return;
+            }
+            const stat = fs.statSync(thumbPath);
+            res.writeHead(200, {
+                'Content-Type': 'image/jpeg',
+                'Content-Length': stat.size,
+                'Cache-Control': 'public, max-age=86400'
+            });
+            fs.createReadStream(thumbPath).pipe(res);
+        });
+        ffmpeg.on('error', () => {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'ffmpeg not available' }));
+        });
+        return;
+    }
+
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip') && req.method === 'DELETE') {
         const momentId = pathname.slice('/api/moments/'.length, -'/clip'.length);
 
@@ -2569,20 +2575,19 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // === AI Analysis API (Skier + Ollama) ===
+    // === AI Analysis API (Skier) ===
 
     // GET /api/ai/status — Check availability of AI backends
     if (pathname === '/api/ai/status' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             skier: { available: skierAvailable, endpoint: SKIER_BASE },
-            ollama: { available: ollamaAvailable, model: ollamaModel, endpoint: OLLAMA_BASE },
-            available: skierAvailable || ollamaAvailable
+            available: skierAvailable
         }));
         return;
     }
 
-    // POST /api/moments/:id/analyze — Analyze single moment (Skier first, Ollama fallback)
+    // POST /api/moments/:id/analyze — Analyze single moment with Skier
     const analyzeMatch = pathname.match(/^\/api\/moments\/([^/]+)\/analyze$/);
     if (analyzeMatch && req.method === 'POST') {
         const momentId = decodeURIComponent(analyzeMatch[1]);
@@ -2593,9 +2598,9 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        if (!skierAvailable && !ollamaAvailable) {
+        if (!skierAvailable) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No AI backend available (Skier or Ollama)' }));
+            res.end(JSON.stringify({ error: 'Skier not available (http://localhost:8000)' }));
             return;
         }
 
@@ -2609,43 +2614,14 @@ const server = http.createServer(async (req, res) => {
         }
 
         try {
-            let aiTags = [];
-            let aiDescription = '';
-            let confidences = {};
-            let providers = [];
+            const skierResult = await analyzeWithSkier(thumbPath);
+            const aiTags = skierResult.tags;
+            const confidences = skierResult.confidences;
+            const providers = ['skier'];
 
-            // Skier: structured tags with confidence
-            if (skierAvailable) {
-                try {
-                    const skierResult = await analyzeWithSkier(thumbPath);
-                    aiTags = skierResult.tags;
-                    confidences = skierResult.confidences;
-                    providers.push('skier');
-                } catch (err) {
-                    console.warn('[Server] Skier analysis failed, trying Ollama:', err.message);
-                }
-            }
-
-            // Ollama: natural language description (+ tags if Skier didn't provide any)
-            if (ollamaAvailable && ollamaModel) {
-                try {
-                    const ollamaResult = await analyzeWithOllama(thumbPath);
-                    aiDescription = ollamaResult.description;
-                    if (aiTags.length === 0) aiTags = ollamaResult.tags;
-                    providers.push('ollama');
-                } catch (err) {
-                    console.warn('[Server] Ollama analysis failed:', err.message);
-                }
-            }
-
-            if (providers.length === 0) {
-                throw new Error('All AI backends failed');
-            }
-
-            // Update moment in server store
+            // Update moment in server store — only if we got tags (preserve existing)
             const moment = momentsDb.find(m => m.id === momentId);
-            if (moment) {
-                moment.aiDescription = aiDescription;
+            if (moment && aiTags.length > 0) {
                 moment.aiTags = aiTags;
                 if (Object.keys(confidences).length > 0) moment.aiConfidences = confidences;
                 moment.updatedAt = Date.now();
@@ -2654,8 +2630,7 @@ const server = http.createServer(async (req, res) => {
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
-                momentId, description: aiDescription, tags: aiTags,
-                confidences, providers
+                momentId, tags: aiTags, confidences, providers
             }));
 
             console.log('[Server] AI analysis complete for', momentId,
@@ -2672,9 +2647,9 @@ const server = http.createServer(async (req, res) => {
 
     // POST /api/moments/analyze-batch — Analyze all untagged moments
     if (pathname === '/api/moments/analyze-batch' && req.method === 'POST') {
-        if (!skierAvailable && !ollamaAvailable) {
+        if (!skierAvailable) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No AI backend available' }));
+            res.end(JSON.stringify({ error: 'Skier not available (http://localhost:8000)' }));
             return;
         }
 
@@ -2687,36 +2662,56 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ queued: untagged.length, total: momentsDb.length }));
 
         // Process sequentially in background (don't overwhelm the AI servers)
+        // Snapshot IDs — lookup fresh references each iteration to avoid stale refs from sync
+        const queuedIds = untagged.map(m => m.id);
+        batchProgress = { total: queuedIds.length, done: 0, current: '', errors: 0, running: true };
         (async () => {
-            let done = 0;
-            for (const mom of untagged) {
-                const thumbPath = path.join(MOMENTS_THUMBS, mom.id + '.jpg');
+            for (const momId of queuedIds) {
+                const thumbPath = path.join(MOMENTS_THUMBS, momId + '.jpg');
                 try {
                     await fs.promises.access(thumbPath);
-                } catch { continue; }
+                } catch { batchProgress.done++; continue; }
+
+                const mom = momentsDb.find(m => m.id === momId);
+                batchProgress.current = mom ? (mom.sourceTitle || momId).substring(0, 40) : momId;
 
                 try {
+                    let aiTags = [];
+                    let aiConfidences = {};
                     if (skierAvailable) {
                         const result = await analyzeWithSkier(thumbPath);
-                        mom.aiTags = result.tags;
-                        if (Object.keys(result.confidences).length > 0) mom.aiConfidences = result.confidences;
+                        aiTags = result.tags;
+                        aiConfidences = result.confidences;
                     }
-                    if (ollamaAvailable && ollamaModel) {
-                        const result = await analyzeWithOllama(thumbPath);
-                        mom.aiDescription = result.description;
-                        if (!mom.aiTags || mom.aiTags.length === 0) mom.aiTags = result.tags;
+                    // Fresh lookup — sync may have replaced the object reference
+                    const freshMom = momentsDb.find(m => m.id === momId);
+                    if (!freshMom) { batchProgress.done++; continue; }
+                    if (aiTags.length > 0) {
+                        freshMom.aiTags = aiTags;
+                        if (Object.keys(aiConfidences).length > 0) freshMom.aiConfidences = aiConfidences;
+                        batchProgress.lastTags = aiTags.slice(0, 5).join(', ');
                     }
-                    mom.updatedAt = Date.now();
-                    done++;
+                    freshMom.updatedAt = Date.now();
+                    batchProgress.done++;
                     // Save every 5 to avoid data loss
-                    if (done % 5 === 0) saveMomentsDb();
+                    if (batchProgress.done % 5 === 0) saveMomentsDb();
                 } catch (err) {
-                    console.warn('[Server] Batch analyze failed for', mom.id, ':', err.message);
+                    batchProgress.done++;
+                    batchProgress.errors++;
+                    console.warn('[Server] Batch analyze failed for', momId, ':', err.message);
                 }
             }
-            if (done > 0) saveMomentsDb();
-            console.log('[Server] Batch analyze complete:', done + '/' + untagged.length, 'moments tagged');
+            if (batchProgress.done > 0) saveMomentsDb();
+            batchProgress.running = false;
+            console.log('[Server] Batch analyze complete:', batchProgress.done + '/' + queuedIds.length, 'moments tagged');
         })();
+        return;
+    }
+
+    // GET /api/moments/analyze-progress — Poll batch analysis progress
+    if (pathname === '/api/moments/analyze-progress' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(batchProgress));
         return;
     }
 

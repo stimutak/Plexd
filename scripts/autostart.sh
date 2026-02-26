@@ -131,6 +131,17 @@ cleanup() {
     success "Cleanup complete"
 }
 
+# Start Skier AI servers (if management script exists)
+start_skier() {
+    local manage_script="$HOME/Projects/nsfw_ai_model_server/nsfw-ai-manage.sh"
+    if [ -x "$manage_script" ]; then
+        log "Starting Skier AI model servers..."
+        "$manage_script" start 2>/dev/null && success "Skier AI servers started" || warn "Skier AI start failed (non-critical)"
+    else
+        log "Skier AI not found — skipping"
+    fi
+}
+
 # Start the Plexd server
 start_server() {
     log "Starting Plexd server on port $PORT..."
@@ -253,6 +264,7 @@ main() {
 
     detect_os
     cleanup
+    start_skier
     start_server
     launch_chrome
     run_test

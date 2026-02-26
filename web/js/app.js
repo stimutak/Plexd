@@ -794,8 +794,8 @@ const PlexdApp = (function() {
                     sourceFileId: extractServerFileId(srcUrl),
                     sourceTitle: s.fileName || s.url,
                     streamId: s.id,
-                    start: Math.max(0, peakT - 5),
-                    end: Math.min(dur, peakT + 5),
+                    start: Math.max(0, peakT - 60),
+                    end: Math.min(dur, peakT + 60),
                     peak: peakT,
                     rating: PlexdStream.getRating(s.url, s.fileName) || 0,
                     loved: PlexdStream.isFavorite(s.id),
@@ -3507,14 +3507,18 @@ const PlexdApp = (function() {
         }
 
         if (isExtracted && !upgradedToSource) {
-            // Extracted clip: window IS the original extraction range
+            // Extracted clip: window centered on current bounds with padding for editing
             var origStart = mom._extractedStart !== undefined ? mom._extractedStart : mom.start;
             var origEnd = mom._extractedEnd !== undefined ? mom._extractedEnd : mom.end;
             if (mom._extractedStart === undefined) {
                 mom._extractedStart = mom.start;
                 mom._extractedEnd = mom.end;
             }
-            return { winStart: origStart, winEnd: origEnd, isExtracted: true, sourceDur: origEnd - origStart };
+            // Add padding so handles can drag in both directions (seeks clamp at clip bounds)
+            var padding = Math.max(momDur, 5);
+            var winStart = Math.max(0, Math.min(origStart, mom.start) - padding);
+            var winEnd = Math.max(origEnd, mom.end) + padding;
+            return { winStart: winStart, winEnd: winEnd, isExtracted: true, sourceDur: winEnd - winStart };
         } else {
             // Source loaded (or upgraded): show ±context around the moment
             var sourceDur = (loadedStream && loadedStream.video && loadedStream.video.duration > 0)
@@ -3599,7 +3603,7 @@ const PlexdApp = (function() {
                     tip = document.createElement('div');
                     tip.id = 'wall-drag-tooltip';
                     tip.className = 'wall-drag-tooltip';
-                    document.body.appendChild(tip);
+                    (document.querySelector('.plexd-app') || document.body).appendChild(tip);
                 }
                 var dur = (mom.end - mom.start).toFixed(1);
                 tip.textContent = fmtTime(side === 'left' ? mom.start : mom.end) + ' | ' + dur + 's';
@@ -3955,6 +3959,14 @@ const PlexdApp = (function() {
         // Apply initial viewport pan
         applyWallViewport(grid);
 
+        // Mouse wheel scrolling (viewport uses overflow:hidden + transform panning)
+        viewport.addEventListener('wheel', function(ev) {
+            ev.preventDefault();
+            var maxY = grid.scrollHeight - viewport.clientHeight;
+            wallViewport.y = Math.max(0, Math.min(wallViewport.y + ev.deltaY, maxY > 0 ? maxY : 0));
+            applyWallViewport(grid);
+        }, { passive: false });
+
         // --- Phase 2: Lazy-initialize visible cells via IntersectionObserver ---
         function initWallCell(cell) {
             if (cell._wallInitialized) return;
@@ -3962,16 +3974,29 @@ const PlexdApp = (function() {
             var mom = cell._moment;
             if (!mom) return;
 
-            // Replace poster with canvas
+            // Create canvas behind poster — poster stays visible until video has a frame
             var poster = cell.querySelector('img.wall-cell-poster, .moment-card-placeholder');
             var canvas = document.createElement('canvas');
             canvas.width = 320;
             canvas.height = 180;
-            if (poster) poster.replaceWith(canvas);
-            else cell.insertBefore(canvas, cell.firstChild);
-
+            canvas.className = 'wall-cell-poster'; // Same sizing as poster
             var ctx = canvas.getContext('2d');
+            // Insert canvas before poster (behind it visually)
+            if (poster) {
+                poster.parentNode.insertBefore(canvas, poster);
+                // Draw poster onto canvas as immediate fallback
+                if (poster.tagName === 'IMG' && poster.naturalWidth > 0) {
+                    ctx.drawImage(poster, 0, 0, 320, 180);
+                }
+            } else {
+                cell.insertBefore(canvas, cell.firstChild);
+            }
             var loadedStream = resolveMomentStream(mom);
+            // Remove poster once video is drawing (poster is on top, canvas behind)
+            cell._removePoster = function() {
+                if (poster && poster.parentNode) poster.parentNode.removeChild(poster);
+                cell._removePoster = null;
+            };
 
             if (loadedStream && loadedStream.video) {
                 var sourceVid = loadedStream.video;
@@ -4073,6 +4098,9 @@ const PlexdApp = (function() {
                         sy = (vh - sh) / 2;
                     }
                     ref.ctx.drawImage(ref.sourceVid, sx, sy, sw, sh, 0, 0, 320, 180);
+                    // Remove poster overlay once video is drawing
+                    var refCell = ref.canvas.closest('.moment-wall-cell');
+                    if (refCell && refCell._removePoster) refCell._removePoster();
                 }
             }
             wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
@@ -4084,6 +4112,29 @@ const PlexdApp = (function() {
         if (!gridEl) return;
         gridEl.style.transform = 'translate(' + (-wallViewport.x) + 'px, ' + (-wallViewport.y) + 'px)';
         gridEl.style.gridTemplateColumns = 'repeat(' + wallViewport.zoom + ', 1fr)';
+    }
+
+    // Center the wall viewport on the currently selected cell
+    function panWallToSelected() {
+        var cell = document.querySelector('.moment-wall-cell.selected');
+        var vp = document.querySelector('.moment-wall-viewport');
+        var grid = document.querySelector('.moment-wall-canvas');
+        if (!cell || !vp || !grid) return;
+        // cell.offsetTop/Left are layout positions ignoring CSS transform
+        var cellTop = cell.offsetTop;
+        var cellLeft = cell.offsetLeft;
+        var cellH = cell.offsetHeight;
+        var cellW = cell.offsetWidth;
+        var vpH = vp.clientHeight;
+        var vpW = vp.clientWidth;
+        // Center cell in viewport; clamp to grid bounds
+        var targetY = cellTop - (vpH - cellH) / 2;
+        var targetX = cellLeft - (vpW - cellW) / 2;
+        var maxY = grid.scrollHeight - vpH;
+        var maxX = grid.scrollWidth - vpW;
+        wallViewport.y = Math.max(0, Math.min(targetY, maxY > 0 ? maxY : 0));
+        wallViewport.x = Math.max(0, Math.min(targetX, maxX > 0 ? maxX : 0));
+        applyWallViewport(grid);
     }
 
     function toggleWallEditMode(forceOff) {
@@ -4115,6 +4166,7 @@ const PlexdApp = (function() {
             if (oldTime) oldTime.remove();
             // Re-enable drag-to-reorder
             cells.forEach(function(c) { c.draggable = true; });
+            panWallToSelected();
             showMessage('Browse mode', 'info');
         } else {
             wallEditMode = true;
@@ -4174,6 +4226,10 @@ const PlexdApp = (function() {
                 timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
                 selected.appendChild(timeEl);
             }
+            // Defer pan — zoom change needs layout recompute before offsetTop is valid
+            requestAnimationFrame(function() { requestAnimationFrame(function() {
+                panWallToSelected();
+            }); });
             showMessage('Edit mode — drag handles, tags, Opt+Arrows', 'info');
         }
     }
@@ -4245,8 +4301,7 @@ const PlexdApp = (function() {
                 updateCellTimeline(selected);
             }
         }
-        var selected = document.querySelector('.moment-wall-cell.selected');
-        if (selected) selected.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        panWallToSelected();
         updateSelectedMomentStatus();
     }
 
@@ -4810,6 +4865,85 @@ const PlexdApp = (function() {
         }
     }
 
+    var _popupInfoVisible = false;
+
+    function togglePopupInfoOverlay() {
+        _popupInfoVisible = !_popupInfoVisible;
+        updatePopupInfoOverlay();
+    }
+
+    function updatePopupInfoOverlay() {
+        var panel = document.querySelector('.moment-popup-panel');
+        if (!panel) return;
+        var existing = panel.querySelector('.popup-info-overlay');
+        if (!_popupInfoVisible) {
+            if (existing) existing.remove();
+            return;
+        }
+        // Get current moment
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        var mom = moments[idx];
+        if (!mom) { if (existing) existing.remove(); return; }
+
+        var overlay = existing || document.createElement('div');
+        overlay.className = 'popup-info-overlay';
+
+        var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 40) : '';
+        var dur = (mom.end - mom.start).toFixed(1) + 's';
+        var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+        var loved = mom.loved ? ' \u2665' : '';
+        var tags = (mom.aiTags || []).join(' \u00b7 ');
+        var posIdx = moments.indexOf(mom) + 1;
+
+        var lines = [];
+        lines.push(posIdx + '/' + moments.length + (title ? ' \u2014 ' + title : ''));
+        lines.push(dur + rating + loved);
+        if (tags) lines.push(tags);
+        overlay.textContent = lines.join('\n');
+
+        if (!existing) panel.appendChild(overlay);
+    }
+
+    // Lightweight refresh of popup text content (tags, info, overlay) without rebuilding video
+    function refreshPopupContent() {
+        var panel = document.querySelector('.moment-popup-panel');
+        if (!panel) return;
+        var moments = momentBrowserState.filteredMoments;
+        var idx = momentBrowserState.selectedIndex;
+        var mom = moments[idx];
+        if (!mom) return;
+
+        // Update windowed info bar
+        var infoEl = panel.querySelector('.moment-popup-info');
+        if (infoEl) {
+            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
+            var dur = (mom.end - mom.start).toFixed(1) + 's';
+            var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+            var loved = mom.loved ? ' \u2665' : '';
+            infoEl.textContent = (title ? title + ' \u2014 ' : '') + dur + rating + loved;
+        }
+
+        // Update windowed tags row
+        var tagsEl = panel.querySelector('.moment-popup-tags');
+        if (mom.aiTags && mom.aiTags.length > 0) {
+            if (!tagsEl) {
+                tagsEl = document.createElement('div');
+                tagsEl.className = 'moment-popup-tags';
+                // Insert after info, before video
+                var videoEl = panel.querySelector('.moment-popup-video');
+                if (videoEl) panel.insertBefore(tagsEl, videoEl);
+                else panel.appendChild(tagsEl);
+            }
+            tagsEl.textContent = mom.aiTags.join(' \u00b7 ');
+        } else if (tagsEl) {
+            tagsEl.textContent = '';
+        }
+
+        // Update fullscreen overlay too
+        updatePopupInfoOverlay();
+    }
+
     function showMomentPopupPlayer(mom) {
         closeMomentPopupPlayer();
         momentBrowserState.popupOpen = true;
@@ -4921,6 +5055,9 @@ const PlexdApp = (function() {
         popupMirror.sourceVid = video;
 
         PlexdMoments.recordPlay(mom.id);
+
+        // Update info overlay if visible (deferred so fullscreen class can be applied first)
+        setTimeout(updatePopupInfoOverlay, 0);
     }
 
     function jumpToRandomMoment() {
@@ -4992,7 +5129,7 @@ const PlexdApp = (function() {
             strip.appendChild(block);
         });
 
-        document.body.appendChild(strip);
+        (document.querySelector('.plexd-app') || document.body).appendChild(strip);
     }
 
     function jumpToAdjacentMoment(direction) {
@@ -5071,6 +5208,7 @@ const PlexdApp = (function() {
                     var panel = document.querySelector('.moment-popup-panel');
                     if (panel) panel.classList.add('fullscreen');
                 }
+                updatePopupInfoOverlay();
             }
         }
 
@@ -5136,9 +5274,11 @@ const PlexdApp = (function() {
                         momentBrowserState.mode = 1;
                         renderCurrentBrowserMode();
                         updateMomentBrowserTitle();
-                        // Auto-enter edit mode on the selected clip
-                        toggleWallEditMode();
-                        showMessage('Wall edit \u2014 W to return', 'info');
+                        // Double-rAF: first frame commits DOM, second frame has computed layout
+                        requestAnimationFrame(function() { requestAnimationFrame(function() {
+                            toggleWallEditMode();
+                            showMessage('Wall edit \u2014 W to return', 'info');
+                        }); });
                     } else {
                         // Return to previous mode, clean up edit mode first
                         if (wallEditMode) toggleWallEditMode(true);
@@ -5152,9 +5292,13 @@ const PlexdApp = (function() {
                 return true;
 
             case 'i':
-                // i = Toggle status log panel
                 e.preventDefault();
-                toggleStatusLog();
+                // Fullscreen popup: toggle info overlay on video
+                if (momentBrowserState.popupOpen) {
+                    togglePopupInfoOverlay();
+                } else {
+                    toggleStatusLog();
+                }
                 return true;
 
             case 'a':
@@ -5188,6 +5332,7 @@ const PlexdApp = (function() {
                                 showMessage('[' + provStr + '] ' + (tagStr || 'no tags'), 'info');
                                 statusLog('AI [' + provStr + ']: ' + (tagStr || 'no new tags \u2014 kept existing'), tags.length > 0 ? 'success' : 'warn');
                                 renderCurrentBrowserMode();
+                                refreshPopupContent();
                             }
                         })
                         .catch(function(err) {
@@ -5451,10 +5596,16 @@ const PlexdApp = (function() {
                         if (randIdx === momentBrowserState.selectedIndex && moments.length > 1) {
                             randIdx = (randIdx + 1) % moments.length;
                         }
+                        // Preserve fullscreen state across popup rebuild
+                        var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
                         momentBrowserState.selectedIndex = randIdx;
                         if (mode === 0) updateMomentGridSelection();
                         else if (mode === 1) updateWallSelection();
                         showMomentPopupPlayer(moments[randIdx]);
+                        if (wasFullscreen) {
+                            var panel = document.querySelector('.moment-popup-panel');
+                            if (panel) panel.classList.add('fullscreen');
+                        }
                     }
                     return true;
                 }
@@ -7612,8 +7763,8 @@ const PlexdApp = (function() {
                             sourceFileId: extractServerFileId(srcUrl),
                             sourceTitle: s.fileName || s.url,
                             streamId: s.id,
-                            start: Math.max(0, peakT - 5),
-                            end: dur ? Math.min(dur, peakT + 5) : peakT + 5,
+                            start: Math.max(0, peakT - 60),
+                            end: dur ? Math.min(dur, peakT + 60) : peakT + 60,
                             peak: peakT,
                             rating: r,
                             loved: l,
@@ -7644,10 +7795,10 @@ const PlexdApp = (function() {
                         // Get rating and loved status
                         var rating = PlexdStream.getRating(ts.url, ts.fileName) || 0;
                         var loved = PlexdStream.isFavorite(ts.id);
-                        // Calculate default range: peak +/- 5s, clamped to duration
+                        // Calculate default range: peak +/- 60s (2 min), clamped to duration
                         var duration = ts.video.duration || 0;
-                        var rangeStart = Math.max(0, peakTime - 5);
-                        var rangeEnd = duration ? Math.min(duration, peakTime + 5) : peakTime + 5;
+                        var rangeStart = Math.max(0, peakTime - 60);
+                        var rangeEnd = duration ? Math.min(duration, peakTime + 60) : peakTime + 60;
                         var sourceFileId = extractServerFileId(sourceUrl);
                         var moment = PlexdMoments.createMoment({
                             sourceUrl: sourceUrl,
@@ -7990,7 +8141,8 @@ const PlexdApp = (function() {
         if (!messageEl) {
             messageEl = document.createElement('div');
             messageEl.id = 'plexd-message';
-            document.body.appendChild(messageEl);
+            // Append to .plexd-app so toasts show in fullscreen
+            (document.querySelector('.plexd-app') || document.body).appendChild(messageEl);
         }
 
         messageEl.textContent = text;
@@ -8027,7 +8179,9 @@ const PlexdApp = (function() {
             body.className = 'status-log-body';
             panel.appendChild(header);
             panel.appendChild(body);
-            document.body.appendChild(panel);
+            // Append to .plexd-app so it's visible in fullscreen (body children are hidden)
+            var appContainer = document.querySelector('.plexd-app') || document.body;
+            appContainer.appendChild(panel);
             clearBtn.addEventListener('click', function() {
                 while (body.firstChild) body.removeChild(body.firstChild);
             });
@@ -8059,11 +8213,13 @@ const PlexdApp = (function() {
                         if (p.lastTags) msg += ' [' + p.lastTags + ']';
                         if (p.errors > 0) msg += ' (' + p.errors + ' errors)';
                         statusLog(msg, p.errors > 0 ? 'warn' : 'info');
+                        refreshPopupContent();
                     }
                     if (!p.running) {
                         clearInterval(_batchPollTimer);
                         statusLog('AI BATCH: complete \u2014 ' + p.done + ' processed, ' + p.errors + ' errors', p.errors > 0 ? 'warn' : 'success');
                         renderCurrentBrowserMode();
+                        refreshPopupContent();
                     }
                 })
                 .catch(function() {});
@@ -8809,7 +8965,8 @@ const PlexdApp = (function() {
             </div>
         `;
 
-        document.body.appendChild(modal);
+        // Append to .plexd-app so modal shows in fullscreen
+        (document.querySelector('.plexd-app') || document.body).appendChild(modal);
 
         const dropZone = document.getElementById('local-files-drop-zone');
         const fileInput = document.getElementById('local-files-input');
@@ -9446,7 +9603,8 @@ const PlexdApp = (function() {
             </div>
         `;
 
-        document.body.appendChild(modal);
+        // Append to .plexd-app so modal shows in fullscreen
+        (document.querySelector('.plexd-app') || document.body).appendChild(modal);
 
         // Add event listeners
         document.getElementById('modal-cancel').addEventListener('click', () => {
@@ -9494,7 +9652,7 @@ const PlexdApp = (function() {
         loadingModal.id = 'manage-files-modal';
         loadingModal.className = 'plexd-modal-overlay';
         loadingModal.innerHTML = '<div class="plexd-modal"><h3>Loading files...</h3></div>';
-        const appendTarget = document.fullscreenElement || document.body;
+        var appendTarget = document.querySelector('.plexd-app') || document.body;
         appendTarget.appendChild(loadingModal);
 
         // Fetch all data in parallel with timeout (10s to allow for busy server during transcodes)
@@ -9805,8 +9963,8 @@ const PlexdApp = (function() {
             </div>
         `;
 
-        // Append to fullscreen element if active, otherwise body
-        (document.fullscreenElement || document.body).appendChild(modal);
+        // Append to .plexd-app so modal shows in fullscreen
+        (document.querySelector('.plexd-app') || document.body).appendChild(modal);
 
         // Expose delete function temporarily
         PlexdApp._deleteServerFile = async (fileId) => {
@@ -10066,17 +10224,8 @@ const PlexdApp = (function() {
             delete PlexdApp._deleteStoredFile;
             delete PlexdApp._deleteStoredSet;
             document.removeEventListener('keydown', handleEscape, true);
-            document.removeEventListener('fullscreenchange', handleFullscreenChange);
             modal.remove();
         };
-
-        // Re-parent modal to body when fullscreen exits (so Escape still works)
-        const handleFullscreenChange = () => {
-            if (!document.fullscreenElement && modal.parentNode && modal.parentNode !== document.body) {
-                document.body.appendChild(modal);
-            }
-        };
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
 
         // Close on overlay click
         modal.addEventListener('click', (e) => {
@@ -10211,7 +10360,8 @@ const PlexdApp = (function() {
             </div>
         `;
 
-        document.body.appendChild(modal);
+        // Append to .plexd-app so it's visible in fullscreen (body children are hidden)
+        (document.querySelector('.plexd-app') || document.body).appendChild(modal);
 
         // Cleanup function for consistent modal closing
         const cleanupModal = () => {

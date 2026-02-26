@@ -3475,12 +3475,11 @@ body {
     background: rgba(255, 255, 255, 0.25);
 }
 .wall-edit-mode .moment-wall-cell.selected {
-    outline: 2px solid var(--gold);
-    outline-offset: -2px;
-    transform: scale(1.8);
+    outline: 3px solid var(--gold);
+    outline-offset: -3px;
     z-index: 10;
     overflow: visible;
-    box-shadow: 0 0 24px rgba(0, 0, 0, 0.7);
+    box-shadow: 0 0 20px rgba(201, 163, 85, 0.5);
 }
 .wall-edit-mode .moment-wall-cell.selected .wall-timeline-fill {
     opacity: 1;
@@ -3750,6 +3749,7 @@ body {
     justify-content: center;
 }
 .moment-popup-panel {
+    position: relative;
     background: rgba(15, 12, 24, 0.95);
     border: 1px solid rgba(201, 163, 85, 0.25);
     border-radius: 8px;
@@ -3800,12 +3800,37 @@ body {
     background: #000;
 }
 .moment-popup-panel.fullscreen .moment-popup-info,
-.moment-popup-panel.fullscreen .moment-popup-actions,
-.moment-popup-panel.fullscreen .moment-popup-tags {
+.moment-popup-panel.fullscreen .moment-popup-actions {
     display: none;
+}
+.moment-popup-panel.fullscreen .moment-popup-tags {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 16px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+    z-index: 5;
+    pointer-events: none;
 }
 .moment-popup-panel.fullscreen .moment-popup-video {
     max-height: none;
+}
+
+/* Popup Info Overlay (fullscreen viewer, toggled with i) */
+.popup-info-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 16px 20px;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+    color: rgba(237, 232, 224, 0.9);
+    font-size: 14px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    white-space: pre-line;
+    pointer-events: none;
+    z-index: 10;
 }
 
 /* Stage Moment Strip */

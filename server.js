@@ -194,61 +194,133 @@ try {
     console.log('[Server] ffmpeg not found - HLS transcoding disabled');
 }
 
-// === AI Integration (Skier) ===
-// Skier: local NSFW tagger (structured tags with confidence scores)
-// Auto-detected on startup and every 5 minutes.
+// === AI Integration (Skier Multi-Model) ===
+// Multiple Skier servers run specialized models, each on its own port:
+//   actions (8000), bodyparts (8001), bdsm (8002), positions (8003)
+// Discovered from nsfw-ai-manage.sh server-status.json. All hit in parallel.
 
+const SKIER_MANAGE_SCRIPT = path.join(os.homedir(), 'Projects/nsfw_ai_model_server/nsfw-ai-manage.sh');
+const SKIER_STATUS_FILE = path.join(os.homedir(), 'Projects/nsfw_ai_model_server/server-status.json');
+
+// Each entry: { category, model, port, tags, available }
+let skierServers = [];
 let skierAvailable = false;
-const SKIER_BASE = 'http://localhost:8000';
 
-async function checkSkier() {
+// Try to auto-start Skier servers via manage script (hardcoded path, no user input)
+function autoStartSkier() {
     try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3000);
-        const res = await fetch(SKIER_BASE + '/openapi.json', { signal: controller.signal });
-        clearTimeout(timeout);
-        if (res.ok) {
-            if (!skierAvailable) console.log('[Server] Skier model server available at', SKIER_BASE);
-            skierAvailable = true;
-        } else {
-            skierAvailable = false;
-        }
+        if (!fs.existsSync(SKIER_MANAGE_SCRIPT)) return;
+        console.log('[Server] Starting Skier AI servers...');
+        const { execFileSync } = require('child_process');
+        execFileSync(SKIER_MANAGE_SCRIPT, ['start'], { timeout: 30000, stdio: 'pipe' });
+        console.log('[Server] Skier AI servers started');
     } catch (e) {
-        skierAvailable = false;
+        console.warn('[Server] Skier auto-start failed:', e.message?.split('\n')[0]);
     }
 }
 
-// Skier analysis: send thumbnail file path, get structured tags
-async function analyzeWithSkier(thumbPath) {
-    const res = await fetch(SKIER_BASE + '/process_images/', {
+// Discover available servers from status file + health check
+async function checkSkier() {
+    const servers = [];
+
+    // Read status file for server list
+    try {
+        const data = JSON.parse(fs.readFileSync(SKIER_STATUS_FILE, 'utf-8'));
+        for (const entry of data) {
+            servers.push({
+                category: entry.category,
+                model: entry.model,
+                port: entry.port,
+                tagCount: entry.tags,
+                url: `http://localhost:${entry.port}`,
+                available: false
+            });
+        }
+    } catch {
+        // Fallback: single default server
+        servers.push({ category: 'default', model: 'unknown', port: 8000, tagCount: 0, url: 'http://localhost:8000', available: false });
+    }
+
+    // Health-check each server in parallel
+    await Promise.all(servers.map(async (s) => {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
+            const res = await fetch(s.url + '/openapi.json', { signal: controller.signal });
+            clearTimeout(timeout);
+            s.available = res.ok;
+        } catch {
+            s.available = false;
+        }
+    }));
+
+    const prev = skierServers.filter(s => s.available).length;
+    skierServers = servers;
+    skierAvailable = servers.some(s => s.available);
+
+    const live = servers.filter(s => s.available);
+    if (live.length > 0 && live.length !== prev) {
+        console.log('[Server] Skier AI:', live.map(s => `${s.category}/${s.model}:${s.port}`).join(', '));
+    }
+}
+
+// Query a single Skier server, returns { tags, confidences, category }
+async function querySingleSkier(server, thumbPath) {
+    const res = await fetch(server.url + '/process_images/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            paths: [thumbPath],
-            return_confidence: true
-        })
+        body: JSON.stringify({ paths: [thumbPath], return_confidence: true })
     });
-    if (!res.ok) throw new Error('Skier returned ' + res.status);
+    if (!res.ok) throw new Error(`Skier ${server.category} returned ${res.status}`);
     const data = await res.json();
-    // Collect tags from ALL categories (actions, positions, etc. — varies by model)
     const entry = data.result?.[0] || {};
-    const allPairs = [];
-    for (const key of Object.keys(entry)) {
-        if (Array.isArray(entry[key])) {
-            for (const pair of entry[key]) allPairs.push(pair);
-        }
-    }
     const tags = [];
     const confidences = {};
-    for (const [tag, confidence] of allPairs) {
-        const clean = tag.replace(/_AI$/i, '').toLowerCase().replace(/_/g, ' ');
-        tags.push(clean);
-        confidences[clean] = confidence;
+    for (const key of Object.keys(entry)) {
+        if (Array.isArray(entry[key])) {
+            for (const [tag, conf] of entry[key]) {
+                const clean = tag.replace(/_AI$/i, '').toLowerCase().replace(/_/g, ' ');
+                tags.push(clean);
+                confidences[clean] = conf;
+            }
+        }
     }
-    return { tags, confidences, provider: 'skier' };
+    return { tags, confidences, category: server.category };
 }
 
-// Check on startup, re-check every 5 minutes
+// Analyze with ALL available servers in parallel, merge results
+async function analyzeWithSkier(thumbPath) {
+    const live = skierServers.filter(s => s.available);
+    if (live.length === 0) throw new Error('No Skier servers available');
+
+    const results = await Promise.allSettled(
+        live.map(s => querySingleSkier(s, thumbPath))
+    );
+
+    const allTags = [];
+    const allConfidences = {};
+    const categories = [];
+
+    for (const r of results) {
+        if (r.status === 'fulfilled') {
+            categories.push(r.value.category);
+            for (const tag of r.value.tags) {
+                if (!allConfidences[tag] || r.value.confidences[tag] > allConfidences[tag]) {
+                    allConfidences[tag] = r.value.confidences[tag];
+                }
+            }
+        }
+    }
+
+    // Sort by confidence descending, dedup
+    const sorted = Object.entries(allConfidences).sort((a, b) => b[1] - a[1]);
+    for (const [tag] of sorted) allTags.push(tag);
+
+    return { tags: allTags, confidences: allConfidences, provider: 'skier', categories };
+}
+
+// Auto-start on server boot, then health-check every 5 minutes
+autoStartSkier();
 checkSkier();
 setInterval(checkSkier, 5 * 60 * 1000);
 
@@ -2581,8 +2653,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/ai/status' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-            skier: { available: skierAvailable, endpoint: SKIER_BASE },
-            available: skierAvailable
+            available: skierAvailable,
+            servers: skierServers.map(s => ({
+                category: s.category, model: s.model,
+                port: s.port, tags: s.tagCount, available: s.available
+            }))
         }));
         return;
     }
@@ -2617,7 +2692,7 @@ const server = http.createServer(async (req, res) => {
             const skierResult = await analyzeWithSkier(thumbPath);
             const aiTags = skierResult.tags;
             const confidences = skierResult.confidences;
-            const providers = ['skier'];
+            const categories = skierResult.categories || [];
 
             // Update moment in server store — only if we got tags (preserve existing)
             const moment = momentsDb.find(m => m.id === momentId);
@@ -2630,11 +2705,12 @@ const server = http.createServer(async (req, res) => {
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
-                momentId, tags: aiTags, confidences, providers
+                momentId, tags: aiTags, confidences,
+                providers: categories.length > 0 ? categories : ['skier']
             }));
 
             console.log('[Server] AI analysis complete for', momentId,
-                '- providers:', providers.join('+'),
+                '- models:', categories.join('+'),
                 '- tags:', aiTags.join(', '));
 
         } catch (err) {

@@ -378,6 +378,22 @@ Example: "Always search with Grep before creating utility functions"
    }
    ```
 
+### DOM Append Pattern for Fullscreen Visibility
+
+**CRITICAL:** `.plexd-app` is the fullscreen element (not individual streams). In true fullscreen, only `.plexd-app` and its descendants are visible. Elements appended to `document.body` are **invisible** in fullscreen.
+
+**Rule:** All user-visible overlays, modals, toasts, and panels MUST be appended to `.plexd-app`:
+```javascript
+(document.querySelector('.plexd-app') || document.body).appendChild(element);
+```
+
+**Why not `document.fullscreenElement`?** Using `.plexd-app` directly is simpler and always correct — it's the fullscreen element when fullscreen, and a normal container when not. No need for fullscreenchange re-parenting handlers.
+
+**Exceptions** (OK on `document.body`):
+- Hidden utility elements (extracted video elements with `opacity: 0`)
+- Temporary download anchor tags
+- Focus warning (only relevant when keyboard focus is lost, not in fullscreen)
+
 ### Double-Tap Pattern
 
 Use the shared `handleDoubleTap(key, onSingle, onDouble)` helper in app.js for any key that needs single/double-tap differentiation. **Do NOT create new `lastXTime`/`xTimeout` state variables** — the helper manages state internally via `_dtState`.
@@ -434,11 +450,12 @@ For panels with selectable items:
 **Canvas mirror pattern:** Moments play by mirroring already-loaded `<video>` elements onto `<canvas>` via rAF loop — zero extra network connections. Each mode manages its own rAF loop and MUST clean up via `stop*Mirrors()` on mode switch or browser close.
 
 **Key bindings:**
-- `K` — Capture moment from selected/fullscreen stream (peak ±5s)
+- `K` — Capture moment from selected/fullscreen stream (peak ±60s = 2 min default)
 - `Shift+K` — Capture from ALL visible streams
 - `J` — Toggle Moment Browser overlay
 - `E` / `Shift+E` — Cycle browser modes (also Tab/Shift+Tab)
 - `/` — Random moment in browser
+- `W` — Open selected moment in Wall edit mode
 
 **Set integration:** Saved sets (`plexd_combinations`) include `momentIds` array linking to associated moments.
 
@@ -451,12 +468,56 @@ For panels with selectable items:
 - `Opt+Left/Right` — Nudge in-point ±0.5s (Wall mode only)
 - `Opt+Shift+Left/Right` — Adjust duration ±0.5s (Wall mode only)
 - Minimum 1s duration enforced; peak clamped to stay within range
+- `panWallToSelected()` — Centers viewport on selected cell (both axes) using offsetTop/offsetLeft + transform panning; called on selection change and when entering edit mode so scale(1.8) cell isn't clipped
+- `getTimelineWindow()` — For extracted clips, adds ±padding around the extraction bounds so drag handles can move in both directions (not just shrink). Stores original bounds in `mom._extractedStart`/`mom._extractedEnd` on first call
+- Mouse wheel scrolls the Wall viewport (viewport uses `overflow: hidden` + CSS `transform: translate()` panning)
+- `initWallCell()` — Lazy-inits via IntersectionObserver. Canvas inserted BEHIND poster image; poster removed only after first video frame draws to canvas (prevents blank flash)
 
 **Server API:**
 - `GET /api/moments` — List (with filters)
 - `POST /api/moments` — Upsert single moment
 - `POST /api/moments/sync` — Bulk sync (dirty moments)
 - `DELETE /api/moments/:id` — Remove moment + thumbnail
+
+### Skier AI Multi-Model Tagging
+
+**Architecture:** 4 specialized Skier model servers run in parallel, each on its own port. Managed by `~/Projects/nsfw_ai_model_server/nsfw-ai-manage.sh`. Auto-started by Plexd server on boot.
+
+| Category | Model | Port | Tags |
+|----------|-------|------|------|
+| Actions | distinctive_haze (VIP) / gentler_river (Member) | 8000 | 36 |
+| Bodyparts | electric_smoke (VIP) | 8001 | 37 |
+| BDSM | happy_terrain (VIP) | 8002 | 50 |
+| Positions | blooming_star (VIP) | 8003 | 28 |
+
+**Discovery:** Server reads `~/Projects/nsfw_ai_model_server/server-status.json` for the full list of configured servers. Falls back to single server at `:8000` if file not found.
+
+**Analysis flow:**
+1. `a` key in Moment Browser → `POST /api/moments/:id/analyze`
+2. Server calls ALL available Skier servers in parallel (`Promise.allSettled`)
+3. Tags merged (highest confidence wins for duplicates), sorted by confidence descending
+4. Results saved to moment, response includes which categories contributed
+5. Empty results don't wipe existing tags (server-owned field protection)
+
+**Batch:** `Shift+A` → `POST /api/moments/analyze-batch`. Processes untagged moments sequentially. Client polls `/api/moments/analyze-progress` for live updates in the Status Log panel.
+
+**AI fields are server-owned:** Client sync (`POST /api/moments/sync`) strips `aiTags`, `aiDescription`, `aiConfidences` from incoming data — prevents browser from overwriting server-side AI results.
+
+**Setup (new models from Patreon):**
+```bash
+cd ~/Projects/nsfw_ai_model_server
+# Drop zip files, then:
+./nsfw-ai-manage.sh extract    # Unpacks zips → copies model/config files
+./nsfw-ai-manage.sh setup      # Creates instance dirs with symlinks
+./nsfw-ai-manage.sh start      # Launches all servers
+./nsfw-ai-manage.sh status     # Verify all running
+```
+
+**Key endpoints:**
+- `GET /api/ai/status` — List all Skier servers with availability
+- `POST /api/moments/:id/analyze` — Analyze one moment (all models)
+- `POST /api/moments/analyze-batch` — Batch all untagged
+- `GET /api/moments/analyze-progress` — Poll batch progress
 
 ### HLS Transcoding System
 

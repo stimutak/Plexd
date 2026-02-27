@@ -21,6 +21,15 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+function jsonOk(res, data) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
+}
+function jsonError(res, status, message) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: message }));
+}
+
 const PORT = process.argv[2] || 8080;
 const WEB_ROOT = path.join(__dirname, 'web');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -1105,19 +1114,20 @@ function queuePendingTranscodes() {
 // setTimeout(queuePendingTranscodes, 2000);
 
 // Fetch a URL with redirect following (up to 5 redirects)
-function fetchUrl(targetUrl, callback, redirectCount = 0) {
+function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
     if (redirectCount > 5) {
         callback(new Error('Too many redirects'));
         return;
     }
 
     const mod = targetUrl.startsWith('https') ? https : http;
-    const req = mod.get(targetUrl, { headers: { 'User-Agent': 'Plexd/1.0' }, timeout: 30000 }, (proxyRes) => {
+    const headers = { 'User-Agent': 'Plexd/1.0', ...extraHeaders };
+    const req = mod.get(targetUrl, { headers, timeout: 30000 }, (proxyRes) => {
         // Follow redirects
         if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
             const redirectUrl = new URL(proxyRes.headers.location, targetUrl).href;
             proxyRes.resume(); // Consume response to free socket
-            fetchUrl(redirectUrl, callback, redirectCount + 1);
+            fetchUrl(redirectUrl, callback, redirectCount + 1, extraHeaders);
             return;
         }
         callback(null, proxyRes);
@@ -1228,8 +1238,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/remote/state') {
         if (req.method === 'GET') {
             // Remote fetches current state
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(currentState));
+            jsonOk(res, currentState);
         } else if (req.method === 'POST') {
             // Main app posts state updates
             let body = '';
@@ -1238,11 +1247,9 @@ const server = http.createServer(async (req, res) => {
                 try {
                     currentState = JSON.parse(body);
                     currentState.timestamp = Date.now();
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
+                    jsonOk(res, { success: true });
                 } catch (e) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                    jsonError(res, 400, 'Invalid JSON');
                 }
             });
         }
@@ -1253,8 +1260,7 @@ const server = http.createServer(async (req, res) => {
         if (req.method === 'GET') {
             // Main app polls for commands
             const cmd = pendingCommands.shift();
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(cmd || null));
+            jsonOk(res, cmd || null);
         } else if (req.method === 'POST') {
             // Remote posts commands
             let body = '';
@@ -1268,11 +1274,9 @@ const server = http.createServer(async (req, res) => {
                     if (pendingCommands.length > 10) {
                         pendingCommands = pendingCommands.slice(-10);
                     }
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
+                    jsonOk(res, { success: true });
                 } catch (e) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                    jsonError(res, 400, 'Invalid JSON');
                 }
             });
         }
@@ -1319,14 +1323,13 @@ const server = http.createServer(async (req, res) => {
             totalSize += hlsSize;
         });
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        jsonOk(res, {
             files: hlsFiles,
             totalSize,
             totalSizeMB: Math.round(totalSize / 1024 / 1024),
             activeTranscodes: activeTranscodes.size,
             queueLength: transcodeQueue.length
-        }));
+        });
         return;
     }
 
@@ -1372,8 +1375,7 @@ const server = http.createServer(async (req, res) => {
             }
         }
         if (marked > 0) saveMetadata();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ marked, cleaned, freedMB: Math.round(freedBytes / 1024 / 1024) }));
+        jsonOk(res, { marked, cleaned, freedMB: Math.round(freedBytes / 1024 / 1024) });
         return;
     }
 
@@ -1402,11 +1404,9 @@ const server = http.createServer(async (req, res) => {
             saveMetadata();
 
             console.log(`[Server] Deleted HLS: ${meta.fileName}`);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, fileName: meta.fileName }));
+            jsonOk(res, { success: true, fileName: meta.fileName });
         } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'File not found' }));
+            jsonError(res, 404, 'File not found');
         }
         return;
     }
@@ -1421,15 +1421,12 @@ const server = http.createServer(async (req, res) => {
             if (fs.existsSync(inputPath)) {
                 fs.unlinkSync(inputPath);
                 console.log(`[Server] Deleted original: ${meta.fileName}`);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, fileName: meta.fileName }));
+                jsonOk(res, { success: true, fileName: meta.fileName });
             } else {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Original file not found' }));
+                jsonError(res, 404, 'Original file not found');
             }
         } else {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'File not found' }));
+            jsonError(res, 404, 'File not found');
         }
         return;
     }
@@ -1441,11 +1438,9 @@ const server = http.createServer(async (req, res) => {
 
         if (meta && meta.contentType?.startsWith('video/') && !meta.hlsReady) {
             startHLSTranscode(fileId);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, queued: true }));
+            jsonOk(res, { success: true, queued: true });
         } else {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Cannot transcode' }));
+            jsonError(res, 400, 'Cannot transcode');
         }
         return;
     }
@@ -1478,8 +1473,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         console.log(`[Server] Cancelled all transcodes: ${queuedCount} queued, ${activeCount} active`);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, cancelledQueued: queuedCount, cancelledActive: activeCount }));
+        jsonOk(res, { success: true, cancelledQueued: queuedCount, cancelledActive: activeCount });
         return;
     }
 
@@ -1487,8 +1481,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/hls/pause' && req.method === 'POST') {
         transcodePaused = true;
         console.log('[Server] Transcode queue paused');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, paused: true }));
+        jsonOk(res, { success: true, paused: true });
         return;
     }
 
@@ -1497,8 +1490,7 @@ const server = http.createServer(async (req, res) => {
         transcodePaused = false;
         console.log('[Server] Transcode queue resumed');
         processTranscodeQueue();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, paused: false }));
+        jsonOk(res, { success: true, paused: false });
         return;
     }
 
@@ -1518,20 +1510,18 @@ const server = http.createServer(async (req, res) => {
         }
         processTranscodeQueue();
         console.log(`[Server] Started transcoding: ${queued} files queued`);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, queued, active: activeTranscodes.size }));
+        jsonOk(res, { success: true, queued, active: activeTranscodes.size });
         return;
     }
 
     // Get transcode queue status
     if (pathname === '/api/hls/status' && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        jsonOk(res, {
             paused: transcodePaused,
             queueLength: transcodeQueue.length,
             activeCount: activeTranscodes.size,
             maxConcurrent: MAX_CONCURRENT_TRANSCODES
-        }));
+        });
         return;
     }
 
@@ -1561,8 +1551,7 @@ const server = http.createServer(async (req, res) => {
             }
         }
         console.log(`[Server] Deleted ${deleted} redundant originals, freed ${(freedBytes / 1024 / 1024 / 1024).toFixed(2)} GB${skippedTranscoding > 0 ? `, skipped ${skippedTranscoding} transcoding` : ''}`);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, deleted, freedBytes, skippedTranscoding }));
+        jsonOk(res, { success: true, deleted, freedBytes, skippedTranscoding });
         return;
     }
 
@@ -1583,8 +1572,7 @@ const server = http.createServer(async (req, res) => {
             const isTranscoding = transcodeQueue.includes(existing.fileId) || activeTranscodes.has(existing.fileId);
             const hlsReady = existing.meta.hlsReady;
             console.log(`[Server] File exists: ${fileName} -> ${existing.fileId} (hlsReady: ${hlsReady}, transcoding: ${isTranscoding})`);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
+            jsonOk(res, {
                 success: true,
                 fileId: existing.fileId,
                 url: hlsReady ? existing.meta.hlsPath : `/api/files/${existing.fileId}`,
@@ -1594,7 +1582,7 @@ const server = http.createServer(async (req, res) => {
                 hlsReady: hlsReady,
                 transcoding: isTranscoding,
                 existing: true
-            }));
+            });
             // Drain the request body
             req.resume();
             return;
@@ -1641,8 +1629,7 @@ const server = http.createServer(async (req, res) => {
                 startHLSTranscode(fileId);
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
+            jsonOk(res, {
                 success: true,
                 fileId,
                 url: `/api/files/${fileId}`,
@@ -1650,14 +1637,13 @@ const server = http.createServer(async (req, res) => {
                 size,
                 hlsReady: false,
                 transcoding: mimeType.startsWith('video/')
-            }));
+            });
         });
 
         req.on('error', (err) => {
             writeStream.end();
             try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Upload failed' }));
+            jsonError(res, 500, 'Upload failed');
         });
 
         return;
@@ -1667,14 +1653,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/files/transcode-status' && req.method === 'GET') {
         const fileId = url.searchParams.get('fileId');
         if (fileId && transcodingJobs[fileId]) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(transcodingJobs[fileId]));
+            jsonOk(res, transcodingJobs[fileId]);
         } else if (fileId && fileMetadata[fileId]?.hlsReady) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'complete', progress: 100, hlsUrl: fileMetadata[fileId].hlsPath }));
+            jsonOk(res, { status: 'complete', progress: 100, hlsUrl: fileMetadata[fileId].hlsPath });
         } else {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'unknown', progress: 0 }));
+            jsonOk(res, { status: 'unknown', progress: 0 });
         }
         return;
     }
@@ -1686,8 +1669,7 @@ const server = http.createServer(async (req, res) => {
         const hlsFile = decodeURIComponent(parts.slice(1).join('/'));
 
         if (!fileId || !hlsFile) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid HLS path' }));
+            jsonError(res, 400, 'Invalid HLS path');
             return;
         }
 
@@ -1701,8 +1683,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (!fs.existsSync(hlsPath)) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'HLS file not found' }));
+            jsonError(res, 404, 'HLS file not found');
             return;
         }
 
@@ -1744,8 +1725,7 @@ const server = http.createServer(async (req, res) => {
                 ...meta
             };
         });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(files));
+        jsonOk(res, files);
         return;
     }
 
@@ -1815,12 +1795,10 @@ const server = http.createServer(async (req, res) => {
             files.sort((a, b) => b.modified - a.modified);
 
             console.log(`[Server] Scanned ${folderPath} (recursive): found ${files.length} video(s)`);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ folder: folderPath, files }));
+            jsonOk(res, { folder: folderPath, files });
         } catch (e) {
             console.error(`[Server] Scan error: ${e.message}`);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: e.message }));
+            jsonError(res, 500, e.message);
         }
         return;
     }
@@ -1841,11 +1819,9 @@ const server = http.createServer(async (req, res) => {
                     return null; // File deleted between readdir and stat
                 }
             }).filter(Boolean);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ files }));
+            jsonOk(res, { files });
         } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: e.message }));
+            jsonError(res, 500, e.message);
         }
         return;
     }
@@ -1858,8 +1834,7 @@ const server = http.createServer(async (req, res) => {
             try {
                 const { filePath } = JSON.parse(body);
                 if (!filePath || !fs.existsSync(filePath)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid file path' }));
+                    jsonError(res, 400, 'Invalid file path');
                     return;
                 }
 
@@ -1875,13 +1850,12 @@ const server = http.createServer(async (req, res) => {
                 );
                 if (existing) {
                     const [fileId, meta] = existing;
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
+                    jsonOk(res, {
                         fileId,
                         url: meta.hlsReady ? meta.hlsPath : `/api/files/${fileId}`,
                         hlsReady: meta.hlsReady || false,
                         existing: true
-                    }));
+                    });
                     return;
                 }
 
@@ -1908,17 +1882,15 @@ const server = http.createServer(async (req, res) => {
                 startHLSTranscode(fileId);
 
                 console.log(`[Server] Imported local file: ${fileName}`);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
+                jsonOk(res, {
                     fileId,
                     url: `/api/files/${fileId}`,
                     hlsReady: false,
                     transcoding: true
-                }));
+                });
             } catch (e) {
                 console.error(`[Server] Import error: ${e.message}`);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
+                jsonError(res, 500, e.message);
             }
         });
         return;
@@ -1928,15 +1900,13 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/files/local' && req.method === 'GET') {
         const filePath = url.searchParams.get('path');
         if (!filePath) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing path parameter' }));
+            jsonError(res, 400, 'Missing path parameter');
             return;
         }
 
         try {
             if (!fs.existsSync(filePath)) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'File not found' }));
+                jsonError(res, 404, 'File not found');
                 return;
             }
 
@@ -1947,8 +1917,7 @@ const server = http.createServer(async (req, res) => {
             serveFileWithRange(req, res, filePath, stats, contentType);
         } catch (e) {
             console.error(`[Server] Local file error: ${e.message}`);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: e.message }));
+            jsonError(res, 500, e.message);
         }
         return;
     }
@@ -1976,8 +1945,7 @@ const server = http.createServer(async (req, res) => {
             saveMetadata();
 
             console.log(`[Server] Purged ${deleted} file(s)${setName ? ` for set: ${setName}` : ''}`);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, deleted }));
+            jsonOk(res, { success: true, deleted });
         });
         return;
     }
@@ -1997,11 +1965,9 @@ const server = http.createServer(async (req, res) => {
                     }
                 });
                 saveMetadata();
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, updated }));
+                jsonOk(res, { success: true, updated });
             } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                jsonError(res, 400, 'Invalid JSON');
             }
         });
         return;
@@ -2013,8 +1979,7 @@ const server = http.createServer(async (req, res) => {
         const meta = fileMetadata[fileId];
 
         if (!meta) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'File not found' }));
+            jsonError(res, 404, 'File not found');
             return;
         }
 
@@ -2022,8 +1987,7 @@ const server = http.createServer(async (req, res) => {
         if (!fs.existsSync(filePath)) {
             delete fileMetadata[fileId];
             saveMetadata();
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'File not found' }));
+            jsonError(res, 404, 'File not found');
             return;
         }
 
@@ -2048,8 +2012,7 @@ const server = http.createServer(async (req, res) => {
             // Path traversal protection: ensure resolved path stays within UPLOADS_DIR
             const resolvedPath = path.resolve(orphanPath);
             if (!resolvedPath.startsWith(path.resolve(UPLOADS_DIR) + path.sep)) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid file path' }));
+                jsonError(res, 400, 'Invalid file path');
                 return;
             }
             if (fs.existsSync(orphanPath)) {
@@ -2058,8 +2021,45 @@ const server = http.createServer(async (req, res) => {
             }
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true }));
+        jsonOk(res, { success: true });
+        return;
+    }
+
+    // Video Proxy - CORS bypass with range request support for plain video URLs
+    if (pathname === '/api/proxy/video' && req.method === 'GET') {
+        const targetUrl = url.searchParams.get('url');
+        if (!targetUrl) {
+            jsonError(res, 400, 'Missing url parameter');
+            return;
+        }
+
+        const extraHeaders = {};
+        if (req.headers.range) extraHeaders['Range'] = req.headers.range;
+
+        // fetchUrl handles redirects (up to 5) and timeout internally
+        fetchUrl(targetUrl, (err, proxyRes) => {
+            if (err) {
+                console.error(`[Server] Video proxy error: ${err.message}`);
+                if (!res.headersSent) {
+                    res.writeHead(502, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
+                }
+                return;
+            }
+
+            const outHeaders = {
+                'Content-Type': proxyRes.headers['content-type'] || 'video/mp4',
+                'Accept-Ranges': 'bytes'
+            };
+            if (proxyRes.headers['content-length']) outHeaders['Content-Length'] = proxyRes.headers['content-length'];
+            if (proxyRes.headers['content-range']) outHeaders['Content-Range'] = proxyRes.headers['content-range'];
+
+            res.writeHead(proxyRes.statusCode, outHeaders);
+            proxyRes.pipe(res);
+            proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
+            // Abort upstream fetch when client disconnects (prevents wasted bandwidth)
+            res.on('close', () => { proxyRes.destroy(); });
+        }, 0, extraHeaders);
         return;
     }
 
@@ -2067,8 +2067,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/proxy/hls' && req.method === 'GET') {
         const targetUrl = url.searchParams.get('url');
         if (!targetUrl) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing url parameter' }));
+            jsonError(res, 400, 'Missing url parameter');
             return;
         }
 
@@ -2128,14 +2127,12 @@ const server = http.createServer(async (req, res) => {
         const targetUrl = url.searchParams.get('url');
         const name = url.searchParams.get('name') || 'video';
         if (!targetUrl) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing url parameter' }));
+            jsonError(res, 400, 'Missing url parameter');
             return;
         }
 
         if (!ffmpegAvailable) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'ffmpeg not available' }));
+            jsonError(res, 500, 'ffmpeg not available');
             return;
         }
 
@@ -2148,8 +2145,7 @@ const server = http.createServer(async (req, res) => {
         );
         if (existingJob) {
             const [existingId, job] = existingJob;
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ jobId: existingId, status: job.status, filename: job.filename, deduplicated: true }));
+            jsonOk(res, { jobId: existingId, status: job.status, filename: job.filename, deduplicated: true });
             return;
         }
 
@@ -2174,8 +2170,7 @@ const server = http.createServer(async (req, res) => {
 
         console.log(`[Server] Download queued: ${safeName} (${downloadQueue.length} in queue, ${activeDownloads.size} active)`);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ jobId, status: 'queued', filename: safeName }));
+        jsonOk(res, { jobId, status: 'queued', filename: safeName });
         return;
     }
 
@@ -2185,11 +2180,9 @@ const server = http.createServer(async (req, res) => {
         if (jobId) {
             const job = downloadJobs[jobId];
             if (!job) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Job not found' }));
+                jsonError(res, 404, 'Job not found');
             } else {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
+                jsonOk(res, {
                     jobId,
                     status: job.status,
                     progress: job.progress,
@@ -2197,7 +2190,7 @@ const server = http.createServer(async (req, res) => {
                     error: job.error,
                     startedAt: job.startedAt,
                     completedAt: job.completedAt
-                }));
+                });
             }
         } else {
             // Return all jobs (without process refs)
@@ -2212,8 +2205,7 @@ const server = http.createServer(async (req, res) => {
                     completedAt: job.completedAt
                 };
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ jobs, queueLength: downloadQueue.length, activeCount: activeDownloads.size }));
+            jsonOk(res, { jobs, queueLength: downloadQueue.length, activeCount: activeDownloads.size });
         }
         return;
     }
@@ -2222,8 +2214,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/downloads/file' && req.method === 'GET') {
         const jobId = url.searchParams.get('jobId');
         if (!jobId || !downloadJobs[jobId]) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Job not found' }));
+            jsonError(res, 404, 'Job not found');
             return;
         }
 
@@ -2235,8 +2226,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (!fs.existsSync(job.filepath)) {
-            res.writeHead(410, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'File no longer available' }));
+            jsonError(res, 410, 'File no longer available');
             return;
         }
 
@@ -2252,8 +2242,7 @@ const server = http.createServer(async (req, res) => {
         readStream.on('error', (err) => {
             console.error(`[Server] Download file read error: ${err.message}`);
             if (!res.headersSent) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'File read failed' }));
+                jsonError(res, 500, 'File read failed');
             } else {
                 res.end();
             }
@@ -2265,8 +2254,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/downloads/') && req.method === 'DELETE') {
         const jobId = pathname.split('/api/downloads/')[1];
         if (!jobId || !downloadJobs[jobId]) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Job not found' }));
+            jsonError(res, 404, 'Job not found');
             return;
         }
 
@@ -2289,8 +2277,7 @@ const server = http.createServer(async (req, res) => {
         delete downloadJobs[jobId];
         console.log(`[Server] Download cancelled/deleted: ${job.filename}`);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        jsonOk(res, { ok: true });
         return;
     }
 
@@ -2325,8 +2312,7 @@ const server = http.createServer(async (req, res) => {
         // Strip large fields
         const stripped = result.map(stripLargeFields);
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(stripped));
+        jsonOk(res, stripped);
         return;
     }
 
@@ -2338,22 +2324,18 @@ const server = http.createServer(async (req, res) => {
             try {
                 const data = JSON.parse(body);
                 if (!data.id) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Missing moment id' }));
+                    jsonError(res, 400, 'Missing moment id');
                     return;
                 }
                 if (!isValidMomentId(data.id)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid moment id' }));
+                    jsonError(res, 400, 'Invalid moment id');
                     return;
                 }
                 const saved = upsertMoment(data);
                 saveMomentsDb();
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(stripLargeFields(saved)));
+                jsonOk(res, stripLargeFields(saved));
             } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                jsonError(res, 400, 'Invalid JSON');
             }
         });
         return;
@@ -2368,8 +2350,7 @@ const server = http.createServer(async (req, res) => {
                 const data = JSON.parse(body);
                 const incoming = data.moments;
                 if (!Array.isArray(incoming)) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Expected { moments: [...] }' }));
+                    jsonError(res, 400, 'Expected { moments: [...] }');
                     return;
                 }
                 let synced = 0;
@@ -2382,11 +2363,9 @@ const server = http.createServer(async (req, res) => {
                 saveMomentsDb();
                 // Return full list (stripped)
                 const stripped = momentsDb.map(stripLargeFields);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ synced, moments: stripped }));
+                jsonOk(res, { synced, moments: stripped });
             } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                jsonError(res, 400, 'Invalid JSON');
             }
         });
         return;
@@ -2397,21 +2376,18 @@ const server = http.createServer(async (req, res) => {
         !pathname.includes('/clip') && !pathname.includes('/extract') && !pathname.includes('/status') && !pathname.includes('/sync') && !pathname.includes('/analyze') && !pathname.includes('/thumb')) {
         const momentId = pathname.slice('/api/moments/'.length);
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            jsonError(res, 400, 'Invalid moment id');
             return;
         }
         const found = momentsDb.find(m => m.id === momentId);
         if (!found) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Moment not found' }));
+            jsonError(res, 404, 'Moment not found');
             return;
         }
         // Return copy with thumbnail restored
         const copy = Object.assign({}, found);
         restoreThumbnail(copy);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(copy));
+        jsonOk(res, copy);
         return;
     }
 
@@ -2420,14 +2396,12 @@ const server = http.createServer(async (req, res) => {
         !pathname.includes('/clip')) {
         const momentId = pathname.slice('/api/moments/'.length);
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            jsonError(res, 400, 'Invalid moment id');
             return;
         }
         const idx = momentsDb.findIndex(m => m.id === momentId);
         if (idx === -1) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Moment not found' }));
+            jsonError(res, 404, 'Moment not found');
             return;
         }
         const removed = momentsDb.splice(idx, 1)[0];
@@ -2446,8 +2420,7 @@ const server = http.createServer(async (req, res) => {
 
         saveMomentsDb();
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, deleted: momentId }));
+        jsonOk(res, { ok: true, deleted: momentId });
         return;
     }
 
@@ -2462,26 +2435,22 @@ const server = http.createServer(async (req, res) => {
                 const { momentId, sourceUrl, start, end, sourceFileId } = data;
 
                 if (!ffmpegAvailable) {
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'ffmpeg not available' }));
+                    jsonError(res, 500, 'ffmpeg not available');
                     return;
                 }
                 if (!momentId || !sourceUrl) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Missing momentId or sourceUrl' }));
+                    jsonError(res, 400, 'Missing momentId or sourceUrl');
                     return;
                 }
                 // Reject momentIds with path separators
                 if (momentId.includes('/') || momentId.includes('\\') || momentId.includes('..')) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid momentId' }));
+                    jsonError(res, 400, 'Invalid momentId');
                     return;
                 }
                 const startF = parseFloat(start);
                 const endF = parseFloat(end);
                 if (!isFinite(startF) || !isFinite(endF) || startF < 0 || startF >= endF) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid time range' }));
+                    jsonError(res, 400, 'Invalid time range');
                     return;
                 }
 
@@ -2491,8 +2460,7 @@ const server = http.createServer(async (req, res) => {
                           (extractJobs[id].status === 'queued' || extractJobs[id].status === 'extracting')
                 );
                 if (existingJobId) {
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ jobId: existingJobId, status: extractJobs[existingJobId].status, deduplicated: true }));
+                    jsonOk(res, { jobId: existingJobId, status: extractJobs[existingJobId].status, deduplicated: true });
                     return;
                 }
 
@@ -2510,11 +2478,9 @@ const server = http.createServer(async (req, res) => {
                 extractQueue.push(jobId);
                 processExtractQueue();
 
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ jobId, status: 'queued', momentId }));
+                jsonOk(res, { jobId, status: 'queued', momentId });
             } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                jsonError(res, 400, 'Invalid JSON');
             }
         });
         return;
@@ -2523,8 +2489,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/moments/status' && req.method === 'GET') {
         const momentId = new URL(req.url, `http://${req.headers.host}`).searchParams.get('momentId');
         if (!momentId) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing momentId' }));
+            jsonError(res, 400, 'Missing momentId');
             return;
         }
 
@@ -2532,50 +2497,44 @@ const server = http.createServer(async (req, res) => {
         const jobId = Object.keys(extractJobs).find(id => extractJobs[id].momentId === momentId);
         if (jobId) {
             const job = extractJobs[jobId];
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
+            jsonOk(res, {
                 status: job.status, progress: job.progress, jobId,
                 extractedUrl: job.status === 'complete' ? `/api/moments/${momentId}/clip.mp4` : null,
                 error: job.error || null
-            }));
+            });
             return;
         }
 
         // Check disk (server may have restarted after successful extraction)
         const filePath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
         if (fs.existsSync(filePath)) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
+            jsonOk(res, {
                 status: 'complete', progress: 100,
                 extractedUrl: `/api/moments/${momentId}/clip.mp4`
-            }));
+            });
             return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'none' }));
+        jsonOk(res, { status: 'none' });
         return;
     }
 
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip.mp4') && req.method === 'GET') {
         const momentId = pathname.slice('/api/moments/'.length, -'/clip.mp4'.length);
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            jsonError(res, 400, 'Invalid moment ID');
             return;
         }
         const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
 
         // Directory traversal guard
         if (!clipPath.startsWith(MOMENTS_DIR)) {
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Forbidden' }));
+            jsonError(res, 403, 'Forbidden');
             return;
         }
 
         if (!fs.existsSync(clipPath)) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Clip not yet extracted' }));
+            jsonError(res, 404, 'Clip not yet extracted');
             return;
         }
 
@@ -2588,8 +2547,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/thumb.jpg') && req.method === 'GET') {
         const momentId = pathname.slice('/api/moments/'.length, -'/thumb.jpg'.length);
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            jsonError(res, 400, 'Invalid moment ID');
             return;
         }
         const thumbPath = path.join(MOMENTS_THUMBS, momentId + '.jpg');
@@ -2609,8 +2567,7 @@ const server = http.createServer(async (req, res) => {
         // 2) No cached thumb — extract from clip via ffmpeg
         const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
         if (!clipPath.startsWith(MOMENTS_DIR) || !fs.existsSync(clipPath)) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No clip or thumbnail for moment' }));
+            jsonError(res, 404, 'No clip or thumbnail for moment');
             return;
         }
 
@@ -2624,8 +2581,7 @@ const server = http.createServer(async (req, res) => {
         ]);
         ffmpeg.on('close', (code) => {
             if (code !== 0 || !fs.existsSync(thumbPath)) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Thumbnail generation failed' }));
+                jsonError(res, 500, 'Thumbnail generation failed');
                 return;
             }
             const stat = fs.statSync(thumbPath);
@@ -2637,8 +2593,7 @@ const server = http.createServer(async (req, res) => {
             fs.createReadStream(thumbPath).pipe(res);
         });
         ffmpeg.on('error', () => {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'ffmpeg not available' }));
+            jsonError(res, 500, 'ffmpeg not available');
         });
         return;
     }
@@ -2646,16 +2601,14 @@ const server = http.createServer(async (req, res) => {
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip') && req.method === 'DELETE') {
         const momentId = pathname.slice('/api/moments/'.length, -'/clip'.length);
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            jsonError(res, 400, 'Invalid moment ID');
             return;
         }
 
         // Directory traversal guard
         const clipCheck = path.join(MOMENTS_DIR, `${momentId}.mp4`);
         if (!clipCheck.startsWith(MOMENTS_DIR)) {
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Forbidden' }));
+            jsonError(res, 403, 'Forbidden');
             return;
         }
 
@@ -2677,8 +2630,7 @@ const server = http.createServer(async (req, res) => {
         try { if (fs.existsSync(clipPath)) fs.unlinkSync(clipPath); } catch (e) {}
         try { if (fs.existsSync(partPath)) fs.unlinkSync(partPath); } catch (e) {}
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        jsonOk(res, { ok: true });
         return;
     }
 
@@ -2686,14 +2638,13 @@ const server = http.createServer(async (req, res) => {
 
     // GET /api/ai/status — Check availability of AI backends
     if (pathname === '/api/ai/status' && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        jsonOk(res, {
             available: skierAvailable,
             servers: skierServers.map(s => ({
                 category: s.category, model: s.model,
                 port: s.port, tags: s.tagCount, available: s.available
             }))
-        }));
+        });
         return;
     }
 
@@ -2703,14 +2654,12 @@ const server = http.createServer(async (req, res) => {
         const momentId = decodeURIComponent(analyzeMatch[1]);
 
         if (!isValidMomentId(momentId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid moment id' }));
+            jsonError(res, 400, 'Invalid moment id');
             return;
         }
 
         if (!skierAvailable) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Skier not available (http://localhost:8000)' }));
+            jsonError(res, 503, 'Skier not available (http://localhost:8000)');
             return;
         }
 
@@ -2718,8 +2667,7 @@ const server = http.createServer(async (req, res) => {
         try {
             await fs.promises.access(thumbPath);
         } catch {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'No thumbnail found for moment ' + momentId }));
+            jsonError(res, 404, 'No thumbnail found for moment ' + momentId);
             return;
         }
 
@@ -2738,11 +2686,10 @@ const server = http.createServer(async (req, res) => {
                 saveMomentsDb();
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
+            jsonOk(res, {
                 momentId, tags: aiTags, confidences,
                 providers: categories.length > 0 ? categories : ['skier']
-            }));
+            });
 
             console.log('[Server] AI analysis complete for', momentId,
                 '- models:', categories.join('+'),
@@ -2750,8 +2697,7 @@ const server = http.createServer(async (req, res) => {
 
         } catch (err) {
             console.error('[Server] AI analysis failed:', err.message);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'AI analysis failed: ' + err.message }));
+            jsonError(res, 500, 'AI analysis failed: ' + err.message);
         }
         return;
     }
@@ -2759,8 +2705,7 @@ const server = http.createServer(async (req, res) => {
     // POST /api/moments/analyze-batch — Analyze all untagged moments
     if (pathname === '/api/moments/analyze-batch' && req.method === 'POST') {
         if (!skierAvailable) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Skier not available (http://localhost:8000)' }));
+            jsonError(res, 503, 'Skier not available (http://localhost:8000)');
             return;
         }
 
@@ -2775,8 +2720,7 @@ const server = http.createServer(async (req, res) => {
         );
 
         // Respond immediately with count, process in background
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ queued: untagged.length, total: momentsDb.length }));
+        jsonOk(res, { queued: untagged.length, total: momentsDb.length });
 
         // Process sequentially in background (don't overwhelm the AI servers)
         // Snapshot IDs — lookup fresh references each iteration to avoid stale refs from sync
@@ -2827,8 +2771,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /api/moments/analyze-progress — Poll batch analysis progress
     if (pathname === '/api/moments/analyze-progress' && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(batchProgress));
+        jsonOk(res, batchProgress);
         return;
     }
 

@@ -161,7 +161,6 @@ const PlexdStream = (function() {
         } else {
             video.autoplay = options.autoplay !== false;
         }
-        // Don't set crossOrigin - it causes CORS preflight which many video servers reject
 
         // Create controls overlay
         const controls = createControlsOverlay(id);
@@ -213,8 +212,11 @@ const PlexdStream = (function() {
         wrapper.dataset.streamId = id;
         wrapper.tabIndex = 0; // Makes it focusable
 
-        // For cross-origin HLS, route through our proxy to bypass CORS
+        // For cross-origin URLs, route through our proxy to bypass CORS
         const sourceUrl = getProxiedHlsUrl(url);
+
+        // Enable CORS on video element for proxied URLs so canvas capture (thumbnails) works
+        if (sourceUrl.startsWith('/api/proxy/')) video.crossOrigin = 'anonymous';
 
         // Stream state
         const stream = {
@@ -302,7 +304,7 @@ const PlexdStream = (function() {
                 video.play().catch(function() {});
             }, { once: true });
         } else {
-            video.src = url;
+            video.src = sourceUrl;
             video.addEventListener('canplay', function onCanPlay() {
                 video.removeEventListener('canplay', onCanPlay);
                 video.play().catch(function() {});
@@ -320,32 +322,30 @@ const PlexdStream = (function() {
         // Explicit HLS extension
         if (lowerUrl.includes('.m3u8')) return true;
 
-        // Common streaming server patterns (Stash, Jellyfin, Emby, etc.)
-        // These often serve HLS without the .m3u8 extension
+        // Common streaming server patterns that serve HLS without the .m3u8 extension
+        // NOTE: /stream endpoints (Stash, etc.) serve raw MP4, NOT HLS — don't include them
         const hlsPatterns = [
-            /\/stream$/i,           // /stream endpoint
-            /\/stream\?/i,          // /stream with query params
             /\/live$/i,             // /live endpoint
             /\/live\?/i,            // /live with query params
             /\/playlist$/i,         // /playlist endpoint
             /\/master$/i,           // /master playlist
-            /\/hls\//i,             // /hls/ in path
-            /\/scene\/\d+\/stream/i // Stash-style /scene/{id}/stream
+            /\/hls\//i              // /hls/ in path
         ];
 
         return hlsPatterns.some(pattern => pattern.test(url));
     }
 
     /**
-     * Get proxy URL for cross-origin HLS streams.
-     * Routes external m3u8 through our server to bypass CORS restrictions.
+     * Get proxy URL for cross-origin streams.
+     * Routes external HLS through /api/proxy/hls, other video through /api/proxy/video.
      */
     function getProxiedHlsUrl(url) {
-        if (!isHlsUrl(url)) return url;
+        // Skip non-http URLs and already-proxied paths early
+        if (url.startsWith('/api/proxy/') || url.startsWith('blob:') || url.startsWith('data:')) return url;
 
         try {
             const urlObj = new URL(url);
-            // Don't proxy our own server's HLS or local URLs
+            // Don't proxy our own server or local URLs
             if (urlObj.hostname === 'localhost' ||
                 urlObj.hostname === '127.0.0.1' ||
                 urlObj.hostname === '[::1]' ||
@@ -356,10 +356,13 @@ const PlexdStream = (function() {
             return url;
         }
 
-        // Already proxied
-        if (url.startsWith('/api/proxy/hls')) return url;
+        // HLS gets the manifest-rewriting proxy
+        if (url.toLowerCase().includes('.m3u8')) {
+            return `/api/proxy/hls?url=${encodeURIComponent(url)}`;
+        }
 
-        return `/api/proxy/hls?url=${encodeURIComponent(url)}`;
+        // Everything else (MP4, streaming endpoints) gets the range-aware video proxy
+        return `/api/proxy/video?url=${encodeURIComponent(url)}`;
     }
 
     /**
@@ -4974,7 +4977,9 @@ const PlexdStream = (function() {
         resetPanPosition,
         resetAllPanPositions,
         // Moment dots on seek bars
-        updateMomentDots
+        updateMomentDots,
+        // URL proxying (for app.js fallback video paths)
+        getProxiedHlsUrl
     };
 })();
 

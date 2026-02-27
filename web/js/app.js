@@ -689,6 +689,115 @@ const PlexdApp = (function() {
         container.appendChild(el);
     }
 
+    // Cover-crop: draw source video centered/cropped into canvas (like CSS object-fit: cover)
+    function drawCoverCrop(ctx, vid, cw, ch) {
+        var vw = vid.videoWidth || cw, vh = vid.videoHeight || ch;
+        var cAR = cw / ch, vAR = vw / vh;
+        var sx, sy, sw, sh;
+        if (vAR > cAR) { sh = vh; sw = vh * cAR; sx = (vw - sw) / 2; sy = 0; }
+        else { sw = vw; sh = vw / cAR; sx = 0; sy = (vh - sh) / 2; }
+        ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, cw, ch);
+    }
+
+    // Wire drag-to-reorder on a moment browser element (Grid card, Wall cell, Player thumb)
+    // guardFn: optional function returning true to block drag (e.g. wallEditMode check)
+    function setupDragToReorder(el, idx, container, guardFn) {
+        el.draggable = true;
+        el.addEventListener('dragstart', function(ev) {
+            if (guardFn && guardFn()) { ev.preventDefault(); return; }
+            ev.dataTransfer.setData('text/plain', String(idx));
+            el.classList.add('dragging');
+            ev.dataTransfer.effectAllowed = 'move';
+        });
+        el.addEventListener('dragend', function() {
+            el.classList.remove('dragging');
+            container.querySelectorAll('.drag-over').forEach(function(o) { o.classList.remove('drag-over'); });
+        });
+        el.addEventListener('dragover', function(ev) {
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = 'move';
+            el.classList.add('drag-over');
+        });
+        el.addEventListener('dragleave', function() {
+            el.classList.remove('drag-over');
+        });
+        el.addEventListener('drop', function(ev) {
+            ev.preventDefault();
+            el.classList.remove('drag-over');
+            var srcIdx = parseInt(ev.dataTransfer.getData('text/plain'), 10);
+            if (isNaN(srcIdx) || srcIdx === idx) return;
+            var moved = momentBrowserState.filteredMoments.splice(srcIdx, 1)[0];
+            momentBrowserState.filteredMoments.splice(idx, 0, moved);
+            PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
+            momentBrowserState.sortBy = 'manual';
+            if (momentBrowserState.selectedIndex === srcIdx) {
+                momentBrowserState.selectedIndex = idx;
+            }
+            renderCurrentBrowserMode();
+        });
+    }
+
+    // Commit any pending tag input value from wall-edit mode before removing/replacing it
+    function commitPendingTagInput() {
+        var input = document.querySelector('.wall-edit-tags-input');
+        if (!input) return;
+        var cell = input.closest('.moment-wall-cell');
+        if (cell && cell._moment) {
+            var raw = input.value.trim();
+            var tags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+            cell._moment.userTags = tags;
+            PlexdMoments.updateMoment(cell._moment.id, { userTags: tags });
+        }
+    }
+
+    // Create a tag input element for wall-edit mode, wired with keydown/blur handlers
+    function createTagInput(mom) {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'wall-edit-tags-input';
+        input.placeholder = 'tags (comma separated)';
+        input.value = (mom.userTags || []).join(', ');
+        input.addEventListener('keydown', function(ev) {
+            ev.stopPropagation();
+            if (ev.key === 'Enter' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
+                ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+                input.blur();
+            } else if (ev.key === 'Escape') {
+                input.value = (mom.userTags || []).join(', ');
+                input.blur();
+            }
+        });
+        input.addEventListener('blur', function() { commitPendingTagInput(); });
+        return input;
+    }
+
+    // Create the tag bar container with a tag input for wall-edit mode
+    function createTagBar(mom) {
+        var tagBar = document.createElement('div');
+        tagBar.className = 'wall-edit-tags';
+        tagBar.appendChild(createTagInput(mom));
+        return tagBar;
+    }
+
+    // Capture a moment from a stream at its current playback position
+    function captureMomentFromStream(stream) {
+        var peakT = stream.video.currentTime;
+        var srcUrl = stream.serverUrl || stream.url;
+        var dur = stream.video.duration || 0;
+        return PlexdMoments.createMoment({
+            sourceUrl: srcUrl,
+            sourceFileId: extractServerFileId(srcUrl),
+            sourceTitle: stream.fileName || stream.url,
+            streamId: stream.id,
+            start: Math.max(0, peakT - 60),
+            end: dur ? Math.min(dur, peakT + 60) : peakT + 60,
+            peak: peakT,
+            rating: PlexdStream.getRating(stream.url, stream.fileName) || 0,
+            loved: PlexdStream.isFavorite(stream.id),
+            thumbnailDataUrl: PlexdStream.captureStreamFrame(stream.id)
+        });
+    }
+
     /**
      * Initialize the application
      */
@@ -1156,16 +1265,15 @@ const PlexdApp = (function() {
         headerVisible = !headerVisible;
         window._plexdHeaderVisible = headerVisible;
 
+        toggleBtn.textContent = '\u2630';
         if (headerVisible) {
             header.classList.remove('plexd-header-hidden');
             toggleBtn.classList.add('header-visible');
-            toggleBtn.innerHTML = '☰';
             toggleBtn.title = 'Hide toolbar (H)';
             app.classList.remove('header-hidden');
         } else {
             header.classList.add('plexd-header-hidden');
             toggleBtn.classList.remove('header-visible');
-            toggleBtn.innerHTML = '☰';
             toggleBtn.title = 'Show toolbar (H)';
             app.classList.add('header-hidden');
         }
@@ -2581,22 +2689,19 @@ const PlexdApp = (function() {
 
     function applyClimaxSubMode() {
         stopAutoRotate();
+        setTetrisMode(0);
         switch (climaxSubMode) {
             case 0: // Tight Wall
-                setTetrisMode(0);
                 setWallMode(2);
                 break;
             case 1: // Auto-Rotate Hero
-                setTetrisMode(0);
                 setWallMode(3);
                 startAutoRotate();
                 break;
             case 2: // Collage — handled in updateLayout
-                setTetrisMode(0);
                 setWallMode(0);
                 break;
             case 3: // Single Focus
-                setTetrisMode(0);
                 setWallMode(0);
                 updateWallModeClasses();
                 updateTetrisModeClasses();
@@ -2862,9 +2967,10 @@ const PlexdApp = (function() {
                 vid.src = url;
             }
         } else {
-            // Already an HLS URL or external URL
-            var proxied = (typeof getProxiedHlsUrl === 'function' && url.includes('.m3u8'))
-                ? getProxiedHlsUrl(url) : url;
+            // External URL — proxy all cross-origin URLs (HLS + plain video)
+            var proxied = PlexdStream.getProxiedHlsUrl(url);
+            // Only enable CORS mode when routed through our proxy (server returns CORS headers)
+            if (proxied.startsWith('/api/proxy/')) vid.crossOrigin = 'anonymous';
             if (proxied.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
                 var hls2 = new Hls();
                 hls2.loadSource(proxied);
@@ -3354,7 +3460,6 @@ const PlexdApp = (function() {
 
         var frag = document.createDocumentFragment();
         var count = moments.length;
-        var dragSrcIdx = null;
 
         for (var idx = 0; idx < count; idx++) {
             var mom = moments[idx];
@@ -3406,40 +3511,8 @@ const PlexdApp = (function() {
             }
             card.appendChild(info);
 
-            // Drag-to-reorder (same pattern as Player filmstrip)
-            (function(cardEl, cardIdx) {
-                cardEl.addEventListener('dragstart', function(ev) {
-                    dragSrcIdx = cardIdx;
-                    cardEl.classList.add('dragging');
-                    ev.dataTransfer.effectAllowed = 'move';
-                });
-                cardEl.addEventListener('dragend', function() {
-                    cardEl.classList.remove('dragging');
-                    grid.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
-                });
-                cardEl.addEventListener('dragover', function(ev) {
-                    ev.preventDefault();
-                    ev.dataTransfer.dropEffect = 'move';
-                    cardEl.classList.add('drag-over');
-                });
-                cardEl.addEventListener('dragleave', function() {
-                    cardEl.classList.remove('drag-over');
-                });
-                cardEl.addEventListener('drop', function(ev) {
-                    ev.preventDefault();
-                    cardEl.classList.remove('drag-over');
-                    if (dragSrcIdx === null || dragSrcIdx === cardIdx) return;
-                    var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
-                    momentBrowserState.filteredMoments.splice(cardIdx, 0, moved);
-                    PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
-                    momentBrowserState.sortBy = 'manual';
-                    if (momentBrowserState.selectedIndex === dragSrcIdx) {
-                        momentBrowserState.selectedIndex = cardIdx;
-                    }
-                    renderCurrentBrowserMode();
-                    dragSrcIdx = null;
-                });
-            })(card, idx);
+            // Drag-to-reorder
+            setupDragToReorder(card, idx, grid);
 
             frag.appendChild(card);
         }
@@ -3564,13 +3637,7 @@ const PlexdApp = (function() {
         function drawVidToCanvas(vid) {
             var canvas = cell.querySelector('canvas');
             if (!canvas || !vid || vid.readyState < 2) return;
-            var ctx = canvas.getContext('2d');
-            var vw = vid.videoWidth || 320, vh = vid.videoHeight || 180;
-            var cAR = 320 / 180, vAR = vw / vh;
-            var sx, sy, sw, sh;
-            if (vAR > cAR) { sh = vh; sw = vh * cAR; sx = (vw - sw) / 2; sy = 0; }
-            else { sw = vw; sh = vw / cAR; sx = 0; sy = (vh - sh) / 2; }
-            ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, 320, 180);
+            drawCoverCrop(canvas.getContext('2d'), vid, 320, 180);
         }
 
         function handleDrag(handle, side) {
@@ -3833,7 +3900,6 @@ const PlexdApp = (function() {
 
         var canvasRefs = []; // { canvas, ctx, sourceVid, mom }
         wallMirrorState.canvasRefs = canvasRefs; // expose for edit-mode source swap
-        var dragSrcIdx = null;
         var wallSourceHandled = {}; // Track which source videos already have loop handlers
 
         // --- Phase 1: Create lightweight cells with thumbnail posters (no video elements) ---
@@ -3896,41 +3962,8 @@ const PlexdApp = (function() {
                 updateWallSelection();
             });
 
-            // Drag-to-reorder
-            (function(cellEl, cellIdx) {
-                cellEl.addEventListener('dragstart', function(ev) {
-                    if (wallEditMode) { ev.preventDefault(); return; }
-                    dragSrcIdx = cellIdx;
-                    cellEl.classList.add('dragging');
-                    ev.dataTransfer.effectAllowed = 'move';
-                });
-                cellEl.addEventListener('dragend', function() {
-                    cellEl.classList.remove('dragging');
-                    grid.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
-                });
-                cellEl.addEventListener('dragover', function(ev) {
-                    ev.preventDefault();
-                    ev.dataTransfer.dropEffect = 'move';
-                    cellEl.classList.add('drag-over');
-                });
-                cellEl.addEventListener('dragleave', function() {
-                    cellEl.classList.remove('drag-over');
-                });
-                cellEl.addEventListener('drop', function(ev) {
-                    ev.preventDefault();
-                    cellEl.classList.remove('drag-over');
-                    if (dragSrcIdx === null || dragSrcIdx === cellIdx) return;
-                    var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
-                    momentBrowserState.filteredMoments.splice(cellIdx, 0, moved);
-                    PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
-                    momentBrowserState.sortBy = 'manual';
-                    if (momentBrowserState.selectedIndex === dragSrcIdx) {
-                        momentBrowserState.selectedIndex = cellIdx;
-                    }
-                    renderCurrentBrowserMode();
-                    dragSrcIdx = null;
-                });
-            })(cell, idx);
+            // Drag-to-reorder (blocked in wall edit mode)
+            setupDragToReorder(cell, idx, grid, function() { return wallEditMode; });
 
             updateCellTimeline(cell);
             grid.appendChild(cell);
@@ -4063,24 +4096,7 @@ const PlexdApp = (function() {
                 // Skip drawing while drag-seeking — let seeked handler control the canvas
                 if (ref.sourceVid._plexdDragging) continue;
                 if (ref.sourceVid.readyState >= 2) {
-                    // Cover-crop: draw source video centered/cropped into 320x180 canvas
-                    var vw = ref.sourceVid.videoWidth || 320;
-                    var vh = ref.sourceVid.videoHeight || 180;
-                    var canvasAR = 320 / 180;
-                    var videoAR = vw / vh;
-                    var sx, sy, sw, sh;
-                    if (videoAR > canvasAR) {
-                        sh = vh;
-                        sw = vh * canvasAR;
-                        sx = (vw - sw) / 2;
-                        sy = 0;
-                    } else {
-                        sw = vw;
-                        sh = vw / canvasAR;
-                        sx = 0;
-                        sy = (vh - sh) / 2;
-                    }
-                    ref.ctx.drawImage(ref.sourceVid, sx, sy, sw, sh, 0, 0, 320, 180);
+                    drawCoverCrop(ref.ctx, ref.sourceVid, 320, 180);
                     // Remove poster overlay once video is drawing
                     var refCell = ref.canvas.closest('.moment-wall-cell');
                     if (refCell && refCell._removePoster) refCell._removePoster();
@@ -4110,8 +4126,10 @@ const PlexdApp = (function() {
         var cellW = cell.offsetWidth;
         var vpH = vp.clientHeight;
         var vpW = vp.clientWidth;
+        // In edit mode, bias downward so timeline bar + handles stay visible below cell
+        var editPadding = wallEditMode ? 30 : 0;
         // Center cell in viewport; clamp to grid bounds
-        var targetY = cellTop - (vpH - cellH) / 2;
+        var targetY = cellTop - (vpH - cellH) / 2 + editPadding;
         var targetX = cellLeft - (vpW - cellW) / 2;
         var maxY = grid.scrollHeight - vpH;
         var maxX = grid.scrollWidth - vpW;
@@ -4132,16 +4150,7 @@ const PlexdApp = (function() {
             var vp = document.querySelector('.moment-wall-viewport');
             if (vp) vp.classList.remove('wall-edit-mode');
             // Commit any pending tag input before removing overlays
-            var oldTagInput = document.querySelector('.wall-edit-tags-input');
-            if (oldTagInput) {
-                var oldCell = oldTagInput.closest('.moment-wall-cell');
-                if (oldCell && oldCell._moment) {
-                    var raw = oldTagInput.value.trim();
-                    var pendingTags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
-                    oldCell._moment.userTags = pendingTags;
-                    PlexdMoments.updateMoment(oldCell._moment.id, { userTags: pendingTags });
-                }
-            }
+            commitPendingTagInput();
             // Remove edit overlays
             var oldTagBar = document.querySelector('.wall-edit-tags');
             if (oldTagBar) oldTagBar.remove();
@@ -4175,31 +4184,7 @@ const PlexdApp = (function() {
             if (selected && selected._timeline) setupTimelineDrag(selected);
             // Add tag input on selected cell
             if (selected && mom) {
-                var tagBar = document.createElement('div');
-                tagBar.className = 'wall-edit-tags';
-                var tagInput = document.createElement('input');
-                tagInput.type = 'text';
-                tagInput.className = 'wall-edit-tags-input';
-                tagInput.placeholder = 'tags (comma separated)';
-                tagInput.value = (mom.userTags || []).join(', ');
-                tagInput.addEventListener('keydown', function(ev) {
-                    ev.stopPropagation(); // don't trigger app keyboard shortcuts
-                    if (ev.key === 'Enter' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
-                        ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
-                        tagInput.blur();
-                    } else if (ev.key === 'Escape') {
-                        tagInput.value = (mom.userTags || []).join(', ');
-                        tagInput.blur();
-                    }
-                });
-                tagInput.addEventListener('blur', function() {
-                    var raw = tagInput.value.trim();
-                    var tags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
-                    mom.userTags = tags;
-                    PlexdMoments.updateMoment(mom.id, { userTags: tags });
-                });
-                tagBar.appendChild(tagInput);
-                selected.appendChild(tagBar);
+                selected.appendChild(createTagBar(mom));
                 // Add time readout
                 var timeEl = document.createElement('div');
                 timeEl.className = 'wall-edit-time';
@@ -4230,16 +4215,7 @@ const PlexdApp = (function() {
                 wallMirrorState._initCell(selected);
             }
             // Commit any pending tag input value before removing it
-            var oldTagInput = document.querySelector('.wall-edit-tags-input');
-            if (oldTagInput) {
-                var oldCell = oldTagInput.closest('.moment-wall-cell');
-                if (oldCell && oldCell._moment) {
-                    var raw = oldTagInput.value.trim();
-                    var pendingTags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
-                    oldCell._moment.userTags = pendingTags;
-                    PlexdMoments.updateMoment(oldCell._moment.id, { userTags: pendingTags });
-                }
-            }
+            commitPendingTagInput();
             // Move edit overlays to newly selected cell
             var oldTime = document.querySelector('.wall-edit-time');
             if (oldTime) oldTime.remove();
@@ -4256,27 +4232,7 @@ const PlexdApp = (function() {
                 timeEl.textContent = fmtTime(mom.start) + ' \u2014 ' + dur + 's';
                 selected.appendChild(timeEl);
                 // Tag input
-                var tagBar = document.createElement('div');
-                tagBar.className = 'wall-edit-tags';
-                var tagInput = document.createElement('input');
-                tagInput.type = 'text';
-                tagInput.className = 'wall-edit-tags-input';
-                tagInput.placeholder = 'tags (comma separated)';
-                tagInput.value = (mom.userTags || []).join(', ');
-                tagInput.addEventListener('keydown', function(ev) {
-                    ev.stopPropagation();
-                    if (ev.key === 'Enter' || ev.key === 'ArrowUp' || ev.key === 'ArrowDown' ||
-                        ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') tagInput.blur();
-                    else if (ev.key === 'Escape') { tagInput.value = (mom.userTags || []).join(', '); tagInput.blur(); }
-                });
-                tagInput.addEventListener('blur', function() {
-                    var raw = tagInput.value.trim();
-                    var tags = raw ? raw.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
-                    mom.userTags = tags;
-                    PlexdMoments.updateMoment(mom.id, { userTags: tags });
-                });
-                tagBar.appendChild(tagInput);
-                selected.appendChild(tagBar);
+                selected.appendChild(createTagBar(mom));
                 updateCellTimeline(selected);
             }
         }
@@ -4351,7 +4307,6 @@ const PlexdApp = (function() {
         strip.className = 'moment-reel-strip';
         strip.id = 'moment-player-strip';
 
-        var dragSrcIdx = null;
         moments.forEach(function(mom, idx) {
             var thumb = document.createElement('div');
             var classes = 'moment-reel-thumb';
@@ -4371,40 +4326,7 @@ const PlexdApp = (function() {
                 loadReelMoment();
             });
             // Drag-to-reorder
-            thumb.addEventListener('dragstart', function(ev) {
-                dragSrcIdx = idx;
-                thumb.classList.add('dragging');
-                ev.dataTransfer.effectAllowed = 'move';
-            });
-            thumb.addEventListener('dragend', function() {
-                thumb.classList.remove('dragging');
-                strip.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
-            });
-            thumb.addEventListener('dragover', function(ev) {
-                ev.preventDefault();
-                ev.dataTransfer.dropEffect = 'move';
-                thumb.classList.add('drag-over');
-            });
-            thumb.addEventListener('dragleave', function() {
-                thumb.classList.remove('drag-over');
-            });
-            thumb.addEventListener('drop', function(ev) {
-                ev.preventDefault();
-                thumb.classList.remove('drag-over');
-                if (dragSrcIdx === null || dragSrcIdx === idx) return;
-                // Reorder: splice from source to target position
-                var moved = momentBrowserState.filteredMoments.splice(dragSrcIdx, 1)[0];
-                momentBrowserState.filteredMoments.splice(idx, 0, moved);
-                // Persist order
-                PlexdMoments.reorder(momentBrowserState.filteredMoments.map(function(m) { return m.id; }));
-                momentBrowserState.sortBy = 'manual';
-                // Update selectedIndex to follow the current playing moment
-                if (momentBrowserState.selectedIndex === dragSrcIdx) {
-                    momentBrowserState.selectedIndex = idx;
-                }
-                renderCurrentBrowserMode();
-                dragSrcIdx = null;
-            });
+            setupDragToReorder(thumb, idx, strip);
             strip.appendChild(thumb);
         });
         wrapper.appendChild(strip);
@@ -4724,17 +4646,7 @@ const PlexdApp = (function() {
             for (var j = 0; j < canvasRefs.length; j++) {
                 var ref = canvasRefs[j];
                 if (ref.sourceVid.readyState >= 2) {
-                    var vw = ref.sourceVid.videoWidth || 320;
-                    var vh = ref.sourceVid.videoHeight || 180;
-                    var canvasAR = 320 / 180;
-                    var videoAR = vw / vh;
-                    var sx, sy, sw, sh;
-                    if (videoAR > canvasAR) {
-                        sh = vh; sw = vh * canvasAR; sx = (vw - sw) / 2; sy = 0;
-                    } else {
-                        sw = vw; sh = vw / canvasAR; sx = 0; sy = (vh - sh) / 2;
-                    }
-                    ref.ctx.drawImage(ref.sourceVid, sx, sy, sw, sh, 0, 0, 320, 180);
+                    drawCoverCrop(ref.ctx, ref.sourceVid, 320, 180);
                 }
             }
             collageMirrorState.rafId = requestAnimationFrame(collageMirrorLoop);
@@ -7675,26 +7587,10 @@ const PlexdApp = (function() {
                     var captured = 0;
                     targets.forEach(function(s) {
                         if (!s.video || s.video.currentTime === undefined) return;
-                        var peakT = s.video.currentTime;
                         var srcUrl = s.serverUrl || s.url;
                         var existing = PlexdMoments.getMomentsForSource(srcUrl);
-                        if (existing.some(function(m) { return Math.abs(m.peak - peakT) < 1; })) return;
-                        var thumb = PlexdStream.captureStreamFrame(s.id);
-                        var r = PlexdStream.getRating(s.url, s.fileName) || 0;
-                        var l = PlexdStream.isFavorite(s.id);
-                        var dur = s.video.duration || 0;
-                        var newMom = PlexdMoments.createMoment({
-                            sourceUrl: srcUrl,
-                            sourceFileId: extractServerFileId(srcUrl),
-                            sourceTitle: s.fileName || s.url,
-                            streamId: s.id,
-                            start: Math.max(0, peakT - 60),
-                            end: dur ? Math.min(dur, peakT + 60) : peakT + 60,
-                            peak: peakT,
-                            rating: r,
-                            loved: l,
-                            thumbnailDataUrl: thumb
-                        });
+                        if (existing.some(function(m) { return Math.abs(m.peak - s.video.currentTime) < 1; })) return;
+                        var newMom = captureMomentFromStream(s);
                         captured++;
                         queueMomentExtraction(newMom, s);
                     });
@@ -7704,40 +7600,18 @@ const PlexdApp = (function() {
                 {
                     var ts = fullscreenStream || selected;
                     if (ts && ts.video) {
-                        var peakTime = ts.video.currentTime;
                         var sourceUrl = ts.serverUrl || ts.url;
                         // Deduplicate: skip if same source within 1 second of existing moment
                         var existingMoments = PlexdMoments.getMomentsForSource(sourceUrl);
                         var isDupe = existingMoments.some(function(m) {
-                            return Math.abs(m.peak - peakTime) < 1;
+                            return Math.abs(m.peak - ts.video.currentTime) < 1;
                         });
                         if (isDupe) {
                             showMessage('Already captured', 'info');
                             break;
                         }
-                        // Capture thumbnail
-                        var thumbnailDataUrl = PlexdStream.captureStreamFrame(ts.id);
-                        // Get rating and loved status
-                        var rating = PlexdStream.getRating(ts.url, ts.fileName) || 0;
-                        var loved = PlexdStream.isFavorite(ts.id);
-                        // Calculate default range: peak +/- 60s (2 min), clamped to duration
-                        var duration = ts.video.duration || 0;
-                        var rangeStart = Math.max(0, peakTime - 60);
-                        var rangeEnd = duration ? Math.min(duration, peakTime + 60) : peakTime + 60;
-                        var sourceFileId = extractServerFileId(sourceUrl);
-                        var moment = PlexdMoments.createMoment({
-                            sourceUrl: sourceUrl,
-                            sourceFileId: sourceFileId,
-                            sourceTitle: ts.fileName || ts.url,
-                            streamId: ts.id,
-                            start: rangeStart,
-                            end: rangeEnd,
-                            peak: peakTime,
-                            rating: rating,
-                            loved: loved,
-                            thumbnailDataUrl: thumbnailDataUrl
-                        });
-                        showMessage('Moment captured at ' + fmtTime(peakTime), 'success');
+                        var moment = captureMomentFromStream(ts);
+                        showMessage('Moment captured at ' + fmtTime(moment.peak), 'success');
                         // Auto-detect range asynchronously (Task 3)
                         if (typeof autoDetectRange === 'function') {
                             autoDetectRange(moment.id, ts);

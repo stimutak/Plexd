@@ -1,6 +1,9 @@
 # Uploaded video files for remote playback
 uploads/
 
+# Worktrees
+.worktrees/
+
 # macOS
 .DS_Store
 

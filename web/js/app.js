@@ -4385,12 +4385,6 @@ const PlexdApp = (function() {
             img.src = momentThumbUrl(mom);
             img.draggable = false;
             thumb.appendChild(img);
-            // Click: move cursor AND play
-            thumb.addEventListener('click', function() {
-                momentBrowserState.playerCursor = idx;
-                momentBrowserState.selectedIndex = idx;
-                loadReelMoment();
-            });
             // Drag-to-reorder
             setupDragToReorder(thumb, idx, strip);
             strip.appendChild(thumb);
@@ -6029,13 +6023,21 @@ const PlexdApp = (function() {
         // Click anywhere on overlay to close
         bugEyeOverlay.onclick = () => toggleBugEyeMode(true);
 
-        // Handle keyboard on overlay (Escape or B to close)
+        // Handle keyboard on overlay (Escape or B to close, others dispatched to app)
         bugEyeOverlay.tabIndex = 0;
         bugEyeOverlay.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' || e.key === 'b' || e.key === 'B') {
                 e.preventDefault();
                 e.stopPropagation();
                 toggleBugEyeMode(true);
+            } else {
+                e.stopPropagation();
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key, code: e.code,
+                    shiftKey: e.shiftKey, ctrlKey: e.ctrlKey,
+                    altKey: e.altKey, metaKey: e.metaKey,
+                    bubbles: true, cancelable: true
+                }));
             }
         });
         bugEyeOverlay.focus();
@@ -6270,13 +6272,21 @@ const PlexdApp = (function() {
         // Click anywhere on overlay to close
         mosaicOverlay.onclick = () => toggleMosaicMode(true);
 
-        // Handle keyboard on overlay (Escape or Shift+B to close)
+        // Handle keyboard on overlay (Escape to close, others dispatched to app)
         mosaicOverlay.tabIndex = 0;
         mosaicOverlay.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' || ((e.key === 'b' || e.key === 'B') && e.shiftKey)) {
+            if (e.key === 'Escape') {
                 e.preventDefault();
                 e.stopPropagation();
                 toggleMosaicMode(true);
+            } else {
+                e.stopPropagation();
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.key, code: e.code,
+                    shiftKey: e.shiftKey, ctrlKey: e.ctrlKey,
+                    altKey: e.altKey, metaKey: e.metaKey,
+                    bubbles: true, cancelable: true
+                }));
             }
         });
         mosaicOverlay.focus();

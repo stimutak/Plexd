@@ -3758,8 +3758,8 @@ body {
     background: rgba(15, 12, 24, 0.95);
     border: 1px solid rgba(201, 163, 85, 0.25);
     border-radius: 8px;
-    width: min(80vw, 900px);
-    max-height: 80vh;
+    width: min(95vw, 1600px);
+    max-height: 95vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -3782,8 +3782,7 @@ body {
     display: block;
     width: 100%;
     flex: 1;
-    min-height: 40vh;
-    max-height: 60vh;
+    min-height: 0;
     object-fit: contain;
     background: #000;
 }

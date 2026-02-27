@@ -2931,7 +2931,6 @@ const PlexdApp = (function() {
         vid.muted = true;
         vid.playsInline = true;
         vid.preload = 'auto';
-        vid.crossOrigin = 'anonymous';
         vid.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
         document.body.appendChild(vid);
         _extractedVideos[key] = vid;
@@ -2981,6 +2980,41 @@ const PlexdApp = (function() {
             }
         }
         return { video: vid, id: key, _isExtracted: false };
+    }
+
+    // Repair missing thumbnails: scan moments without thumbnails, try to capture from loaded streams
+    function repairMissingThumbnails(retries) {
+        if (retries === undefined) retries = 3;
+        var allMoments = PlexdMoments.getAllMoments();
+        var allStreams = PlexdStream.getAllStreams();
+        var repaired = 0;
+        var pending = 0; // streams matched but not ready yet
+        allMoments.forEach(function(mom) {
+            if (mom.thumbnailDataUrl) return; // already has thumbnail
+            // Find a loaded stream matching this moment's source
+            var match = allStreams.find(function(s) {
+                var sUrl = s.serverUrl || s.url;
+                return sUrl === mom.sourceUrl || s.url === mom.sourceUrl;
+            });
+            if (!match || !match.video) return;
+            if (match.video.readyState < 2) { pending++; return; }
+            // Capture from current frame
+            var thumb = PlexdStream.captureStreamFrame(match.id);
+            if (thumb) {
+                PlexdMoments.updateMoment(mom.id, { thumbnailDataUrl: thumb });
+                repaired++;
+            }
+        });
+        if (repaired > 0) {
+            console.log('[Moments] Repaired ' + repaired + ' missing thumbnails');
+            renderCurrentBrowserMode();
+        }
+        // Retry if streams are still loading (back off: 500ms, 2s, 5s)
+        if (pending > 0 && retries > 0) {
+            var retryDelays = { 3: 500, 2: 2000, 1: 5000 };
+            setTimeout(function() { repairMissingThumbnails(retries - 1); }, retryDelays[retries] || 5000);
+        }
+        return repaired;
     }
 
     function queueMomentExtraction(moment, stream) {
@@ -3110,6 +3144,9 @@ const PlexdApp = (function() {
         momentBrowserState.open = true;
         momentBrowserState.selectedIndex = 0;
         momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+
+        // Repair thumbnails for moments from streams that are now loaded with CORS
+        setTimeout(repairMissingThumbnails, 100);
 
         var overlay = document.createElement('div');
         overlay.id = 'encore-overlay';
@@ -4202,10 +4239,8 @@ const PlexdApp = (function() {
                 timeEl.textContent = fmtTime(mom.start) + ' \u2014 ' + dur + 's';
                 selected.appendChild(timeEl);
             }
-            // Defer pan — zoom change needs layout recompute before offsetTop is valid
-            requestAnimationFrame(function() { requestAnimationFrame(function() {
-                panWallToSelected();
-            }); });
+            // Defer pan — wall needs layout before offsetTop is valid
+            requestAnimationFrame(function() { panWallToSelected(); });
             showMessage('Edit mode — drag handles, tags, Opt+Arrows', 'info');
         }
     }
@@ -4778,10 +4813,9 @@ const PlexdApp = (function() {
         var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
         var loved = mom.loved ? ' \u2665' : '';
         var tags = (mom.aiTags || []).join(' \u00b7 ');
-        var posIdx = moments.indexOf(mom) + 1;
 
         var lines = [];
-        lines.push(posIdx + '/' + moments.length + (title ? ' \u2014 ' + title : ''));
+        lines.push((idx + 1) + '/' + moments.length + (title ? ' \u2014 ' + title : ''));
         lines.push(dur + rating + loved);
         if (tags) lines.push(tags);
         overlay.textContent = lines.join('\n');
@@ -4898,8 +4932,8 @@ const PlexdApp = (function() {
                 if (infoEl) infoEl.textContent = 'Clip not available \u2014 source expired';
                 return;
             }
-            var proxiedUrl = (typeof getProxiedHlsUrl === 'function' && videoUrl.includes('.m3u8'))
-                ? getProxiedHlsUrl(videoUrl) : videoUrl;
+            var proxiedUrl = PlexdStream.getProxiedHlsUrl(videoUrl);
+            if (proxiedUrl.startsWith('/api/proxy/')) video.crossOrigin = 'anonymous';
             if (proxiedUrl.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
                 var popupHls = new Hls();
                 popupHls.loadSource(proxiedUrl);
@@ -5154,17 +5188,20 @@ const PlexdApp = (function() {
                     if (mode !== 1) {
                         closeMomentPopupPlayer();
                         momentBrowserState._prevMode = mode;
+                        momentBrowserState._savedWallZoom = wallViewport.zoom;
+                        wallViewport.zoom = 4; // sensible default for editing
                         momentBrowserState.mode = 1;
                         renderCurrentBrowserMode();
                         updateMomentBrowserTitle();
-                        // Double-rAF: first frame commits DOM, second frame has computed layout
-                        requestAnimationFrame(function() { requestAnimationFrame(function() {
-                            toggleWallEditMode();
-                            showMessage('Wall edit \u2014 W to return', 'info');
-                        }); });
+                        toggleWallEditMode();
+                        showMessage('Wall edit \u2014 W to return', 'info');
                     } else {
                         // Return to previous mode, clean up edit mode first
                         if (wallEditMode) toggleWallEditMode(true);
+                        if (momentBrowserState._savedWallZoom !== undefined) {
+                            wallViewport.zoom = momentBrowserState._savedWallZoom;
+                            delete momentBrowserState._savedWallZoom;
+                        }
                         var prev = momentBrowserState._prevMode;
                         momentBrowserState.mode = (prev !== undefined && prev !== 1) ? prev : 0;
                         delete momentBrowserState._prevMode;
@@ -5542,6 +5579,9 @@ const PlexdApp = (function() {
             });
             return true;
         }
+
+        // Let K fall through to main handler for moment capture from streams
+        if (e.key === 'k' || e.key === 'K') return false;
 
         // Consume all other keys when browser is open
         e.preventDefault();

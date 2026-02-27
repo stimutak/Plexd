@@ -2063,6 +2063,45 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // Video Proxy - CORS bypass with range request support for plain video URLs
+    if (pathname === '/api/proxy/video' && req.method === 'GET') {
+        const targetUrl = url.searchParams.get('url');
+        if (!targetUrl) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing url parameter' }));
+            return;
+        }
+
+        const extraHeaders = {};
+        if (req.headers.range) extraHeaders['Range'] = req.headers.range;
+
+        // fetchUrl handles redirects (up to 5) and timeout internally
+        fetchUrl(targetUrl, (err, proxyRes) => {
+            if (err) {
+                console.error(`[Server] Video proxy error: ${err.message}`);
+                if (!res.headersSent) {
+                    res.writeHead(502, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
+                }
+                return;
+            }
+
+            const outHeaders = {
+                'Content-Type': proxyRes.headers['content-type'] || 'video/mp4',
+                'Accept-Ranges': 'bytes'
+            };
+            if (proxyRes.headers['content-length']) outHeaders['Content-Length'] = proxyRes.headers['content-length'];
+            if (proxyRes.headers['content-range']) outHeaders['Content-Range'] = proxyRes.headers['content-range'];
+
+            res.writeHead(proxyRes.statusCode, outHeaders);
+            proxyRes.pipe(res);
+            proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
+            // Abort upstream fetch when client disconnects (prevents wasted bandwidth)
+            res.on('close', () => { proxyRes.destroy(); });
+        }, 0, extraHeaders);
+        return;
+    }
+
     // HLS Proxy - fetch external HLS manifests/segments to bypass CORS
     if (pathname === '/api/proxy/hls' && req.method === 'GET') {
         const targetUrl = url.searchParams.get('url');

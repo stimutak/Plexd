@@ -123,6 +123,36 @@ function saveMomentsDb() {
     }
 }
 
+// Reconcile moments at startup: fix blob URLs and extracted flags
+(function reconcileMoments() {
+    let fixedBlobs = 0, fixedExtracted = 0;
+    for (const m of momentsDb) {
+        // Fix blob: sourceUrls — resolve to server file path by sourceTitle (filename)
+        if (m.sourceUrl && m.sourceUrl.startsWith('blob:') && m.sourceTitle) {
+            const filePath = path.join(UPLOADS_DIR, m.sourceTitle);
+            if (fs.existsSync(filePath)) {
+                m.sourceUrl = `/api/files/${m.sourceTitle}`;
+                m.sourceFileId = m.sourceTitle;
+                fixedBlobs++;
+            }
+        }
+        // Fix extracted flag — mark if clip file exists on disk
+        if (!m.extracted) {
+            const clipPath = path.join(MOMENTS_DIR, `${m.id}.mp4`);
+            if (fs.existsSync(clipPath)) {
+                m.extracted = true;
+                m.extractedPath = `/api/moments/${m.id}/clip.mp4`;
+                fixedExtracted++;
+            }
+        }
+    }
+    if (fixedBlobs > 0 || fixedExtracted > 0) {
+        saveMomentsDb();
+        if (fixedBlobs > 0) console.log(`[Server] Reconciled ${fixedBlobs} blob URLs → server files`);
+        if (fixedExtracted > 0) console.log(`[Server] Reconciled ${fixedExtracted} moments with existing clips`);
+    }
+})();
+
 // Validate momentId (no path separators or traversal)
 function isValidMomentId(id) {
     return typeof id === 'string' && id.length > 0 && !id.includes('/') && !id.includes('\\') && !id.includes('..');
@@ -637,6 +667,19 @@ function runExtract(jobId, useSoftwareEncoder = false) {
         else if (fs.existsSync(rawPath)) inputSource = rawPath;
     }
 
+    // Route external URLs through our proxy — ffmpeg can't authenticate with
+    // remote servers (e.g. Stash returns 401 to ffmpeg's default User-Agent).
+    // Our /api/proxy/video endpoint handles auth, headers, and redirects.
+    if (inputSource.startsWith('http://') || inputSource.startsWith('https://')) {
+        try {
+            const urlObj = new URL(inputSource);
+            const isLocal = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1' || urlObj.hostname === '[::1]';
+            if (!isLocal) {
+                inputSource = `http://localhost:${PORT}/api/proxy/video?url=${encodeURIComponent(inputSource)}`;
+            }
+        } catch (e) { /* keep original URL if parse fails */ }
+    }
+
     const partPath = job.outputPath + '.part';
 
     // Check disk space
@@ -724,6 +767,13 @@ function runExtract(jobId, useSoftwareEncoder = false) {
             job.progress = 100;
             job.completedAt = Date.now();
             delete job.process;
+            // Update moment metadata so extracted flag persists server-side
+            const mom = momentsDb.find(m => m.id === job.momentId);
+            if (mom) {
+                mom.extracted = true;
+                mom.extractedPath = `/api/moments/${job.momentId}/clip.mp4`;
+                saveMomentsDb();
+            }
             // Auto-generate thumbnail from clip (avoids cold ffmpeg spawn on first request)
             const thumbPath = path.join(MOMENTS_THUMBS, `${job.momentId}.jpg`);
             if (!fs.existsSync(thumbPath)) {

@@ -930,7 +930,7 @@ const PlexdApp = (function() {
             var existingSources = {};
             PlexdMoments.getAllMoments().forEach(function(m) { existingSources[m.sourceUrl] = true; });
             streams.forEach(function(s) {
-                var srcUrl = s.serverUrl || s.url;
+                var srcUrl = s.serverUrl || (s.serverFileId ? '/api/files/' + s.serverFileId : s.url);
                 if (existingSources[srcUrl]) return; // Already has a moment
                 if (!s.video || !s.video.duration) return;
                 var peakT = s.video.currentTime || (s.video.duration * 0.3);
@@ -1240,6 +1240,19 @@ const PlexdApp = (function() {
                     stream.serverUrl = result.url;
                     stream.serverFileId = result.fileId;
                     console.log(`[Plexd] Server URL ready for ${fileName}: ${result.url}`);
+
+                    // Patch any moments captured before upload finished (still have blob: sourceUrl)
+                    var blobUrl = stream.url;
+                    if (blobUrl && blobUrl.startsWith('blob:')) {
+                        PlexdMoments.getAllMoments().forEach(function(m) {
+                            if (m.sourceUrl === blobUrl || m.streamId === stream.id) {
+                                PlexdMoments.updateMoment(m.id, {
+                                    sourceUrl: result.url,
+                                    sourceFileId: result.fileId
+                                });
+                            }
+                        });
+                    }
 
                     // Add server URL to history (blob URLs are ephemeral, server URLs persist)
                     addToHistory(result.url);
@@ -3021,9 +3034,9 @@ const PlexdApp = (function() {
         var sourceUrl = moment.sourceUrl;
         if (!sourceUrl || sourceUrl.startsWith('blob:')) return;
         // For server files, sourceFileId triggers local file resolution (fastest path).
-        // For external streams, send the sourceUrl (which may be proxied) so ffmpeg
-        // can access CDN-protected content through the same proxy the browser uses.
-        var ffmpegUrl = stream ? (stream.sourceUrl || stream.url || sourceUrl) : sourceUrl;
+        // For external streams, send the ORIGINAL URL — the server routes it through
+        // its own proxy for auth/headers (ffmpeg can't authenticate with Stash etc).
+        var ffmpegUrl = stream ? (stream.url || sourceUrl) : sourceUrl;
 
         fetch('/api/moments/extract', {
             method: 'POST',
@@ -7639,7 +7652,9 @@ const PlexdApp = (function() {
                 {
                     var ts = fullscreenStream || selected;
                     if (ts && ts.video) {
-                        var sourceUrl = ts.serverUrl || ts.url;
+                        var peakTime = ts.video.currentTime;
+                        // Prefer serverUrl, fall back to /api/files/ path from fileId, last resort: blob URL
+                        var sourceUrl = ts.serverUrl || (ts.serverFileId ? '/api/files/' + ts.serverFileId : ts.url);
                         // Deduplicate: skip if same source within 1 second of existing moment
                         var existingMoments = PlexdMoments.getMomentsForSource(sourceUrl);
                         var isDupe = existingMoments.some(function(m) {

@@ -2564,21 +2564,52 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 2) No cached thumb — extract from clip via ffmpeg
+        // 2) No cached thumb — extract via ffmpeg from clip or source video
         const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
-        if (!clipPath.startsWith(MOMENTS_DIR) || !fs.existsSync(clipPath)) {
-            jsonError(res, 404, 'No clip or thumbnail for moment');
+        let inputPath = null;
+        let seekTime = 0.5;
+
+        if (clipPath.startsWith(MOMENTS_DIR) && fs.existsSync(clipPath)) {
+            inputPath = clipPath;
+        } else {
+            // 3) No clip — try source video at the moment's peak time
+            const mom = momentsDb.find(m => m.id === momentId);
+            if (mom) {
+                seekTime = mom.peak || mom.start || 0;
+                const srcUrl = mom.sourceUrl || mom.streamUrl || '';
+                if (srcUrl.startsWith('/api/files/')) {
+                    // Local file — resolve to disk path
+                    const localFile = path.join(UPLOADS_DIR, srcUrl.replace('/api/files/', ''));
+                    if (localFile.startsWith(UPLOADS_DIR) && fs.existsSync(localFile)) {
+                        inputPath = localFile;
+                    } else {
+                        // Check HLS directory for transcoded version
+                        const hlsDir = path.join(HLS_DIR, srcUrl.replace('/api/files/', '').replace(/\.[^.]+$/, ''));
+                        const hlsPlaylist = path.join(hlsDir, 'playlist.m3u8');
+                        if (fs.existsSync(hlsPlaylist)) inputPath = hlsPlaylist;
+                    }
+                } else if (srcUrl.startsWith('http')) {
+                    // External URL — ffmpeg can fetch directly
+                    inputPath = srcUrl;
+                }
+            }
+        }
+
+        if (!inputPath) {
+            jsonError(res, 404, 'No clip or source video for thumbnail');
             return;
         }
 
-        const ffmpeg = spawn('ffmpeg', [
-            '-i', clipPath,
+        const ffArgs = ['-ss', String(seekTime), '-i', inputPath,
             '-vframes', '1',
-            '-ss', '0.5',
             '-vf', 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2',
             '-q:v', '4',
-            '-y', thumbPath
-        ]);
+            '-y', thumbPath];
+        // External URLs need a timeout and user-agent
+        if (inputPath.startsWith('http')) {
+            ffArgs.unshift('-timeout', '10000000', '-user_agent', 'Mozilla/5.0');
+        }
+        const ffmpeg = spawn('ffmpeg', ffArgs);
         ffmpeg.on('close', (code) => {
             if (code !== 0 || !fs.existsSync(thumbPath)) {
                 jsonError(res, 500, 'Thumbnail generation failed');

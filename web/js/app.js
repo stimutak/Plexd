@@ -3836,8 +3836,8 @@ const PlexdApp = (function() {
             ref.sourceVid.addEventListener('timeupdate', sourceLoopHandler);
             wallMirrorState.handlers.push({ video: ref.sourceVid, handler: sourceLoopHandler });
             ref._editLoopHandler = sourceLoopHandler;
-            // Start playing source, seek to moment
-            ref.sourceVid.currentTime = mom.start;
+            // Start playing source, seek to peak (where K was pressed)
+            ref.sourceVid.currentTime = mom.peak || mom.start;
             if (ref.sourceVid.paused) ref.sourceVid.play().catch(function() {});
             // Clear extracted flag so getTimelineWindow uses source-based window
             ref._wasExtracted = true;
@@ -4023,7 +4023,15 @@ const PlexdApp = (function() {
                 if (wallMirrorState.prevPlayStates[loadedStream.id] === undefined) {
                     wallMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
                 }
-                if (sourceVid.paused) sourceVid.play().catch(function() {});
+                // If video has no data yet (fallback videos load async), wait for canplay
+                if (sourceVid.readyState >= 2) {
+                    if (sourceVid.paused) sourceVid.play().catch(function() {});
+                } else {
+                    sourceVid.addEventListener('canplay', function() {
+                        sourceVid.currentTime = mom.peak || mom.start;
+                        sourceVid.play().catch(function() {});
+                    }, { once: true });
+                }
 
                 // Only add one timeupdate handler per source video to prevent seek-fighting
                 var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
@@ -4044,8 +4052,10 @@ const PlexdApp = (function() {
                     sourceVid.addEventListener('timeupdate', loopHandler);
                     wallMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
                     wallSourceHandled[sourceKey] = true;
+                    // Start at peak (where K was pressed) — the interesting part
+                    sourceVid.currentTime = mom.peak || mom.start;
                 } else {
-                    sourceVid.currentTime = mom.start;
+                    sourceVid.currentTime = mom.peak || mom.start;
                 }
 
                 // Start rAF loop if this is the first canvasRef
@@ -4895,14 +4905,14 @@ const PlexdApp = (function() {
                 popupHls.loadSource(proxiedUrl);
                 popupHls.attachMedia(video);
                 popupHls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.currentTime = mom.start;
+                    video.currentTime = mom.peak || mom.start;
                     video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
                 });
                 popupMirror._hlsInstance = popupHls;
             } else {
                 video.src = proxiedUrl;
                 video.addEventListener('canplay', function() {
-                    video.currentTime = mom.start;
+                    video.currentTime = mom.peak || mom.start;
                     video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
                 }, { once: true });
             }
@@ -7008,10 +7018,15 @@ const PlexdApp = (function() {
                     e.preventDefault();
                     {
                         var targetForCrop = fullscreenStream || selected;
-                        if (targetForCrop && targetForCrop.wrapper) {
-                            targetForCrop.wrapper.classList.toggle('plexd-stream-contain');
-                            var isContain = targetForCrop.wrapper.classList.contains('plexd-stream-contain');
-                            showMessage(isContain ? 'Contain (full frame)' : 'Crop (fill)', 'info');
+                        if (targetForCrop && targetForCrop.video) {
+                            var current = getComputedStyle(targetForCrop.video).objectFit;
+                            if (current === 'cover') {
+                                targetForCrop.video.style.objectFit = 'contain';
+                                showMessage('Contain (full frame)', 'info');
+                            } else {
+                                targetForCrop.video.style.objectFit = 'cover';
+                                showMessage('Crop (fill)', 'info');
+                            }
                         }
                     }
                     return;
@@ -7020,14 +7035,12 @@ const PlexdApp = (function() {
                     e.preventDefault();
                     {
                         var allS = PlexdStream.getAllStreams();
-                        var anyContain = allS.some(function(s) { return s.wrapper && s.wrapper.classList.contains('plexd-stream-contain'); });
+                        var anyContain = allS.some(function(s) {
+                            return s.video && getComputedStyle(s.video).objectFit !== 'cover';
+                        });
                         allS.forEach(function(s) {
-                            if (s.wrapper) {
-                                if (anyContain) {
-                                    s.wrapper.classList.remove('plexd-stream-contain');
-                                } else {
-                                    s.wrapper.classList.add('plexd-stream-contain');
-                                }
+                            if (s.video) {
+                                s.video.style.objectFit = anyContain ? 'cover' : 'contain';
                             }
                         });
                         showMessage(anyContain ? 'All: Crop (fill)' : 'All: Contain (full frame)', 'info');
@@ -7061,8 +7074,13 @@ const PlexdApp = (function() {
                 }
                 break;
             case ' ':
-                // Space = play/pause in BOTH modes
                 e.preventDefault();
+                // In Theater Casting/Lineup, Space advances to next scene
+                if (theaterMode && (theaterScene === 'casting' || theaterScene === 'lineup')) {
+                    nextScene();
+                    break;
+                }
+                // Otherwise play/pause
                 if (selected) {
                     if (selected.video.paused) {
                         selected.video.play().catch(function() {});
@@ -7103,13 +7121,10 @@ const PlexdApp = (function() {
                 break;
             case 'n':
             case 'N':
-                {
-                    PlexdStream.muteAll();
-                    if (PlexdStream.getAudioFocusMode()) {
-                        PlexdStream.toggleAudioFocus();
-                    }
-                    updateAudioFocusButton(false);
-                    showMessage('All audio OFF', 'info');
+                // N = enter Encore scene (Theater mode only)
+                if (theaterMode) {
+                    encorePreviousScene = theaterScene;
+                    setTheaterScene('encore');
                 }
                 break;
             case 'i':
@@ -7123,6 +7138,11 @@ const PlexdApp = (function() {
                 break;
             case 'c':
             case 'C':
+                // In Theater mode, C = enter Climax scene (Shift+C still copies all URLs)
+                if (theaterMode && !e.shiftKey) {
+                    setTheaterScene('climax');
+                    break;
+                }
                 // Copy stream URL(s) - Shift+C for all, C for selected/focused
                 if (e.shiftKey) {
                     // Copy all stream URLs
@@ -7473,19 +7493,7 @@ const PlexdApp = (function() {
                     climaxSubMode = (climaxSubMode + 1) % 4;
                     applyClimaxSubMode();
                     showMessage(getSceneName('climax'), 'info');
-                    break;
                 }
-                // e = Seek back 10s, ee = Seek back 60s
-                e.preventDefault();
-                handleDoubleTap('e', function() {
-                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
-                    if (ts) PlexdStream.seekRelative(ts.id, -10);
-                    syncOverlayClones();
-                }, function() {
-                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
-                    if (ts) PlexdStream.seekRelative(ts.id, -60);
-                    syncOverlayClones();
-                });
                 break;
             case 'E':
                 if (theaterMode && theaterScene === 'climax') {
@@ -7510,19 +7518,7 @@ const PlexdApp = (function() {
                     }, function() {
                         reloadAllStreams();
                     });
-                    break;
                 }
-                // r = Seek forward 10s, rr = Seek forward 60s
-                e.preventDefault();
-                handleDoubleTap('r', function() {
-                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
-                    if (ts) PlexdStream.seekRelative(ts.id, 10);
-                    syncOverlayClones();
-                }, function() {
-                    var ts = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
-                    if (ts) PlexdStream.seekRelative(ts.id, 60);
-                    syncOverlayClones();
-                });
                 break;
             case 'x':
             case 'X':
@@ -10111,13 +10107,12 @@ const PlexdApp = (function() {
                     <div class="plexd-shortcuts-section">
                         <h4>Theater Mode</h4>
                         <div class="plexd-shortcut"><kbd>\`</kbd> Toggle Theater / Advanced</div>
-                        <div class="plexd-shortcut"><kbd>Space</kbd> Next scene (Theater) · Play/Pause (Adv)</div>
-                        <div class="plexd-shortcut"><kbd>Shift+Space</kbd> Previous scene (Theater)</div>
-                        <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene (Theater)</div>
-                        <div class="plexd-shortcut"><kbd>K</kbd> Capture Moment · <kbd>J</kbd> Moment Browser</div>
-                        <div class="plexd-shortcut"><kbd>N</kbd> Toggle Encore view</div>
+                        <div class="plexd-shortcut"><kbd>Tab</kbd> Next scene · <kbd>Shift+Tab</kbd> Previous</div>
+                        <div class="plexd-shortcut"><kbd>Space</kbd> Advance (Casting/Lineup) · Play/Pause (other)</div>
+                        <div class="plexd-shortcut"><kbd>C</kbd> Enter Climax · <kbd>N</kbd> Enter Encore</div>
                         <div class="plexd-shortcut"><kbd>E</kbd> Cycle Climax sub-mode · <kbd>Shift+E</kbd> Reverse</div>
-                        <div class="plexd-shortcut"><kbd>Space·Space</kbd> Random seek</div>
+                        <div class="plexd-shortcut"><kbd>Esc</kbd> Regress scene</div>
+                        <div class="plexd-shortcut"><kbd>K</kbd> Capture Moment · <kbd>J</kbd> Moment Browser</div>
                         <div class="plexd-shortcut"><kbd>←</kbd><kbd>→</kbd> Rotate hero (Stage)</div>
                     </div>
                     <div class="plexd-shortcuts-section">
@@ -10161,7 +10156,8 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>V</kbd> / <kbd>Shift+V</kbd> Cycle views</div>
                         <div class="plexd-shortcut"><kbd>I</kbd> Stream info</div>
                         <div class="plexd-shortcut"><kbd>S</kbd> Streams panel</div>
-                        <div class="plexd-shortcut"><kbd>C</kbd> Copy URL</div>
+                        <div class="plexd-shortcut"><kbd>C</kbd> Copy URL (Adv) · Climax (Theater)</div>
+                        <div class="plexd-shortcut"><kbd>Opt+↑</kbd> Crop toggle · <kbd>Opt+↓</kbd> Crop all</div>
                         <div class="plexd-shortcut"><kbd>?</kbd> Toggle hints</div>
                     </div>
                 </div>

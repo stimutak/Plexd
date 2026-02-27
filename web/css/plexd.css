@@ -793,6 +793,11 @@ body {
     z-index: 99999 !important;
 }
 
+/* Browser-fill focused mode: default to contain (no crop) */
+.plexd-stream.plexd-fullscreen .plexd-video {
+    object-fit: contain;
+}
+
 /* Ensure video fills the fullscreen stream wrapper */
 .plexd-app:fullscreen .plexd-stream.plexd-fullscreen video,
 .plexd-app:-webkit-full-screen .plexd-stream.plexd-fullscreen video {

@@ -1800,6 +1800,11 @@ const PlexdStream = (function() {
         // Apply CSS fullscreen to this stream
         console.log(`[Plexd] enterFocusedMode: adding plexd-fullscreen to ${streamId}`);
         stream.wrapper.classList.add('plexd-fullscreen');
+        // Clear inline object-fit set by grid layout — CSS rule handles focused mode default
+        stream.video.style.objectFit = '';
+        stream.video.style.objectPosition = '';
+        stream.video.style.transform = '';
+        stream.video.style.transformOrigin = '';
         console.log(`[Plexd] enterFocusedMode: ${streamId} now has plexd-fullscreen: ${stream.wrapper.classList.contains('plexd-fullscreen')}`);
         fullscreenStreamId = streamId;
         setAppFocusedMode(true);

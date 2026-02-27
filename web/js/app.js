@@ -3069,9 +3069,12 @@ const PlexdApp = (function() {
                         delete _extractionPollers[momentId];
                         PlexdMoments.updateMoment(momentId, {
                             extracted: true,
-                            extractedPath: data.extractedUrl
+                            extractedPath: data.extractedUrl,
+                            thumbnailDataUrl: null // clear client-side thumb — server generates from clip
                         });
                         console.log('[Moments] Extraction complete:', momentId);
+                        // Refresh browser so poster images load server-generated thumbnails
+                        if (momentBrowserState.open) renderCurrentBrowserMode();
                     } else if (data.status === 'failed') {
                         clearInterval(_extractionPollers[momentId]);
                         delete _extractionPollers[momentId];

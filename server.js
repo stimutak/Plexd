@@ -724,6 +724,18 @@ function runExtract(jobId, useSoftwareEncoder = false) {
             job.progress = 100;
             job.completedAt = Date.now();
             delete job.process;
+            // Auto-generate thumbnail from clip (avoids cold ffmpeg spawn on first request)
+            const thumbPath = path.join(MOMENTS_THUMBS, `${job.momentId}.jpg`);
+            if (!fs.existsSync(thumbPath)) {
+                const thumbFfmpeg = spawn('ffmpeg', [
+                    '-i', job.outputPath, '-vframes', '1', '-ss', '0.5',
+                    '-vf', 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2',
+                    '-q:v', '4', '-y', thumbPath
+                ]);
+                thumbFfmpeg.on('close', (tc) => {
+                    if (tc === 0) console.log(`[Server] Thumbnail generated: ${job.momentId}`);
+                });
+            }
         } else if (!useSoftwareEncoder && (
             stderrOutput.includes('videotoolbox') ||
             stderrOutput.includes('Encoder not found') ||

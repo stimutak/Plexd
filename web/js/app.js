@@ -417,7 +417,7 @@ const PlexdApp = (function() {
                     console.log(`[Plexd] Transcoding ${fileName}: ${status.progress}%`);
                 }
             } catch (err) {
-                // Silently retry
+                console.warn('[Plexd] Transcode poll error for', fileId, ':', err.message);
             }
         }, TRANSCODE_POLL_INTERVAL_MS);
 
@@ -483,6 +483,7 @@ const PlexdApp = (function() {
 
             if (!response.ok) {
                 console.error('[Plexd] File upload failed:', response.status);
+                showMessage('Upload failed (server error ' + response.status + ')', 'error');
                 return null;
             }
 
@@ -502,6 +503,7 @@ const PlexdApp = (function() {
             };
         } catch (err) {
             console.error('[Plexd] File upload error:', err);
+            showMessage('Upload failed: ' + (err.message || 'network error'), 'error');
             return null;
         }
     }
@@ -550,6 +552,10 @@ const PlexdApp = (function() {
     async function getServerFileList() {
         try {
             const response = await fetch('/api/files/list');
+            if (!response.ok) {
+                console.error('[Plexd] File list request failed:', response.status);
+                return [];
+            }
             return await response.json();
         } catch (err) {
             console.error('[Plexd] Failed to get file list:', err);
@@ -770,7 +776,9 @@ const PlexdApp = (function() {
                                 var stream = resolveMomentStream(mom);
                                 if (stream) queueMomentExtraction(mom, stream);
                             }
-                        }).catch(function() {});
+                        }).catch(function(err) {
+                            console.warn('[Moments] Startup extraction check failed for', mom.id, ':', err.message);
+                        });
                 }
             });
         }, 3000);
@@ -2942,7 +2950,9 @@ const PlexdApp = (function() {
                         console.warn('[Moments] Extraction failed:', momentId, data.error);
                     }
                 })
-                .catch(function() { /* keep polling */ });
+                .catch(function(err) {
+                    console.warn('[Moments] Extraction poll error for', momentId, ':', err.message);
+                });
         }, POLL_INTERVAL);
     }
 
@@ -5022,14 +5032,14 @@ const PlexdApp = (function() {
                 popupHls.attachMedia(video);
                 popupHls.on(Hls.Events.MANIFEST_PARSED, function() {
                     video.currentTime = mom.start;
-                    video.play().catch(function() {});
+                    video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
                 });
                 popupMirror._hlsInstance = popupHls;
             } else {
                 video.src = proxiedUrl;
                 video.addEventListener('canplay', function() {
                     video.currentTime = mom.start;
-                    video.play().catch(function() {});
+                    video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
                 }, { once: true });
             }
             setupCrescendo(video, mom);
@@ -8222,7 +8232,9 @@ const PlexdApp = (function() {
                         refreshPopupContent();
                     }
                 })
-                .catch(function() {});
+                .catch(function(err) {
+                    console.warn('[Plexd] Batch progress poll error:', err.message);
+                });
         }, 2000);
     }
 
@@ -9713,7 +9725,7 @@ const PlexdApp = (function() {
             if (savedRatings) {
                 Object.keys(JSON.parse(savedRatings)).forEach(fn => knownFileNames.add(fn.toLowerCase()));
             }
-        } catch (e) {}
+        } catch (e) { console.warn('[Plexd] Failed to parse ratings:', e.message); }
 
         // Helper functions for file status
         const isFileLoaded = (fileId) => fileId && loadedFileIds.has(fileId.toLowerCase());
@@ -10144,26 +10156,38 @@ const PlexdApp = (function() {
                     document.getElementById('active-count').textContent = s.activeCount;
                     document.getElementById('transcode-pause').textContent = s.paused ? 'Resume' : 'Pause';
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn('[Plexd] Queue status fetch failed:', e.message); }
         };
 
         document.getElementById('transcode-start').addEventListener('click', async () => {
-            await fetch('/api/hls/start', { method: 'POST' });
-            await updateQueueStatus();
-            showMessage('Transcoding started', 'info');
+            try {
+                await fetch('/api/hls/start', { method: 'POST' });
+                await updateQueueStatus();
+                showMessage('Transcoding started', 'info');
+            } catch (err) {
+                showMessage('Failed to start transcoding: ' + err.message, 'error');
+            }
         });
 
         document.getElementById('transcode-pause').addEventListener('click', async () => {
-            const isPaused = document.getElementById('transcode-status').textContent === 'Paused';
-            await fetch(isPaused ? '/api/hls/resume' : '/api/hls/pause', { method: 'POST' });
-            await updateQueueStatus();
+            try {
+                const isPaused = document.getElementById('transcode-status').textContent === 'Paused';
+                await fetch(isPaused ? '/api/hls/resume' : '/api/hls/pause', { method: 'POST' });
+                await updateQueueStatus();
+            } catch (err) {
+                showMessage('Transcode toggle failed: ' + err.message, 'error');
+            }
         });
 
         document.getElementById('transcode-stop').addEventListener('click', async () => {
             if (confirm('Stop all transcodes? This will cancel queued and active jobs.')) {
-                await fetch('/api/hls/cancel-all', { method: 'POST' });
-                await updateQueueStatus();
-                showMessage('Transcodes stopped', 'info');
+                try {
+                    await fetch('/api/hls/cancel-all', { method: 'POST' });
+                    await updateQueueStatus();
+                    showMessage('Transcodes stopped', 'info');
+                } catch (err) {
+                    showMessage('Failed to stop transcodes: ' + err.message, 'error');
+                }
             }
         });
 
@@ -10850,8 +10874,8 @@ const PlexdApp = (function() {
                     streamHistory.push(...items);
                 }
             }
-        } catch {
-            // Corrupted localStorage — start fresh
+        } catch (e) {
+            console.warn('[Plexd] History corrupted, starting fresh:', e.message);
         }
     }
 
@@ -11362,7 +11386,7 @@ const PlexdApp = (function() {
                         showMessage(`Download started: ${fileName}`, 'success');
                         return;
                     }
-                } catch (e) { /* fall through */ }
+                } catch (e) { console.warn('[Plexd] HEAD check failed for', fileId, ':', e.message); /* fall through */ }
                 // Original deleted - remux the HLS via background download
                 const hlsUrl = url.includes('.m3u8') ? url : (stream.serverUrl || url);
                 if (hlsUrl.includes('.m3u8')) {
@@ -11409,7 +11433,7 @@ const PlexdApp = (function() {
                         showMessage(`Downloaded: ${fileName}`, 'success');
                         return;
                     }
-                } catch (e) { /* fall through */ }
+                } catch (e) { console.warn('[Plexd] Proxy download failed:', e.message); /* fall through */ }
                 // Final fallback: open in new tab
                 const a = document.createElement('a');
                 a.href = url;

@@ -207,7 +207,8 @@ const PlexdRemote = (function() {
                 }
             }
         } catch (e) {
-            // Silently fail - will try localStorage
+            // Server unreachable — fall back to localStorage
+            console.warn('[Remote] Server poll failed:', e.message);
         }
 
         const stored = localStorage.getItem(STATE_KEY);
@@ -217,7 +218,7 @@ const PlexdRemote = (function() {
                 if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
                     handleStateUpdate(newState);
                 }
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn('[Remote] localStorage parse error:', e.message); }
         }
     }
 
@@ -236,7 +237,7 @@ const PlexdRemote = (function() {
         }).catch(() => {
             try {
                 localStorage.setItem(COMMAND_KEY, JSON.stringify(command));
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn('[Remote] localStorage fallback failed:', e.message); }
         });
     }
 

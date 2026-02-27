@@ -1141,7 +1141,7 @@ const PlexdStream = (function() {
             if (video.paused) {
                 try {
                     await video.play();
-                } catch (e) {}
+                } catch (e) { /* autoplay policy — expected */ }
             }
             return !video.paused;
         }
@@ -1229,7 +1229,7 @@ const PlexdStream = (function() {
                 stream.hls.recoverMediaError();
                 await new Promise(r => setTimeout(r, 500));
                 if (!video.paused) return true;
-            } catch (e) {}
+            } catch (e) { console.warn('[Stream] HLS recovery attempt failed:', e.message); }
         }
 
         return false;
@@ -2272,7 +2272,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDsS=`+\-\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDsS=`÷+\-\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -2298,19 +2298,10 @@ const PlexdStream = (function() {
             }
 
             switch (e.key) {
-                case ' ':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (video.paused) {
-                        video.play().catch(() => {});
-                    } else {
-                        video.pause();
-                    }
-                    break;
+                // Space and Enter are propagated to document via propagateKeys above
                 case 'z':
                 case 'Z':
-                case 'Enter':
-                    // Z or Enter in focused mode: toggle back to grid
+                    // Z in focused mode: toggle back to grid
                     e.preventDefault();
                     e.stopPropagation(); // Prevent app.js from re-entering focused mode
                     exitFocusedMode();

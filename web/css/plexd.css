@@ -2657,7 +2657,7 @@ body {
 .plexd-app.wall-spotlight .plexd-stream {
     overflow: hidden;
     border-radius: 4px;
-    transition: all 0.3s ease;
+    transition: opacity 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .plexd-spotlight-hero {

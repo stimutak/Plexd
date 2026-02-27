@@ -38,7 +38,7 @@ const PlexdMoments = (function() {
         dirty = true;
         if (moment && moment.id) _markDirty(moment.id);
         for (var i = 0; i < listeners.length; i++) {
-            try { listeners[i](type, moment); } catch (e) { console.error('Moment listener error:', e); }
+            try { listeners[i](type, moment); } catch (e) { console.error('[Moments] Listener[' + i + '] error on ' + type + ':', e); }
         }
     }
 
@@ -522,7 +522,7 @@ const PlexdMoments = (function() {
     function clearAll() {
         moments = [];
         if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-        try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+        try { localStorage.removeItem(STORAGE_KEY); } catch (e) { console.error('[Moments] Failed to clear localStorage:', e.message); }
         _notifyUpdate('purge', null);
     }
 

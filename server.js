@@ -89,11 +89,29 @@ if (!fs.existsSync(MOMENTS_THUMBS)) {
 
 // Load moments database from JSON
 let momentsDb = [];
-try { momentsDb = JSON.parse(fs.readFileSync(MOMENTS_JSON, 'utf-8')); } catch (e) { momentsDb = []; }
+try {
+    momentsDb = JSON.parse(fs.readFileSync(MOMENTS_JSON, 'utf-8'));
+    console.log(`[Server] Loaded ${momentsDb.length} moments from disk`);
+} catch (e) {
+    if (e.code === 'ENOENT') {
+        console.log('[Server] No moments file found, starting fresh');
+    } else {
+        console.error('[Server] Failed to load moments database:', e.message);
+        try { fs.copyFileSync(MOMENTS_JSON, MOMENTS_JSON + '.corrupted.' + Date.now()); } catch (_) {}
+    }
+    momentsDb = [];
+}
 let batchProgress = { total: 0, done: 0, current: '', errors: 0, running: false };
 
 function saveMomentsDb() {
-    fs.writeFileSync(MOMENTS_JSON, JSON.stringify(momentsDb, null, 2));
+    try {
+        const data = JSON.stringify(momentsDb, null, 2);
+        const tmpPath = MOMENTS_JSON + '.tmp';
+        fs.writeFileSync(tmpPath, data);
+        fs.renameSync(tmpPath, MOMENTS_JSON);
+    } catch (e) {
+        console.error('[Server] Failed to save moments database:', e.message);
+    }
 }
 
 // Validate momentId (no path separators or traversal)
@@ -121,7 +139,7 @@ function restoreThumbnail(m) {
             try {
                 const data = fs.readFileSync(thumbPath);
                 m.thumbnailDataUrl = 'data:image/jpeg;base64,' + data.toString('base64');
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn('[Moments] Failed to restore thumbnail for', m.id, ':', e.message); }
         }
     }
     return m;
@@ -332,8 +350,8 @@ function getFreeDiskSpaceMB() {
         const output = execSync(`df -m "${UPLOADS_DIR}" | tail -1 | awk '{print $4}'`, { encoding: 'utf8' });
         return parseInt(output.trim(), 10) || 0;
     } catch (e) {
-        // If we can't check, assume there's space
-        return Infinity;
+        console.warn('[Server] Could not check disk space:', e.message);
+        return 0;
     }
 }
 
@@ -921,7 +939,14 @@ try {
 }
 
 function saveMetadata() {
-    fs.writeFileSync(UPLOADS_META, JSON.stringify(fileMetadata, null, 2));
+    try {
+        const data = JSON.stringify(fileMetadata, null, 2);
+        const tmpPath = UPLOADS_META + '.tmp';
+        fs.writeFileSync(tmpPath, data);
+        fs.renameSync(tmpPath, UPLOADS_META);
+    } catch (e) {
+        console.error('[Server] Failed to save file metadata:', e.message);
+    }
 }
 
 // Sync HLS state on startup - detect completed transcodes that weren't marked in metadata
@@ -952,7 +977,7 @@ function deleteFileAndHLS(fileId, { deleteOriginal = true, deleteHLS = true, can
 
     // Cancel any active transcoding
     if (cancelTranscode && transcodingJobs[fileId]?.process) {
-        transcodingJobs[fileId].process.kill();
+        try { transcodingJobs[fileId].process.kill(); } catch (_) { /* process already exited */ }
         activeTranscodes.delete(fileId);
         delete transcodingJobs[fileId];
     }
@@ -962,7 +987,7 @@ function deleteFileAndHLS(fileId, { deleteOriginal = true, deleteHLS = true, can
         const filePath = path.join(UPLOADS_DIR, fileId);
         try {
             if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch (e) { /* ignore */ }
+        } catch (e) { console.warn('[Server] Failed to delete file', fileId, ':', e.message); }
     }
 
     // Delete HLS directory
@@ -970,7 +995,7 @@ function deleteFileAndHLS(fileId, { deleteOriginal = true, deleteHLS = true, can
         const hlsDir = path.join(HLS_DIR, fileId);
         try {
             if (fs.existsSync(hlsDir)) fs.rmSync(hlsDir, { recursive: true });
-        } catch (e) { /* ignore */ }
+        } catch (e) { console.warn('[Server] Failed to delete HLS dir', fileId, ':', e.message); }
     }
 
     return true;
@@ -1336,9 +1361,9 @@ const server = http.createServer(async (req, res) => {
                         let dirSize = 0;
                         for (const f of contents) {
                             const fp = path.join(hlsSubDir, f);
-                            try { dirSize += fs.statSync(fp).size; fs.unlinkSync(fp); } catch(e) {}
+                            try { dirSize += fs.statSync(fp).size; fs.unlinkSync(fp); } catch(e) { console.warn('[Reconcile] Failed to clean', fp, ':', e.message); }
                         }
-                        try { fs.rmdirSync(hlsSubDir); } catch(e) {}
+                        try { fs.rmdirSync(hlsSubDir); } catch(e) { console.warn('[Reconcile] Failed to remove dir:', e.message); }
                         freedBytes += dirSize;
                         cleaned++;
                         console.log(`[Reconcile] Removed partial transcode: ${fileId} (${(dirSize/1024/1024).toFixed(1)}MB)`);
@@ -2534,6 +2559,11 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip.mp4') && req.method === 'GET') {
         const momentId = pathname.slice('/api/moments/'.length, -'/clip.mp4'.length);
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            return;
+        }
         const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
 
         // Directory traversal guard
@@ -2615,6 +2645,11 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname.startsWith('/api/moments/') && pathname.endsWith('/clip') && req.method === 'DELETE') {
         const momentId = pathname.slice('/api/moments/'.length, -'/clip'.length);
+        if (!isValidMomentId(momentId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid moment ID' }));
+            return;
+        }
 
         // Directory traversal guard
         const clipCheck = path.join(MOMENTS_DIR, `${momentId}.mp4`);
@@ -2726,6 +2761,12 @@ const server = http.createServer(async (req, res) => {
         if (!skierAvailable) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Skier not available (http://localhost:8000)' }));
+            return;
+        }
+
+        if (batchProgress.running) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Batch already in progress', progress: batchProgress }));
             return;
         }
 

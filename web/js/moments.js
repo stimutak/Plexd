@@ -18,6 +18,28 @@ const PlexdMoments = (function() {
     // Change listeners
     const listeners = [];
 
+    /**
+     * Shallow-copy a moment object, excluding specified keys
+     */
+    function _copyExcluding(m, exclude) {
+        var copy = {};
+        var keys = Object.keys(m);
+        for (var i = 0; i < keys.length; i++) {
+            if (exclude.indexOf(keys[i]) === -1) copy[keys[i]] = m[keys[i]];
+        }
+        return copy;
+    }
+
+    /**
+     * Find the index of a moment by ID, or -1 if not found
+     */
+    function _findIndex(id) {
+        for (var i = 0; i < moments.length; i++) {
+            if (moments[i].id === id) return i;
+        }
+        return -1;
+    }
+
     // Dirty flag for sync
     let dirty = false;
 
@@ -86,10 +108,8 @@ const PlexdMoments = (function() {
      * Get a single moment by ID
      */
     function getMoment(id) {
-        for (var i = 0; i < moments.length; i++) {
-            if (moments[i].id === id) return moments[i];
-        }
-        return null;
+        var idx = _findIndex(id);
+        return idx >= 0 ? moments[idx] : null;
     }
 
     /**
@@ -144,15 +164,12 @@ const PlexdMoments = (function() {
      * Delete a moment
      */
     function deleteMoment(id) {
-        for (var i = 0; i < moments.length; i++) {
-            if (moments[i].id === id) {
-                var removed = moments.splice(i, 1)[0];
-                _notifyUpdate('delete', removed);
-                save();
-                return removed;
-            }
-        }
-        return null;
+        var idx = _findIndex(id);
+        if (idx === -1) return null;
+        var removed = moments.splice(idx, 1)[0];
+        _notifyUpdate('delete', removed);
+        save();
+        return removed;
     }
 
     /**
@@ -313,14 +330,7 @@ const PlexdMoments = (function() {
     function _saveNow() {
         try {
             var toSave = moments.map(function(m) {
-                var copy = {};
-                var keys = Object.keys(m);
-                for (var i = 0; i < keys.length; i++) {
-                    if (keys[i] !== 'aiEmbedding' && keys[i] !== 'thumbnailDataUrl') {
-                        copy[keys[i]] = m[keys[i]];
-                    }
-                }
-                return copy;
+                return _copyExcluding(m, ['aiEmbedding', 'thumbnailDataUrl']);
             });
             localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
         } catch (e) {
@@ -366,19 +376,12 @@ const PlexdMoments = (function() {
         var ids = Object.keys(_dirtyIds);
         if (ids.length === 0) return Promise.resolve();
 
-        // Collect dirty moments (strip thumbnailDataUrl — too large for bulk sync)
+        // Collect dirty moments (strip aiEmbedding — too large for bulk sync)
         var toSync = [];
         for (var i = 0; i < ids.length; i++) {
             var m = getMoment(ids[i]);
             if (m) {
-                var copy = {};
-                var keys = Object.keys(m);
-                for (var k = 0; k < keys.length; k++) {
-                    if (keys[k] !== 'aiEmbedding') {
-                        copy[keys[k]] = m[keys[k]];
-                    }
-                }
-                toSync.push(copy);
+                toSync.push(_copyExcluding(m, ['aiEmbedding']));
             }
         }
 

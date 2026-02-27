@@ -660,6 +660,35 @@ const PlexdApp = (function() {
 
     // Theater Space double-tap uses shared handleDoubleTap('space', ...)
 
+    // ========================================
+    // State setters (sync variable + window debug mirror in one call)
+    // ========================================
+    function setTetrisMode(val) { tetrisMode = val; window._plexdTetrisMode = val; }
+    function setWallMode(val) { wallMode = val; window._plexdWallMode = val; }
+    function _setTheaterScene(val) { theaterScene = val; window._plexdTheaterScene = val; }
+
+    // ========================================
+    // Shared Utility Helpers
+    // ========================================
+
+    /** Format seconds as M:SS (e.g. 125 → "2:05") */
+    function fmtTime(s) {
+        return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+    }
+
+    /** Return the thumbnail URL for a moment (data URL or server endpoint) */
+    function momentThumbUrl(mom) {
+        return mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+    }
+
+    /** Append a "No moments match filters" placeholder to a container */
+    function showEmptyBrowserState(container) {
+        var el = document.createElement('div');
+        el.className = 'moment-browser-empty';
+        el.textContent = 'No moments match filters';
+        container.appendChild(el);
+    }
+
     /**
      * Initialize the application
      */
@@ -1082,10 +1111,6 @@ const PlexdApp = (function() {
         if (fileObj) {
             stream.fileObj = fileObj;
         }
-
-        // Apply any persisted rating/favorite for this fileName immediately (blob URLs are ephemeral).
-        PlexdStream.syncRatingStatus();
-        PlexdStream.syncFavoriteStatus();
 
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
@@ -1968,7 +1993,7 @@ const PlexdApp = (function() {
      * Modes 1-3: Use object-fit: cover to crop videos and fill space (eliminates black bars)
      * Mode 4: Shows ALL video content without cropping, allows smart overlap of black bars
      */
-    function cycleTetrisMode() {
+    function toggleTetrisMode() {
         // Turn off coverflow if it's on
         if (coverflowMode) {
             coverflowMode = false;
@@ -1979,8 +2004,7 @@ const PlexdApp = (function() {
 
         // Turn off wall layout modes (strips/spotlight) but keep crop tiles (it stacks)
         if (wallMode === 1 || wallMode === 3) {
-            wallMode = 0;
-            window._plexdWallMode = 0;
+            setWallMode(0);
             const wallBtn = document.getElementById('wall-btn');
             if (wallBtn) wallBtn.classList.remove('active');
             const app2 = document.querySelector('.plexd-app');
@@ -1988,8 +2012,7 @@ const PlexdApp = (function() {
         }
 
         // Cycle through modes: 0 -> 1 -> 2 -> 3 -> 4 -> 0
-        tetrisMode = (tetrisMode + 1) % 5;
-        window._plexdTetrisMode = tetrisMode;
+        setTetrisMode((tetrisMode + 1) % 5);
 
         const tetrisBtn = document.getElementById('tetris-btn');
         const app = document.querySelector('.plexd-app');
@@ -2014,29 +2037,20 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Legacy toggle function for compatibility - cycles to next mode or off
-     */
-    function toggleTetrisMode() {
-        cycleTetrisMode();
-    }
-
-    /**
      * Toggle Coverflow mode - Z-depth overlapping with hover-to-front effects
      * Videos can overlap into each other's letterbox zones with visual layering
      */
     function toggleCoverflowMode() {
         // Turn off tetris if it's on
         if (tetrisMode) {
-            tetrisMode = false;
-            window._plexdTetrisMode = false;
+            setTetrisMode(false);
             const tetrisBtn = document.getElementById('tetris-btn');
             if (tetrisBtn) tetrisBtn.classList.remove('active');
         }
 
         // Turn off wall layout modes (strips/spotlight) but keep crop tiles (it stacks)
         if (wallMode === 1 || wallMode === 3) {
-            wallMode = 0;
-            window._plexdWallMode = 0;
+            setWallMode(0);
             const wallBtn = document.getElementById('wall-btn');
             if (wallBtn) wallBtn.classList.remove('active');
             const app2 = document.querySelector('.plexd-app');
@@ -2072,13 +2086,6 @@ const PlexdApp = (function() {
     }
 
     /**
-     * Legacy alias for backward compatibility - maps to Coverflow
-     */
-    function toggleSmartLayoutMode() {
-        toggleCoverflowMode();
-    }
-
-    /**
      * Wall mode names for display
      */
     const wallModeNames = ['OFF', 'Strips', 'Crop Tiles', 'Spotlight'];
@@ -2092,11 +2099,10 @@ const PlexdApp = (function() {
      */
     function cycleWallMode(backward = false) {
         if (backward) {
-            wallMode = (wallMode - 1 + 4) % 4;
+            setWallMode((wallMode - 1 + 4) % 4);
         } else {
-            wallMode = (wallMode + 1) % 4;
+            setWallMode((wallMode + 1) % 4);
         }
-        window._plexdWallMode = wallMode;
 
         const app = document.querySelector('.plexd-app');
         const wallBtn = document.getElementById('wall-btn');
@@ -2109,8 +2115,7 @@ const PlexdApp = (function() {
         // Strips and Spotlight are full layouts — turn off other layout modes
         if (wallMode === 1 || wallMode === 3) {
             if (tetrisMode) {
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
+                setTetrisMode(0);
                 const tetrisBtn = document.getElementById('tetris-btn');
                 if (tetrisBtn) tetrisBtn.classList.remove('active');
                 if (app) {
@@ -2421,8 +2426,7 @@ const PlexdApp = (function() {
             showMessage(getSceneName(scene), 'info');
             castingFadeTimer = setTimeout(function() {
                 castingFadeTimer = null;
-                theaterScene = scene;
-                window._plexdTheaterScene = theaterScene;
+                _setTheaterScene(scene);
                 applyTheaterScene();
                 updateModeIndicator();
                 allStreams.forEach(function(s) {
@@ -2432,8 +2436,7 @@ const PlexdApp = (function() {
             return; // Don't apply scene immediately — wait for animation
         }
 
-        theaterScene = scene;
-        window._plexdTheaterScene = theaterScene;
+        _setTheaterScene(scene);
         applyTheaterScene();
         // If scene bounced (e.g., empty Encore), don't overwrite the message
         if (theaterScene !== scene) return;
@@ -2470,8 +2473,7 @@ const PlexdApp = (function() {
         if (app) app.classList.toggle('theater-mode', theaterMode);
 
         if (theaterMode) {
-            theaterScene = detectCurrentScene();
-            window._plexdTheaterScene = theaterScene;
+            _setTheaterScene(detectCurrentScene());
             applyTheaterScene();
         } else {
             // Cleanup when leaving Theater mode
@@ -2523,10 +2525,8 @@ const PlexdApp = (function() {
         switch (theaterScene) {
             case 'casting':
                 setViewMode('all');
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 2; // Crop tiles
-                window._plexdWallMode = 2;
+                setTetrisMode(0);
+                setWallMode(2); // Crop tiles
                 if (!faceDetectionActive) startFaceDetection();
                 updateCastingCallVisuals();
                 break;
@@ -2537,10 +2537,8 @@ const PlexdApp = (function() {
                     const favCount = PlexdStream.getFavoriteCount();
                     setViewMode(favCount > 0 ? 'favorites' : 'all');
                 }
-                wallMode = 0;
-                window._plexdWallMode = 0;
-                tetrisMode = 3; // Treemap
-                window._plexdTetrisMode = 3;
+                setWallMode(0);
+                setTetrisMode(3); // Treemap
                 // Rating-weighted layout: higher-rated streams get more area
                 {
                     const lineupStreams = PlexdStream.getVisibleStreams();
@@ -2557,10 +2555,8 @@ const PlexdApp = (function() {
                 break;
 
             case 'stage':
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 3; // Spotlight
-                window._plexdWallMode = 3;
+                setTetrisMode(0);
+                setWallMode(3); // Spotlight
                 if (!stageHeroId || !PlexdStream.getStream(stageHeroId)) {
                     const streams = getFilteredStreams();
                     stageHeroId = streams.length > 0 ? streams[0].id : null;
@@ -2587,29 +2583,21 @@ const PlexdApp = (function() {
         stopAutoRotate();
         switch (climaxSubMode) {
             case 0: // Tight Wall
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 2;
-                window._plexdWallMode = 2;
+                setTetrisMode(0);
+                setWallMode(2);
                 break;
             case 1: // Auto-Rotate Hero
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 3;
-                window._plexdWallMode = 3;
+                setTetrisMode(0);
+                setWallMode(3);
                 startAutoRotate();
                 break;
             case 2: // Collage — handled in updateLayout
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 0;
-                window._plexdWallMode = 0;
+                setTetrisMode(0);
+                setWallMode(0);
                 break;
             case 3: // Single Focus
-                tetrisMode = 0;
-                window._plexdTetrisMode = 0;
-                wallMode = 0;
-                window._plexdWallMode = 0;
+                setTetrisMode(0);
+                setWallMode(0);
                 updateWallModeClasses();
                 updateTetrisModeClasses();
                 updateModeIndicator();
@@ -3006,8 +2994,7 @@ const PlexdApp = (function() {
         if (allMoments.length === 0) {
             showMessage('No moments yet — press K to capture moments', 'info');
             if (theaterMode) {
-                theaterScene = encorePreviousScene || 'casting';
-                window._plexdTheaterScene = theaterScene;
+                _setTheaterScene(encorePreviousScene || 'casting');
                 applyTheaterScene();
                 updateModeIndicator();
             }
@@ -3346,10 +3333,7 @@ const PlexdApp = (function() {
     function renderMomentGrid(container) {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments match filters';
-            container.appendChild(empty);
+            showEmptyBrowserState(container);
             return;
         }
 
@@ -3381,7 +3365,7 @@ const PlexdApp = (function() {
 
             // Server-side thumbnails — no client-side video elements needed
             var img = document.createElement('img');
-            img.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            img.src = momentThumbUrl(mom);
             img.draggable = false;
             img.loading = 'lazy';
             img.className = 'moment-card-poster';
@@ -3389,7 +3373,7 @@ const PlexdApp = (function() {
                 // No thumbnail available — show timestamp placeholder
                 var ph = document.createElement('div');
                 ph.className = 'moment-card-placeholder';
-                var ts = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
+                var ts = fmtTime(mom.peak);
                 ph.textContent = ts;
                 img.replaceWith(ph);
             });
@@ -3563,10 +3547,8 @@ const PlexdApp = (function() {
         // Update time readout if present
         var timeEl = cell.querySelector('.wall-edit-time');
         if (timeEl) {
-            var inM = Math.floor(mom.start / 60);
-            var inS = Math.floor(mom.start % 60);
             var dur = (mom.end - mom.start).toFixed(1);
-            timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+            timeEl.textContent = fmtTime(mom.start) + ' \u2014 ' + dur + 's';
         }
     }
 
@@ -3599,12 +3581,6 @@ const PlexdApp = (function() {
                     if (refs[i].mom.id === mom.id) return refs[i].sourceVid;
                 }
                 return null;
-            }
-
-            function fmtTime(s) {
-                var m = Math.floor(s / 60);
-                var sec = Math.floor(s % 60);
-                return m + ':' + String(sec).padStart(2, '0');
             }
 
             function showDragTooltip(clientX, clientY) {
@@ -3840,10 +3816,7 @@ const PlexdApp = (function() {
     function renderMomentWall(container) {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments match filters';
-            container.appendChild(empty);
+            showEmptyBrowserState(container);
             return;
         }
 
@@ -3872,7 +3845,7 @@ const PlexdApp = (function() {
 
             // Poster image — replaced with canvas on lazy init
             var poster = document.createElement('img');
-            poster.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            poster.src = momentThumbUrl(mom);
             poster.loading = 'lazy';
             poster.draggable = false;
             poster.className = 'wall-cell-poster';
@@ -3882,7 +3855,7 @@ const PlexdApp = (function() {
                 ph.className = 'moment-card-placeholder';
                 ph.style.width = '100%';
                 ph.style.aspectRatio = '16/9';
-                var ts = Math.floor(mom.peak / 60) + ':' + String(Math.floor(mom.peak % 60)).padStart(2, '0');
+                var ts = fmtTime(mom.peak);
                 ph.textContent = ts;
                 poster.replaceWith(ph);
             });
@@ -4050,7 +4023,7 @@ const PlexdApp = (function() {
                 // Draw thumbnail on canvas as static fallback
                 var thumbImg = new Image();
                 thumbImg.onload = function() { ctx.drawImage(thumbImg, 0, 0, 320, 180); };
-                thumbImg.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+                thumbImg.src = momentThumbUrl(mom);
             }
         }
 
@@ -4230,10 +4203,8 @@ const PlexdApp = (function() {
                 // Add time readout
                 var timeEl = document.createElement('div');
                 timeEl.className = 'wall-edit-time';
-                var inM = Math.floor(mom.start / 60);
-                var inS = Math.floor(mom.start % 60);
                 var dur = (mom.end - mom.start).toFixed(1);
-                timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+                timeEl.textContent = fmtTime(mom.start) + ' \u2014 ' + dur + 's';
                 selected.appendChild(timeEl);
             }
             // Defer pan — zoom change needs layout recompute before offsetTop is valid
@@ -4281,10 +4252,8 @@ const PlexdApp = (function() {
                 // Time readout
                 var timeEl = document.createElement('div');
                 timeEl.className = 'wall-edit-time';
-                var inM = Math.floor(mom.start / 60);
-                var inS = Math.floor(mom.start % 60);
                 var dur = (mom.end - mom.start).toFixed(1);
-                timeEl.textContent = inM + ':' + String(inS).padStart(2, '0') + ' \u2014 ' + dur + 's';
+                timeEl.textContent = fmtTime(mom.start) + ' \u2014 ' + dur + 's';
                 selected.appendChild(timeEl);
                 // Tag input
                 var tagBar = document.createElement('div');
@@ -4343,10 +4312,7 @@ const PlexdApp = (function() {
     function renderMomentPlayer(container) {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments match filters';
-            container.appendChild(empty);
+            showEmptyBrowserState(container);
             return;
         }
         if (momentBrowserState.selectedIndex >= moments.length) {
@@ -4395,7 +4361,7 @@ const PlexdApp = (function() {
             thumb.dataset.index = idx;
             thumb.draggable = true;
             var img = document.createElement('img');
-            img.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+            img.src = momentThumbUrl(mom);
             img.draggable = false;
             thumb.appendChild(img);
             // Click: move cursor AND play
@@ -4644,10 +4610,7 @@ const PlexdApp = (function() {
     function renderMomentCollage(container) {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'moment-browser-empty';
-            empty.textContent = 'No moments match filters';
-            container.appendChild(empty);
+            showEmptyBrowserState(container);
             return;
         }
 
@@ -4730,7 +4693,7 @@ const PlexdApp = (function() {
                 (function(c, cx) {
                     thumbImg.onload = function() { cx.drawImage(c, 0, 0, 320, 180); };
                 })(thumbImg, ctx);
-                thumbImg.src = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+                thumbImg.src = momentThumbUrl(mom);
             }
 
             var info = document.createElement('div');
@@ -4813,21 +4776,10 @@ const PlexdApp = (function() {
 
     function playMomentInContext(moment) {
         closeMomentBrowser();
-        // Find loaded stream matching moment's source
-        var allStreams = PlexdStream.getAllStreams();
-        var targetStream = null;
-        for (var i = 0; i < allStreams.length; i++) {
-            if (allStreams[i].id === moment.streamId) { targetStream = allStreams[i]; break; }
-        }
-        if (!targetStream) {
-            for (var j = 0; j < allStreams.length; j++) {
-                var sUrl = allStreams[j].serverUrl || allStreams[j].url;
-                if (sUrl === moment.sourceUrl) { targetStream = allStreams[j]; break; }
-            }
-        }
-        if (targetStream && targetStream.video) {
-            targetStream.video.currentTime = moment.peak;
-            PlexdStream.selectStream(targetStream.id);
+        var stream = resolveMomentStream(moment);
+        if (stream && stream.video && !stream._isExtracted) {
+            stream.video.currentTime = moment.peak;
+            PlexdStream.selectStream(stream.id);
         } else {
             showMessage('Source not loaded', 'info');
         }
@@ -4996,7 +4948,7 @@ const PlexdApp = (function() {
         video.playsInline = true;
         video.loop = true; // Extracted clips loop natively
         video.muted = true; // Mute initially to satisfy autoplay policy
-        video.poster = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+        video.poster = momentThumbUrl(mom);
         panel.appendChild(video);
 
         console.log('[PopupPlayer] Fetching clip:', clipUrl);
@@ -5247,8 +5199,7 @@ const PlexdApp = (function() {
                 }
                 closeMomentBrowser();
                 if (theaterMode) {
-                    theaterScene = encorePreviousScene || 'casting';
-                    window._plexdTheaterScene = theaterScene;
+                    _setTheaterScene(encorePreviousScene || 'casting');
                     applyTheaterScene();
                     updateModeIndicator();
                 }
@@ -5390,7 +5341,7 @@ const PlexdApp = (function() {
                     PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
                     var cell = document.querySelector('.moment-wall-cell.selected');
                     if (cell) updateCellTimeline(cell);
-                    var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                    var inStr = fmtTime(mom.start);
                     showMessage('In: ' + inStr + ' | Dur: ' + (mom.end - mom.start).toFixed(1) + 's', 'info');
                     return true;
                 }
@@ -5422,7 +5373,7 @@ const PlexdApp = (function() {
                     PlexdMoments.updateMoment(mom.id, { start: mom.start, end: mom.end, peak: mom.peak });
                     var cell = document.querySelector('.moment-wall-cell.selected');
                     if (cell) updateCellTimeline(cell);
-                    var inStr = Math.floor(mom.start / 60) + ':' + String(Math.floor(mom.start % 60)).padStart(2, '0');
+                    var inStr = fmtTime(mom.start);
                     showMessage('In: ' + inStr + ' | Dur: ' + (mom.end - mom.start).toFixed(1) + 's', 'info');
                     return true;
                 }
@@ -7317,48 +7268,14 @@ const PlexdApp = (function() {
             // Seeking controls - grouped near arrow keys for easy access
             // , . for 10s seek, < > (Shift+,/.) for 60s seek
             case ',':
-                // Seek backward 10 seconds
-                e.preventDefault();
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        PlexdStream.seekRelative(targetStream.id, -10);
-                        syncOverlayClones();
-                    }
-                }
-                break;
             case '.':
-                // Seek forward 10 seconds
-                e.preventDefault();
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        PlexdStream.seekRelative(targetStream.id, 10);
-                        syncOverlayClones();
-                    }
-                }
-                break;
             case '<':
-                // Seek backward 60 seconds (Shift+,)
-                e.preventDefault();
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        PlexdStream.seekRelative(targetStream.id, -60);
-                        syncOverlayClones();
-                    }
-                }
-                break;
             case '>':
-                // Seek forward 60 seconds (Shift+.)
+                // , . = ±10s seek, < > (Shift+,/.) = ±60s seek
                 e.preventDefault();
-                {
-                    const targetStream = fullscreenStream || selected;
-                    if (targetStream) {
-                        PlexdStream.seekRelative(targetStream.id, 60);
-                        syncOverlayClones();
-                    }
-                }
+                { var seekAmounts = { ',': -10, '.': 10, '<': -60, '>': 60 };
+                  var seekTarget = fullscreenStream || selected;
+                  if (seekTarget) { PlexdStream.seekRelative(seekTarget.id, seekAmounts[e.key]); syncOverlayClones(); } }
                 break;
             case ';':
                 // Frame back (pauses video, steps back ~1 frame)
@@ -7478,8 +7395,7 @@ const PlexdApp = (function() {
                 }
                 if (wallMode > 0) {
                     // Reset wall mode to off
-                    wallMode = 0;
-                    window._plexdWallMode = 0;
+                    setWallMode(0);
                     const wallBtn = document.getElementById('wall-btn');
                     if (wallBtn) wallBtn.classList.remove('active');
                     const appEl = document.querySelector('.plexd-app');
@@ -7529,7 +7445,7 @@ const PlexdApp = (function() {
                     PlexdStream.resetAllPanPositions();
                     showMessage('Pan positions reset to center', 'info');
                 } else {
-                    cycleTetrisMode();
+                    toggleTetrisMode();
                 }
                 break;
             case 'o':
@@ -7741,8 +7657,7 @@ const PlexdApp = (function() {
                 if (momentBrowserState.open) {
                     closeMomentBrowser();
                     if (theaterMode) {
-                        theaterScene = encorePreviousScene || 'casting';
-                        window._plexdTheaterScene = theaterScene;
+                        _setTheaterScene(encorePreviousScene || 'casting');
                         applyTheaterScene();
                         updateModeIndicator();
                     }
@@ -7822,9 +7737,7 @@ const PlexdApp = (function() {
                             loved: loved,
                             thumbnailDataUrl: thumbnailDataUrl
                         });
-                        var mm = Math.floor(peakTime / 60);
-                        var ss = Math.floor(peakTime % 60);
-                        showMessage('Moment captured at ' + mm + ':' + String(ss).padStart(2, '0'), 'success');
+                        showMessage('Moment captured at ' + fmtTime(peakTime), 'success');
                         // Auto-detect range asynchronously (Task 3)
                         if (typeof autoDetectRange === 'function') {
                             autoDetectRange(moment.id, ts);
@@ -11748,9 +11661,8 @@ const PlexdApp = (function() {
         cycleViewMode,
         // Layout modes
         toggleTetrisMode,
-        cycleTetrisMode,
         toggleCoverflowMode,
-        toggleSmartLayoutMode, // Legacy alias for Coverflow
+        toggleSmartLayoutMode: toggleCoverflowMode, // Legacy alias for Coverflow
         cycleWallMode,
         toggleFaceDetection,
         rotateStreams,

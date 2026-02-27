@@ -2703,6 +2703,11 @@ const PlexdApp = (function() {
     function applyClimaxSubMode() {
         stopAutoRotate();
         setTetrisMode(0);
+        // Exit focused mode before switching sub-modes (fixes Single Focus → Tight Wall stuck bug)
+        var fsMode = PlexdStream.getFullscreenMode();
+        if (fsMode === 'browser-fill' || fsMode === 'true-focused') {
+            PlexdStream.exitFocusedMode();
+        }
         switch (climaxSubMode) {
             case 0: // Tight Wall
                 setWallMode(2);
@@ -7077,10 +7082,10 @@ const PlexdApp = (function() {
                         if (targetForCrop && targetForCrop.video) {
                             var current = getComputedStyle(targetForCrop.video).objectFit;
                             if (current === 'cover') {
-                                targetForCrop.video.style.objectFit = 'contain';
+                                targetForCrop.video.style.setProperty('object-fit', 'contain', 'important');
                                 showMessage('Contain (full frame)', 'info');
                             } else {
-                                targetForCrop.video.style.objectFit = 'cover';
+                                targetForCrop.video.style.setProperty('object-fit', 'cover', 'important');
                                 showMessage('Crop (fill)', 'info');
                             }
                         }
@@ -7096,7 +7101,7 @@ const PlexdApp = (function() {
                         });
                         allS.forEach(function(s) {
                             if (s.video) {
-                                s.video.style.objectFit = anyContain ? 'cover' : 'contain';
+                                s.video.style.setProperty('object-fit', anyContain ? 'cover' : 'contain', 'important');
                             }
                         });
                         showMessage(anyContain ? 'All: Crop (fill)' : 'All: Contain (full frame)', 'info');
@@ -7578,8 +7583,7 @@ const PlexdApp = (function() {
                 break;
             case 'x':
             case 'X':
-                // x = Close stream, xx = Remove all unstarred streams
-                handleDoubleTap('x', function() {
+                {
                     var targetStream = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream() || getCoverflowSelectedStream();
                     if (targetStream) {
                         var fsStream = PlexdStream.getFullscreenStream();
@@ -7600,19 +7604,7 @@ const PlexdApp = (function() {
                     } else {
                         showMessage('Select a stream first', 'info');
                     }
-                }, function() {
-                    // XX: Remove all unstarred streams
-                    var allStreams = PlexdStream.getAllStreams();
-                    var unstarred = allStreams.filter(function(s) { return !PlexdStream.isFavorite(s.id); });
-                    if (unstarred.length === 0) {
-                        showMessage('All streams are starred', 'info');
-                    } else {
-                        unstarred.forEach(function(s) { PlexdStream.removeStream(s.id); });
-                        updateStreamCount();
-                        saveCurrentStreams();
-                        showMessage('Removed ' + unstarred.length + ' unstarred streams', 'info');
-                    }
-                });
+                }
                 break;
             case 'j':
             case 'J':
@@ -7803,6 +7795,25 @@ const PlexdApp = (function() {
             // Up/Down: navigate within ensemble
             PlexdStream.selectNextStream(direction);
             return;
+        }
+
+        // Spotlight mode: Left/Right rotates hero (same as Theater Stage)
+        if (wallMode === 3) {
+            const streams = getFilteredStreams();
+            if (streams.length === 0) return;
+            if (direction === 'left' || direction === 'right') {
+                const sel = PlexdStream.getSelectedStream();
+                const currentIdx = sel ? streams.findIndex(s => s.id === sel.id) : 0;
+                let nextIdx;
+                if (direction === 'right') {
+                    nextIdx = currentIdx >= streams.length - 1 ? 0 : currentIdx + 1;
+                } else {
+                    nextIdx = currentIdx <= 0 ? streams.length - 1 : currentIdx - 1;
+                }
+                PlexdStream.selectStream(streams[nextIdx].id);
+                updateLayout();
+                return;
+            }
         }
 
         const mode = PlexdStream.getFullscreenMode();

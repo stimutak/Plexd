@@ -11692,6 +11692,8 @@ const PlexdRemote = (function() {
     let channel = null;
     let stateUpdateInterval = null;
     let commandPollInterval = null;
+    let _commandPollPending = false;
+    let _stateSendPending = false;
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
 
@@ -11724,17 +11726,22 @@ const PlexdRemote = (function() {
     function startCommandPolling() {
         // HTTP API polling for cross-device (iPhone to MBP)
         commandPollInterval = setInterval(async () => {
-            try {
-                const res = await fetch('/api/remote/command');
-                if (res.ok) {
-                    const cmd = await res.json();
-                    if (cmd && cmd.action) {
-                        console.log('[Remote] Polled command:', cmd.action);
-                        handleRemoteCommand(cmd.action, cmd.payload);
+            if (!_commandPollPending) {
+                _commandPollPending = true;
+                try {
+                    const res = await fetch('/api/remote/command');
+                    if (res.ok) {
+                        const cmd = await res.json();
+                        if (cmd && cmd.action) {
+                            console.log('[Remote] Polled command:', cmd.action);
+                            handleRemoteCommand(cmd.action, cmd.payload);
+                        }
                     }
+                } catch (e) {
+                    // Network error - silently continue, next poll will retry
+                } finally {
+                    _commandPollPending = false;
                 }
-            } catch (e) {
-                // Network error - silently continue, next poll will retry
             }
 
             // Always check localStorage fallback
@@ -11752,7 +11759,7 @@ const PlexdRemote = (function() {
                     localStorage.removeItem(COMMAND_KEY);
                 }
             }
-        }, 200);
+        }, 500);
 
         // Also listen for storage events (works across tabs on same device)
         window.addEventListener('storage', (e) => {
@@ -11995,9 +12002,9 @@ const PlexdRemote = (function() {
                 sendState();
                 break;
 
-            // Crop toggle (Coverflow mode, mapped to O key)
+            // Crop toggle — cycle wall mode (W key equivalent)
             case 'toggleCrop':
-                PlexdApp.toggleCoverflowMode();
+                PlexdApp.cycleWallMode();
                 sendState();
                 break;
 
@@ -12127,13 +12134,18 @@ const PlexdRemote = (function() {
         }
 
         // HTTP API for cross-device (iPhone to MBP)
-        fetch('/api/remote/state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(state)
-        }).catch(() => {
-            // Network error - silently continue
-        });
+        if (!_stateSendPending) {
+            _stateSendPending = true;
+            fetch('/api/remote/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(state)
+            }).catch(() => {
+                // Network error - silently continue
+            }).finally(() => {
+                _stateSendPending = false;
+            });
+        }
 
         // localStorage fallback (always use)
         try {
@@ -12150,8 +12162,15 @@ const PlexdRemote = (function() {
         // Send state every 500ms for responsive UI
         stateUpdateInterval = setInterval(sendState, 500);
 
-        // Also send on key events that might change state
-        document.addEventListener('keydown', () => setTimeout(sendState, 50));
+        // Also send on key events that might change state (debounced)
+        var _keyStateTimeout = null;
+        document.addEventListener('keydown', function() {
+            if (_keyStateTimeout) clearTimeout(_keyStateTimeout);
+            _keyStateTimeout = setTimeout(function() {
+                _keyStateTimeout = null;
+                sendState();
+            }, 100);
+        });
     }
 
     /**

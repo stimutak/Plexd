@@ -36,6 +36,21 @@ const PlexdRemote = (function() {
     let controlsVisible = true;
     let controlsTimeout = null;
 
+    // Moments state
+    let momentsData = [];
+    let momentsLoading = false;
+    let momentsBrowserOpen = false;
+    let momentsPlayerOpen = false;
+    let momentsFilter = 'all'; // 'all', 'loved', '1'-'9'
+    let momentsSort = 'newest';
+    let momentsSources = [];
+    let momentsFilterSource = '';
+    let momentsSelectedIndex = 0;
+    let momentsPlayerIndex = 0;
+    let momentsAutoAdvance = true;
+    let momentsFilteredList = [];
+    let momentPlayerHls = null;
+
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
     const POLL_INTERVAL = 300;
@@ -148,6 +163,34 @@ const PlexdRemote = (function() {
         el.btnBugeye = $('btn-bugeye');
         el.btnMosaic = $('btn-mosaic');
 
+        // Moments browser
+        el.momentsBrowser = $('moments-browser');
+        el.momentsBrowserClose = $('moments-browser-close');
+        el.momentsBrowserCount = $('moments-browser-count');
+        el.momentsFilterTabs = $('moments-filter-tabs');
+        el.momentsSortSelect = $('moments-sort-select');
+        el.momentsSourceSelect = $('moments-source-select');
+        el.momentsGrid = $('moments-grid');
+        el.momentsLoading = $('moments-loading');
+        el.momentsEmpty = $('moments-empty');
+
+        // Moments player
+        el.momentsPlayer = $('moments-player');
+        el.momentsPlayerVideo = $('moments-player-video');
+        el.momentsPlayerControls = $('moments-player-controls');
+        el.momentsPlayerClose = $('moments-player-close');
+        el.momentsPlayerTitle = $('moments-player-title');
+        el.momentsPlayerSource = $('moments-player-source');
+        el.momentsPlayerCounter = $('moments-player-counter');
+        el.momentsPlayerTags = $('moments-player-tags');
+        el.momentsPlayerProgress = $('moments-player-progress');
+        el.momentsPlayerProgressFill = $('moments-player-progress-fill');
+        el.momentsPlayerTime = $('moments-player-time');
+        el.momentsPlayerRating = $('moments-player-rating');
+        el.mpRatingLove = $('mp-rating-love');
+        el.mpAutoAdvance = $('mp-auto-advance');
+        el.momentsPlayerIndicator = $('moments-player-indicator');
+
         // Fullscreen viewer
         el.viewerOverlay = $('viewer-overlay');
         el.viewerVideo = $('viewer-video');
@@ -195,7 +238,10 @@ const PlexdRemote = (function() {
         send('ping');
     }
 
+    let _pollPending = false;
     async function pollState() {
+        if (_pollPending) return;
+        _pollPending = true;
         try {
             const res = await fetch('/api/remote/state');
             if (res.ok) {
@@ -209,6 +255,8 @@ const PlexdRemote = (function() {
         } catch (e) {
             // Server unreachable — fall back to localStorage
             console.warn('[Remote] Server poll failed:', e.message);
+        } finally {
+            _pollPending = false;
         }
 
         const stored = localStorage.getItem(STATE_KEY);
@@ -332,6 +380,58 @@ const PlexdRemote = (function() {
         setTimeout(() => el.streamIndicator.classList.remove('visible'), 1000);
     }
 
+    function showSwipeIndicator(text) {
+        if (!el.streamIndicator) return;
+        el.streamIndicator.textContent = text;
+        el.streamIndicator.classList.add('visible');
+        setTimeout(() => el.streamIndicator.classList.remove('visible'), 800);
+    }
+
+    // ============================================
+    // URL Helpers (ported from stream.js)
+    // ============================================
+
+    /**
+     * Check if URL is an HLS stream.
+     * NOTE: /stream endpoints (Stash, etc.) serve raw MP4, NOT HLS.
+     */
+    function isHlsUrl(url) {
+        if (!url) return false;
+        const lower = url.toLowerCase();
+        if (lower.includes('.m3u8')) return true;
+        return [/\/live$/i, /\/live\?/i, /\/playlist$/i, /\/master$/i, /\/hls\//i]
+            .some(p => p.test(url));
+    }
+
+    /**
+     * Get the best playable URL for a stream on the remote.
+     * Priority: sourceUrl (already proxied) > serverUrl > url (with proxy routing)
+     */
+    function getPlayableUrl(stream) {
+        if (!stream) return null;
+
+        // sourceUrl is already proxied by the main app — best option
+        if (stream.sourceUrl) return stream.sourceUrl;
+
+        // serverUrl is a local path (e.g. /api/files/xxx or /api/hls/xxx) — always playable
+        if (stream.serverUrl) return stream.serverUrl;
+
+        // Raw URL — need proxy for cross-origin
+        const url = stream.url;
+        if (!url || url.startsWith('blob:') || url.startsWith('data:')) return null;
+
+        // Same-origin URLs play directly
+        try {
+            const u = new URL(url);
+            if (u.hostname === 'localhost' || u.hostname === '127.0.0.1' ||
+                u.hostname === window.location.hostname) return url;
+        } catch { return url; }
+
+        // Cross-origin: route through appropriate proxy
+        if (isHlsUrl(url)) return '/api/proxy/hls?url=' + encodeURIComponent(url);
+        return '/api/proxy/video?url=' + encodeURIComponent(url);
+    }
+
     // ============================================
     // Video Player Management
     // ============================================
@@ -342,9 +442,22 @@ const PlexdRemote = (function() {
             hlsInstance.destroy();
         }
 
-        const isHls = url.includes('.m3u8') || url.includes('/stream');
+        // Clear previous error state
+        videoEl.classList.remove('error');
 
-        if (isHls && typeof Hls !== 'undefined' && Hls.isSupported()) {
+        const hls_url = isHlsUrl(url);
+
+        // Error handler for video element
+        const onError = () => {
+            console.warn('[Remote] Video load failed:', url);
+            videoEl.classList.remove('active');
+            videoEl.classList.add('error');
+        };
+        videoEl.removeEventListener('error', videoEl._onError);
+        videoEl.addEventListener('error', onError);
+        videoEl._onError = onError;
+
+        if (hls_url && typeof Hls !== 'undefined' && Hls.isSupported()) {
             const hls = new Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
@@ -355,8 +468,15 @@ const PlexdRemote = (function() {
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
                 videoEl.play().catch(() => {});
             });
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    console.warn('[Remote] HLS fatal error:', data.type, data.details);
+                    videoEl.classList.remove('active');
+                    videoEl.classList.add('error');
+                }
+            });
             return hls;
-        } else if (isHls && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+        } else if (hls_url && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
             videoEl.src = url;
             videoEl.play().catch(() => {});
             return null;
@@ -371,7 +491,7 @@ const PlexdRemote = (function() {
         const stream = getCurrentStream();
         if (!stream || !el.heroVideo) return;
 
-        const videoUrl = stream.serverUrl || (stream.url && !stream.url.startsWith('blob:') ? stream.url : null);
+        const videoUrl = getPlayableUrl(stream);
 
         if (!videoUrl) {
             el.heroVideo.classList.remove('active');
@@ -421,7 +541,7 @@ const PlexdRemote = (function() {
         }
 
         // Load video
-        const videoUrl = stream.serverUrl || (stream.url && !stream.url.startsWith('blob:') ? stream.url : null);
+        const videoUrl = getPlayableUrl(stream);
         if (videoUrl && el.viewerVideo) {
             const viewerCurrentUrl = el.viewerVideo.getAttribute('data-url');
             if (viewerCurrentUrl !== videoUrl) {
@@ -464,6 +584,18 @@ const PlexdRemote = (function() {
         el.viewerOverlay.classList.add('hidden');
         haptic.medium();
         clearTimeout(controlsTimeout);
+
+        // Clean up viewer video resources
+        if (viewerHls) {
+            viewerHls.destroy();
+            viewerHls = null;
+        }
+        if (el.viewerVideo) {
+            el.viewerVideo.pause();
+            el.viewerVideo.removeAttribute('src');
+            el.viewerVideo.removeAttribute('data-url');
+            el.viewerVideo.load();
+        }
 
         // Also exit fullscreen on Mac (synchronized)
         send('exitFullscreen');
@@ -901,12 +1033,18 @@ const PlexdRemote = (function() {
         });
 
         el.btnMomentBrowse?.addEventListener('click', () => {
-            send('key', { key: 'j' });
+            openMomentsBrowser();
             haptic.medium();
         });
 
         el.btnMomentPlay?.addEventListener('click', () => {
-            send('moment-play');
+            // Fetch moments and play a random one
+            fetchMoments().then(() => {
+                if (momentsFilteredList.length > 0) {
+                    const idx = Math.floor(Math.random() * momentsFilteredList.length);
+                    openMomentsPlayer(idx);
+                }
+            });
             haptic.medium();
         });
 
@@ -1018,13 +1156,17 @@ const PlexdRemote = (function() {
             if (!isSwiping) return;
 
             const currentX = e.touches[0].clientX;
+            const currentY = e.touches[0].clientY;
             const deltaX = currentX - startX;
+            const deltaY = currentY - startY;
 
             // Visual feedback during swipe
             if (Math.abs(deltaX) > 20) {
                 el.heroPreview.classList.toggle('swiping-left', deltaX < -20);
                 el.heroPreview.classList.toggle('swiping-right', deltaX > 20);
             }
+            // Vertical swipe-up feedback
+            el.heroPreview.classList.toggle('swiping-up', deltaY < -20 && Math.abs(deltaY) > Math.abs(deltaX));
         }, { passive: true });
 
         el.heroPreview.addEventListener('touchend', (e) => {
@@ -1032,7 +1174,7 @@ const PlexdRemote = (function() {
             isSwiping = false;
 
             // Clear visual feedback
-            el.heroPreview.classList.remove('swiping-left', 'swiping-right');
+            el.heroPreview.classList.remove('swiping-left', 'swiping-right', 'swiping-up');
 
             const endX = e.changedTouches[0].clientX;
             const endY = e.changedTouches[0].clientY;
@@ -1052,20 +1194,17 @@ const PlexdRemote = (function() {
 
                 // Zone layout:
                 // +------------------+
-                // |   TOP: Random    |  (top third)
+                // | TOP: Viewer      |  (top third)
                 // +------+----+------+
                 // | LEFT |PLAY| RIGHT|  (middle third)
                 // | -30s |    | +30s |
                 // +------+----+------+
-                // | BTM: Focus       |  (bottom third)
+                // | BTM: Viewer      |  (bottom third)
                 // +------------------+
+                // Swipe up = Random (anywhere)
 
-                if (relY < 0.33) {
-                    // Top third = random seek
-                    send('randomSeek', { streamId: selectedStreamId });
-                    haptic.medium();
-                } else if (relY > 0.67) {
-                    // Bottom third = synchronized focus (phone viewer + Mac fullscreen)
+                if (relY < 0.33 || relY > 0.67) {
+                    // Top/bottom third = synchronized focus (phone viewer + Mac fullscreen)
                     send('enterFullscreen', { streamId: selectedStreamId });
                     enterViewer();
                 } else {
@@ -1094,6 +1233,11 @@ const PlexdRemote = (function() {
                 } else {
                     navigateStream('next');
                 }
+            // Swipe up = random seek
+            } else if (deltaY < -SWIPE_THRESHOLD && absY > absX) {
+                send('randomSeek', { streamId: selectedStreamId });
+                haptic.heavy();
+                showSwipeIndicator('Random');
             }
         }, { passive: true });
 
@@ -1259,9 +1403,14 @@ const PlexdRemote = (function() {
                     navigateStream('next');
                 }
             } else if (absY > SWIPE_THRESHOLD && absY > absX) {
-                // Swipe down = exit viewer
                 if (deltaY > 0) {
+                    // Swipe down = exit viewer
                     exitViewer();
+                } else {
+                    // Swipe up = random seek
+                    send('randomSeek', { streamId: selectedStreamId });
+                    haptic.heavy();
+                    showSwipeIndicator('Random');
                 }
             }
         }, { passive: true });
@@ -1358,11 +1507,619 @@ const PlexdRemote = (function() {
     }
 
     // ============================================
+    // Moments Browser & Player
+    // ============================================
+
+    async function fetchMoments() {
+        if (momentsLoading) return;
+        momentsLoading = true;
+        if (el.momentsLoading) el.momentsLoading.classList.remove('hidden');
+        if (el.momentsEmpty) el.momentsEmpty.classList.add('hidden');
+
+        try {
+            const res = await fetch('/api/moments');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            momentsData = await res.json();
+
+            // Build sources list
+            const seenSources = {};
+            momentsSources = [];
+            momentsData.forEach(function(m) {
+                const src = m.sourceTitle || m.sourceUrl;
+                if (src && !seenSources[src]) {
+                    seenSources[src] = true;
+                    momentsSources.push({ label: src, url: m.sourceUrl });
+                }
+            });
+
+            applyMomentsFilterAndSort();
+        } catch (e) {
+            console.warn('[Remote] Failed to fetch moments:', e.message);
+            momentsData = [];
+            momentsFilteredList = [];
+        } finally {
+            momentsLoading = false;
+            if (el.momentsLoading) el.momentsLoading.classList.add('hidden');
+        }
+    }
+
+    function applyMomentsFilterAndSort() {
+        var list = momentsData.slice();
+
+        if (momentsFilter === 'loved') {
+            list = list.filter(function(m) { return m.loved; });
+        } else if (momentsFilter !== 'all') {
+            var r = parseInt(momentsFilter, 10);
+            list = list.filter(function(m) { return (m.rating || 0) === r; });
+        }
+
+        if (momentsFilterSource) {
+            list = list.filter(function(m) { return m.sourceUrl === momentsFilterSource; });
+        }
+
+        if (momentsSort === 'newest') {
+            list.sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+        } else if (momentsSort === 'oldest') {
+            list.sort(function(a, b) { return (a.createdAt || 0) - (b.createdAt || 0); });
+        } else if (momentsSort === 'rating') {
+            list.sort(function(a, b) { return (b.rating || 0) - (a.rating || 0); });
+        } else if (momentsSort === 'duration') {
+            list.sort(function(a, b) { return ((b.end - b.start) || 0) - ((a.end - a.start) || 0); });
+        }
+
+        momentsFilteredList = list;
+        momentsSelectedIndex = 0;
+    }
+
+    function openMomentsBrowser() {
+        momentsBrowserOpen = true;
+        if (el.momentsBrowser) el.momentsBrowser.classList.remove('hidden');
+
+        fetchMoments().then(function() {
+            renderMomentsGrid();
+            updateMomentsSourceDropdown();
+        });
+    }
+
+    function closeMomentsBrowser() {
+        momentsBrowserOpen = false;
+        if (el.momentsBrowser) el.momentsBrowser.classList.add('hidden');
+    }
+
+    function createMomentCard(m, idx) {
+        var card = document.createElement('div');
+        card.className = 'moment-card';
+        card.dataset.idx = idx;
+
+        var thumbUrl = '/api/moments/' + encodeURIComponent(m.id) + '/thumb.jpg';
+        var img = document.createElement('img');
+        img.className = 'moment-card-img';
+        img.src = thumbUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+
+        var placeholder = document.createElement('div');
+        placeholder.className = 'moment-card-placeholder';
+        placeholder.style.display = 'none';
+        placeholder.textContent = '\u25B6';
+
+        img.addEventListener('error', function() {
+            img.style.display = 'none';
+            placeholder.style.display = 'flex';
+        });
+        card.appendChild(img);
+        card.appendChild(placeholder);
+
+        if (m.loved) {
+            var love = document.createElement('span');
+            love.className = 'moment-card-love';
+            love.textContent = '\u2665';
+            card.appendChild(love);
+        }
+
+        var rating = m.rating || 0;
+        if (rating > 0) {
+            var badge = document.createElement('span');
+            badge.className = 'moment-card-badge';
+            badge.dataset.rating = rating;
+            badge.textContent = rating;
+            card.appendChild(badge);
+        }
+
+        var duration = (m.end && m.start) ? m.end - m.start : 0;
+        if (duration > 0) {
+            var dur = document.createElement('span');
+            dur.className = 'moment-card-duration';
+            dur.textContent = formatTime(duration);
+            card.appendChild(dur);
+        }
+
+        if (m.extracted) {
+            var dot = document.createElement('span');
+            dot.className = 'moment-card-extracted';
+            card.appendChild(dot);
+        }
+
+        return card;
+    }
+
+    function renderMomentsGrid() {
+        if (!el.momentsGrid) return;
+
+        if (el.momentsBrowserCount) {
+            el.momentsBrowserCount.textContent = momentsFilteredList.length;
+        }
+
+        // Clear existing cards
+        while (el.momentsGrid.firstChild) {
+            el.momentsGrid.removeChild(el.momentsGrid.firstChild);
+        }
+
+        if (momentsFilteredList.length === 0) {
+            if (el.momentsEmpty) el.momentsEmpty.classList.remove('hidden');
+            return;
+        }
+        if (el.momentsEmpty) el.momentsEmpty.classList.add('hidden');
+
+        var fragment = document.createDocumentFragment();
+        momentsFilteredList.forEach(function(m, idx) {
+            fragment.appendChild(createMomentCard(m, idx));
+        });
+        el.momentsGrid.appendChild(fragment);
+    }
+
+    function updateMomentsSourceDropdown() {
+        if (!el.momentsSourceSelect) return;
+        while (el.momentsSourceSelect.options.length > 1) {
+            el.momentsSourceSelect.remove(1);
+        }
+        momentsSources.forEach(function(s) {
+            var label = s.label.length > 40 ? s.label.substring(0, 37) + '...' : s.label;
+            var opt = document.createElement('option');
+            opt.value = s.url;
+            opt.textContent = label;
+            if (s.url === momentsFilterSource) opt.selected = true;
+            el.momentsSourceSelect.appendChild(opt);
+        });
+    }
+
+    function openMomentsPlayer(index) {
+        if (index < 0 || index >= momentsFilteredList.length) return;
+
+        momentsPlayerOpen = true;
+        momentsPlayerIndex = index;
+        if (el.momentsPlayer) el.momentsPlayer.classList.remove('hidden');
+
+        var moment = momentsFilteredList[index];
+        loadMomentVideo(moment);
+        updateMomentsPlayerUI(moment);
+        showMomentsPlayerControls();
+    }
+
+    function closeMomentsPlayer() {
+        momentsPlayerOpen = false;
+        if (el.momentsPlayer) el.momentsPlayer.classList.add('hidden');
+
+        if (momentPlayerHls) {
+            momentPlayerHls.destroy();
+            momentPlayerHls = null;
+        }
+        if (el.momentsPlayerVideo) {
+            el.momentsPlayerVideo.pause();
+            el.momentsPlayerVideo.removeAttribute('src');
+            el.momentsPlayerVideo.load();
+        }
+        if (_mpProgressRAF) {
+            cancelAnimationFrame(_mpProgressRAF);
+            _mpProgressRAF = null;
+        }
+        clearTimeout(_mpControlsTimeout);
+    }
+
+    function loadMomentVideo(moment) {
+        if (!el.momentsPlayerVideo || !moment) return;
+
+        if (momentPlayerHls) {
+            momentPlayerHls.destroy();
+            momentPlayerHls = null;
+        }
+
+        var video = el.momentsPlayerVideo;
+
+        // Prefer extracted clip
+        if (moment.extracted) {
+            var clipUrl = '/api/moments/' + encodeURIComponent(moment.id) + '/clip.mp4';
+            video.src = clipUrl;
+            video.currentTime = 0;
+            video.play().catch(function() {});
+            setupMomentBoundaryEnforcement(moment, video, true);
+            return;
+        }
+
+        // Non-extracted: play source video seeked to start
+        var sourceUrl = getMomentSourceUrl(moment.sourceUrl);
+        if (!sourceUrl) return;
+
+        if (isHlsUrl(sourceUrl)) {
+            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                var hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+                hls.loadSource(sourceUrl);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    video.currentTime = moment.start || 0;
+                    video.play().catch(function() {});
+                });
+                hls.on(Hls.Events.ERROR, function(ev, data) {
+                    if (data.fatal) console.warn('[Remote] Moment HLS error:', data.details);
+                });
+                momentPlayerHls = hls;
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = sourceUrl;
+                video.addEventListener('loadedmetadata', function() {
+                    video.currentTime = moment.start || 0;
+                    video.play().catch(function() {});
+                }, { once: true });
+            }
+        } else {
+            video.src = sourceUrl;
+            video.addEventListener('loadedmetadata', function() {
+                video.currentTime = moment.start || 0;
+                video.play().catch(function() {});
+            }, { once: true });
+        }
+
+        setupMomentBoundaryEnforcement(moment, video, false);
+    }
+
+    function setupMomentBoundaryEnforcement(moment, video, isClip) {
+        if (video._momentTimeUpdate) {
+            video.removeEventListener('timeupdate', video._momentTimeUpdate);
+        }
+        if (video._momentEnded) {
+            video.removeEventListener('ended', video._momentEnded);
+        }
+
+        var onEnded = function() {
+            if (momentsAutoAdvance && momentsPlayerOpen) {
+                navigateMoment('next');
+            }
+        };
+
+        if (isClip) {
+            video.addEventListener('ended', onEnded);
+            video._momentEnded = onEnded;
+            return;
+        }
+
+        var onTimeUpdate = function() {
+            if (!momentsPlayerOpen) return;
+            if (moment.end && video.currentTime >= moment.end) {
+                video.pause();
+                if (momentsAutoAdvance) {
+                    navigateMoment('next');
+                }
+            }
+            updateMomentsPlayerProgress(moment, video);
+        };
+        video.addEventListener('timeupdate', onTimeUpdate);
+        video._momentTimeUpdate = onTimeUpdate;
+        video.addEventListener('ended', onEnded);
+        video._momentEnded = onEnded;
+    }
+
+    function getMomentSourceUrl(sourceUrl) {
+        if (!sourceUrl) return null;
+        if (sourceUrl.startsWith('/')) return sourceUrl;
+        try {
+            var u = new URL(sourceUrl);
+            if (u.hostname === 'localhost' || u.hostname === '127.0.0.1' ||
+                u.hostname === window.location.hostname) return sourceUrl;
+        } catch (e) { return sourceUrl; }
+        if (isHlsUrl(sourceUrl)) return '/api/proxy/hls?url=' + encodeURIComponent(sourceUrl);
+        return '/api/proxy/video?url=' + encodeURIComponent(sourceUrl);
+    }
+
+    function navigateMoment(direction) {
+        if (momentsFilteredList.length === 0) return;
+        var idx = momentsPlayerIndex;
+        if (direction === 'next') {
+            idx = (idx + 1) % momentsFilteredList.length;
+        } else if (direction === 'prev') {
+            idx = (idx - 1 + momentsFilteredList.length) % momentsFilteredList.length;
+        } else if (direction === 'random') {
+            idx = Math.floor(Math.random() * momentsFilteredList.length);
+        }
+        momentsPlayerIndex = idx;
+        var moment = momentsFilteredList[idx];
+        if (moment) {
+            loadMomentVideo(moment);
+            updateMomentsPlayerUI(moment);
+            showMomentsPlayerIndicator(moment);
+        }
+    }
+
+    function updateMomentsPlayerUI(moment) {
+        if (!moment) return;
+
+        if (el.momentsPlayerTitle) {
+            var title = moment.sourceTitle || 'Moment';
+            el.momentsPlayerTitle.textContent = title.length > 40 ? title.substring(0, 37) + '...' : title;
+        }
+
+        if (el.momentsPlayerSource) {
+            var src = moment.sourceUrl || '';
+            try {
+                var u = new URL(src);
+                el.momentsPlayerSource.textContent = u.hostname;
+            } catch (e) {
+                el.momentsPlayerSource.textContent = src.startsWith('/') ? 'Local' : '';
+            }
+        }
+
+        if (el.momentsPlayerCounter) {
+            el.momentsPlayerCounter.textContent = (momentsPlayerIndex + 1) + '/' + momentsFilteredList.length;
+        }
+
+        // Tags — build safely with DOM methods
+        if (el.momentsPlayerTags) {
+            while (el.momentsPlayerTags.firstChild) {
+                el.momentsPlayerTags.removeChild(el.momentsPlayerTags.firstChild);
+            }
+            var tags = moment.aiTags || [];
+            tags.slice(0, 8).forEach(function(t) {
+                var span = document.createElement('span');
+                span.className = 'mp-tag';
+                span.textContent = typeof t === 'string' ? t : (t.tag || '');
+                el.momentsPlayerTags.appendChild(span);
+            });
+        }
+
+        updateMomentsPlayerRating(moment);
+
+        if (el.mpAutoAdvance) {
+            el.mpAutoAdvance.classList.toggle('active', momentsAutoAdvance);
+        }
+
+        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.width = '0%';
+        if (el.momentsPlayerTime) {
+            var dur = (moment.end && moment.start) ? moment.end - moment.start : 0;
+            el.momentsPlayerTime.textContent = '0:00 / ' + formatTime(dur);
+        }
+
+        startMomentsProgressLoop(moment);
+    }
+
+    function updateMomentsPlayerRating(moment) {
+        if (!el.momentsPlayerRating) return;
+        var rating = moment.rating || 0;
+        var loved = moment.loved || false;
+
+        if (el.mpRatingLove) el.mpRatingLove.classList.toggle('active', loved);
+
+        el.momentsPlayerRating.querySelectorAll('.mp-rating-btn[data-rating]').forEach(function(btn) {
+            var r = parseInt(btn.dataset.rating, 10);
+            btn.classList.toggle('active', r === rating);
+        });
+    }
+
+    var _mpProgressRAF = null;
+    function startMomentsProgressLoop(moment) {
+        if (_mpProgressRAF) cancelAnimationFrame(_mpProgressRAF);
+
+        var tick = function() {
+            if (!momentsPlayerOpen) return;
+            updateMomentsPlayerProgress(moment, el.momentsPlayerVideo);
+            _mpProgressRAF = requestAnimationFrame(tick);
+        };
+        _mpProgressRAF = requestAnimationFrame(tick);
+    }
+
+    function updateMomentsPlayerProgress(moment, video) {
+        if (!video || !moment) return;
+        var isClip = moment.extracted;
+        var start = isClip ? 0 : (moment.start || 0);
+        var end = isClip ? video.duration : (moment.end || video.duration);
+        var total = end - start;
+        if (!total || total <= 0) return;
+
+        var current = video.currentTime - start;
+        var pct = Math.max(0, Math.min(100, (current / total) * 100));
+
+        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.width = pct + '%';
+        if (el.momentsPlayerTime) {
+            el.momentsPlayerTime.textContent = formatTime(Math.max(0, current)) + ' / ' + formatTime(total);
+        }
+    }
+
+    async function rateMoment(momentId, updates) {
+        try {
+            var moment = momentsData.find(function(m) { return m.id === momentId; });
+            if (moment) Object.assign(moment, updates);
+
+            await fetch('/api/moments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(Object.assign({ id: momentId }, updates))
+            });
+        } catch (e) {
+            console.warn('[Remote] Failed to rate moment:', e.message);
+        }
+    }
+
+    var _mpControlsTimeout = null;
+    function showMomentsPlayerControls() {
+        if (!el.momentsPlayerControls) return;
+        el.momentsPlayerControls.classList.remove('hidden');
+        clearTimeout(_mpControlsTimeout);
+        _mpControlsTimeout = setTimeout(function() {
+            if (momentsPlayerOpen) el.momentsPlayerControls.classList.add('hidden');
+        }, 4000);
+    }
+
+    function toggleMomentsPlayerControls() {
+        if (!el.momentsPlayerControls) return;
+        if (el.momentsPlayerControls.classList.contains('hidden')) {
+            showMomentsPlayerControls();
+        } else {
+            clearTimeout(_mpControlsTimeout);
+            el.momentsPlayerControls.classList.add('hidden');
+        }
+    }
+
+    function showMomentsPlayerIndicator(moment) {
+        if (!el.momentsPlayerIndicator) return;
+        var title = moment.sourceTitle || 'Moment';
+        el.momentsPlayerIndicator.textContent = title.length > 30 ? title.substring(0, 27) + '...' : title;
+        el.momentsPlayerIndicator.classList.add('visible');
+        setTimeout(function() { el.momentsPlayerIndicator.classList.remove('visible'); }, 1000);
+    }
+
+    // ============================================
+    // Moments Event Setup
+    // ============================================
+
+    function setupMomentsBrowserEvents() {
+        el.momentsBrowserClose?.addEventListener('click', closeMomentsBrowser);
+
+        el.momentsFilterTabs?.addEventListener('click', function(e) {
+            var tab = e.target.closest('.moments-filter-tab');
+            if (!tab) return;
+            var filter = tab.dataset.filter;
+            if (!filter) return;
+            momentsFilter = filter;
+            el.momentsFilterTabs.querySelectorAll('.moments-filter-tab').forEach(function(t) {
+                t.classList.toggle('active', t.dataset.filter === filter);
+            });
+            applyMomentsFilterAndSort();
+            renderMomentsGrid();
+            haptic.light();
+        });
+
+        el.momentsSortSelect?.addEventListener('change', function() {
+            momentsSort = el.momentsSortSelect.value;
+            applyMomentsFilterAndSort();
+            renderMomentsGrid();
+        });
+
+        el.momentsSourceSelect?.addEventListener('change', function() {
+            momentsFilterSource = el.momentsSourceSelect.value;
+            applyMomentsFilterAndSort();
+            renderMomentsGrid();
+        });
+
+        el.momentsGrid?.addEventListener('click', function(e) {
+            var card = e.target.closest('.moment-card');
+            if (!card) return;
+            var idx = parseInt(card.dataset.idx, 10);
+            if (!isNaN(idx)) {
+                openMomentsPlayer(idx);
+                haptic.medium();
+            }
+        });
+    }
+
+    function setupMomentsPlayerEvents() {
+        el.momentsPlayerClose?.addEventListener('click', closeMomentsPlayer);
+
+        el.mpRatingLove?.addEventListener('click', function() {
+            var moment = momentsFilteredList[momentsPlayerIndex];
+            if (!moment) return;
+            moment.loved = !moment.loved;
+            rateMoment(moment.id, { loved: moment.loved });
+            updateMomentsPlayerRating(moment);
+            haptic.success();
+        });
+
+        el.momentsPlayerRating?.querySelectorAll('.mp-rating-btn[data-rating]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var moment = momentsFilteredList[momentsPlayerIndex];
+                if (!moment) return;
+                var r = parseInt(btn.dataset.rating, 10);
+                if (isNaN(r)) return;
+                moment.rating = r;
+                rateMoment(moment.id, { rating: r });
+                updateMomentsPlayerRating(moment);
+                haptic.success();
+            });
+        });
+
+        el.mpAutoAdvance?.addEventListener('click', function() {
+            momentsAutoAdvance = !momentsAutoAdvance;
+            el.mpAutoAdvance.classList.toggle('active', momentsAutoAdvance);
+            haptic.light();
+        });
+
+        el.momentsPlayerProgress?.addEventListener('click', function(e) {
+            var moment = momentsFilteredList[momentsPlayerIndex];
+            if (!moment || !el.momentsPlayerVideo) return;
+            var rect = el.momentsPlayerProgress.getBoundingClientRect();
+            var pct = (e.clientX - rect.left) / rect.width;
+            var isClip = moment.extracted;
+            var start = isClip ? 0 : (moment.start || 0);
+            var end = isClip ? el.momentsPlayerVideo.duration : (moment.end || el.momentsPlayerVideo.duration);
+            var total = end - start;
+            if (total > 0) {
+                el.momentsPlayerVideo.currentTime = start + (pct * total);
+            }
+            haptic.light();
+        });
+
+        // Touch gestures for moments player
+        var startX = 0, startY = 0, isSwiping = false;
+
+        el.momentsPlayer?.addEventListener('touchstart', function(e) {
+            if (e.target.closest('.mp-rating-btn, .mp-rating-love, .mp-action-btn, .moments-player-close, .moments-player-progress')) return;
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            isSwiping = true;
+        }, { passive: true });
+
+        el.momentsPlayer?.addEventListener('touchend', function(e) {
+            if (!isSwiping) return;
+            isSwiping = false;
+
+            var endX = e.changedTouches[0].clientX;
+            var endY = e.changedTouches[0].clientY;
+            var deltaX = endX - startX;
+            var deltaY = endY - startY;
+            var absX = Math.abs(deltaX);
+            var absY = Math.abs(deltaY);
+
+            // Tap = toggle controls
+            if (absX < 15 && absY < 15) {
+                toggleMomentsPlayerControls();
+                return;
+            }
+
+            // Horizontal swipe = next/prev moment
+            if (absX > SWIPE_THRESHOLD && absX > absY) {
+                if (deltaX > 0) {
+                    navigateMoment('prev');
+                } else {
+                    navigateMoment('next');
+                }
+                haptic.medium();
+            // Vertical swipe
+            } else if (absY > SWIPE_THRESHOLD && absY > absX) {
+                if (deltaY > 0) {
+                    closeMomentsPlayer();
+                    haptic.medium();
+                } else {
+                    navigateMoment('random');
+                    haptic.heavy();
+                }
+            }
+        }, { passive: true });
+    }
+
+    // ============================================
     // Initialize
     // ============================================
     function init() {
         cacheElements();
         setupEventListeners();
+        setupMomentsBrowserEvents();
+        setupMomentsPlayerEvents();
         setupCommunication();
         console.log('Plexd Remote initialized (redesigned)');
     }

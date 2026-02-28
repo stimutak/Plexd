@@ -2543,23 +2543,12 @@ const PlexdStream = (function() {
             // Streams that have never played are likely connection-starved (Chrome
             // 6-per-host limit), not broken — don't burn retries on them.
             if (!stream.hls && RECOVERY_CONFIG.enableAutoRecovery) {
-                const inGrace = (Date.now() - monitoringStartedAt) < LOAD_GRACE_PERIOD;
-                if (inGrace && !stream.hasEverPlayed) {
-                    // During grace period, unplayed streams are just waiting for
-                    // a connection slot — schedule a delayed retry after grace ends
-                    const retryDelay = LOAD_GRACE_PERIOD - (Date.now() - monitoringStartedAt) + 2000;
-                    setTimeout(() => {
-                        if (!stream.hasEverPlayed && stream.state === 'error') {
-                            stream.recovery.retryCount = 0;
-                            scheduleRecovery(stream, 'post_grace_retry');
-                        }
-                    }, retryDelay);
+                // Local server files that 404 are permanently gone — don't retry
+                const sourceUrl = stream.sourceUrl || stream.url || '';
+                if (sourceUrl.startsWith('/api/files/')) {
+                    console.log(`[${stream.id}] Server file not found — not retrying`);
+                    showStreamError(stream);
                 } else {
-                    if (!stream.hasEverPlayed) {
-                        // Connection contention: don't count toward maxRetries,
-                        // just re-queue with a generous delay
-                        stream.recovery.retryCount = Math.min(stream.recovery.retryCount, 1);
-                    }
                     scheduleRecovery(stream, stream.error);
                 }
             } else if (!stream.hls) {

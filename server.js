@@ -1265,8 +1265,8 @@ function fetchPage(url) {
 
 // Scrape xHamster listing page for video URLs
 async function scrapeXhamsterListing(count) {
-    const page = Math.floor(Math.random() * 50) + 1;
-    const listUrl = 'https://xhamster.com/newest/' + page;
+    const page = Math.floor(Math.random() * 20) + 1;
+    const listUrl = 'https://xhamster.com/best/' + page;
     console.log('[Demo] Fetching listing: ' + listUrl);
 
     const html = await fetchPage(listUrl);

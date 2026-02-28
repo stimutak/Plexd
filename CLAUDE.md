@@ -33,6 +33,21 @@
 - **Clear Naming**: Use descriptive, unambiguous names for all identifiers
 - **Single Responsibility**: Each module/function does one thing well
 
+### Server Management
+
+**ALWAYS use `./scripts/start-server.sh` to start the Plexd server.** Never run `node server.js &` directly — this causes zombie processes that accumulate and fight over the port, causing intermittent request failures.
+
+The script:
+1. Kills ALL existing processes on port 8080 (with force-kill fallback)
+2. Waits for the port to be fully free
+3. Starts a single server instance (which auto-starts Skier AI servers)
+4. Verifies the server responds and reports AI model availability
+
+```bash
+./scripts/start-server.sh     # Start/restart server (safe to run anytime)
+tail -f /tmp/plexd-server.log # Watch server logs
+```
+
 ## Architecture
 
 ### Web Application (Primary)
@@ -68,6 +83,7 @@ Plexd/
 │   ├── hls/            # HLS transcoded segments
 │   └── metadata.json   # File metadata
 ├── scripts/
+│   ├── start-server.sh # ALWAYS use this to start the server (kills old, starts new, verifies)
 │   ├── autostart.sh    # MBP autostart with Chrome debugging
 │   └── chrome-test.js  # Chrome remote debugging test runner
 ├── web/                # Web application
@@ -209,6 +225,35 @@ All zones are single-tap. No double-tap required.
 - Health check: `GET /api/remote/state` with 3-second timeout
 - `host_permissions: ["<all_urls>"]` for cross-origin fetch to Plexd server
 - Auto-loaded via `--load-extension` in autostart script and Plexd Chrome app
+
+### xfill / Demo Streams
+
+One-click button that fills the grid with random premium video streams. Toolbar button calls `PlexdApp.xfill()` → `GET /api/demo/streams?count=16&source=brazzers`.
+
+**Sources:** `?source=brazzers` (premium, requires login) or `?source=xhamster` (free scraping). `auto` prefers Brazzers if auth is valid.
+
+**Brazzers/Aylo Integration:**
+- Auth via Chrome cookie decryption from `.chrome-profile/Default/Cookies`
+- Tokens: `access_token_ma` (~1hr JWT), `refresh_token_ma`, `instance_token` (~2 days), `app_session_id` (UUID)
+- Cookie decryption: macOS Keychain → PBKDF2 (salt="saltysalt", 1003 iters, 16 bytes) → AES-128-CBC (IV=0x20×16), strip "v10" 3-byte prefix
+- **CRITICAL: Aylo API requires raw JWT on `Authorization` header — NO "Bearer" prefix.** Adding "Bearer" causes 401 on `/v1/self` and `isMemberUnlocked: false` on all scenes
+- Required headers: `Authorization` (raw JWT), `Instance` (instance JWT), `X-APP-SESSION-ID` (UUID cookie), `X-Forwarded-For` (external IP via api.ipify.org)
+- API: `site-api.project1service.com`, sort syntax uses hyphen prefix (`orderBy=-dateReleased` for descending)
+- `videos.full.files` is an array: `[{type: "hls"|"http", format: "2160p"|"1080p"|..., urls: {view}, codec: "av1"|"h264", sizeBytes}]`
+- `extractBestVideoUrl()` picks highest-resolution HLS entry (up to 4K/2160p AV1)
+- Signed HLS URLs expire (~24hr): `master.m3u8?validto=...&ip=...&hash=...`
+- Streams route through `/api/proxy/hls` for CORS (manifest URL rewriting)
+
+**Key endpoints:**
+- `GET /api/demo/streams?count=16&source=brazzers` — Fetch random premium scenes
+- `GET /api/demo/auth-status` — Check Brazzers login status
+
+**Key functions (server.js):**
+- `getBrazzersAuth()` — Read/decrypt Chrome cookies, refresh if expired
+- `fetchBrazzersApi(apiPath, auth)` — API call with correct Aylo headers
+- `scrapeBrazzersScenes(count, auth)` — Fetch random scene listings, extract HLS URLs
+- `extractBestVideoUrl(files)` — Pick highest quality from files array
+- `getExternalIp()` — Cached external IP for X-Forwarded-For
 
 ## Prohibited Practices
 

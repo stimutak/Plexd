@@ -21,6 +21,17 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Crash protection — log and survive instead of dying on unhandled errors.
+// Without this, a single uncaught exception kills the server, orphaning ffmpeg
+// processes and causing ERR_CONNECTION_REFUSED for all browser connections.
+process.on('uncaughtException', (err) => {
+    console.error('[Server] UNCAUGHT EXCEPTION (survived):', err.message);
+    console.error(err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[Server] UNHANDLED REJECTION (survived):', reason);
+});
+
 function jsonOk(res, data) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data));
@@ -82,7 +93,8 @@ const MOMENTS_DIR = path.join(UPLOADS_DIR, 'moments');
 const extractJobs = {};           // { jobId: { momentId, status, progress, outputPath, process, pid, error, startedAt, completedAt } }
 const extractQueue = [];          // FIFO queue of jobIds
 const activeExtracts = new Set();
-const MAX_CONCURRENT_EXTRACTS = 2; // Clips are short, don't saturate encoder
+const MAX_CONCURRENT_EXTRACTS = 2;
+let extractsPaused = false; // One at a time (MAX_CONCURRENT_EXTRACTS=1), triggered on demand
 
 // Moments persistence
 const MOMENTS_JSON = path.join(MOMENTS_DIR, 'moments.json');
@@ -123,6 +135,22 @@ function saveMomentsDb() {
     }
 }
 
+// Kill orphaned ffmpeg extraction processes from previous server runs.
+// Without detached:true these shouldn't accumulate, but clean up any existing ones.
+(function killOrphanedFfmpeg() {
+    try {
+        const { execFileSync } = require('child_process');
+        const result = execFileSync('pgrep', ['-f', 'ffmpeg.*-ss.*-i http'], { encoding: 'utf-8', timeout: 5000 }).trim();
+        if (result) {
+            const pids = result.split('\n').map(p => parseInt(p)).filter(p => !isNaN(p));
+            for (const pid of pids) {
+                try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+            }
+            if (pids.length > 0) console.log(`[Server] Killed ${pids.length} orphaned ffmpeg extraction process(es)`);
+        }
+    } catch (_) { /* pgrep returns exit code 1 when no matches — normal */ }
+})();
+
 // Reconcile moments at startup: fix blob URLs and extracted flags
 (function reconcileMoments() {
     let fixedBlobs = 0, fixedExtracted = 0;
@@ -150,6 +178,32 @@ function saveMomentsDb() {
         saveMomentsDb();
         if (fixedBlobs > 0) console.log(`[Server] Reconciled ${fixedBlobs} blob URLs → server files`);
         if (fixedExtracted > 0) console.log(`[Server] Reconciled ${fixedExtracted} moments with existing clips`);
+    }
+    // Queue extraction for moments that don't have clips yet
+    let queued = 0;
+    for (const m of momentsDb) {
+        if (m.extracted) continue;
+        if (!m.sourceUrl || m.sourceUrl.startsWith('blob:')) continue;
+        const clipPath = path.join(MOMENTS_DIR, `${m.id}.mp4`);
+        if (fs.existsSync(clipPath)) continue;
+        const startF = parseFloat(m.start), endF = parseFloat(m.end);
+        if (!isFinite(startF) || !isFinite(endF) || startF >= endF) continue;
+        const jobId = `ext_boot_${m.id}`;
+        extractJobs[jobId] = {
+            status: 'queued', progress: 0,
+            momentId: m.id, sourceUrl: m.sourceUrl,
+            sourceFileId: m.sourceFileId || null,
+            start: startF, end: endF,
+            outputPath: path.join(MOMENTS_DIR, `${m.id}.mp4`),
+            process: null, pid: null, error: null,
+            startedAt: null, completedAt: null
+        };
+        extractQueue.push(jobId);
+        queued++;
+    }
+    if (queued > 0) {
+        console.log(`[Server] Queued ${queued} moments for extraction`);
+        setTimeout(processExtractQueue, 5000); // Start after server is fully up
     }
 })();
 
@@ -534,14 +588,11 @@ function runTranscode(fileId, useSoftwareEncoder = false) {
         outputPath
     ];
 
-    // Detach ffmpeg so it continues if server exits
     const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
-        detached: true,
         stdio: ['ignore', 'pipe', 'pipe']
     });
     transcodingJobs[fileId].process = ffmpeg;
     transcodingJobs[fileId].pid = ffmpeg.pid;
-    // Don't unref() so we can still track progress while server runs
 
     let duration = 0;
     let stderrOutput = '';
@@ -647,6 +698,7 @@ function processDownloadQueue() {
 
 // Process the extraction queue (mirrors processDownloadQueue)
 function processExtractQueue() {
+    if (extractsPaused) return;
     while (activeExtracts.size < MAX_CONCURRENT_EXTRACTS && extractQueue.length > 0) {
         const jobId = extractQueue.shift();
         runExtract(jobId);
@@ -667,18 +719,11 @@ function runExtract(jobId, useSoftwareEncoder = false) {
         else if (fs.existsSync(rawPath)) inputSource = rawPath;
     }
 
-    // Route external URLs through our proxy — ffmpeg can't authenticate with
-    // remote servers (e.g. Stash returns 401 to ffmpeg's default User-Agent).
-    // Our /api/proxy/video endpoint handles auth, headers, and redirects.
-    if (inputSource.startsWith('http://') || inputSource.startsWith('https://')) {
-        try {
-            const urlObj = new URL(inputSource);
-            const isLocal = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1' || urlObj.hostname === '[::1]';
-            if (!isLocal) {
-                inputSource = `http://localhost:${PORT}/api/proxy/video?url=${encodeURIComponent(inputSource)}`;
-            }
-        } catch (e) { /* keep original URL if parse fails */ }
-    }
+    // For HTTP URLs, ffmpeg needs a browser User-Agent (some servers like Stash
+    // reject ffmpeg's default UA). Use -user_agent flag instead of routing through
+    // our own proxy — the loopback consumed HTTP connections for entire extraction
+    // durations, starving browser video streams of their 6-per-origin connection limit.
+    const needsUserAgent = inputSource.startsWith('http://') || inputSource.startsWith('https://');
 
     const partPath = job.outputPath + '.part';
 
@@ -704,26 +749,21 @@ function runExtract(jobId, useSoftwareEncoder = false) {
     const encoder = useSoftwareEncoder ? 'libx264' : 'h264_videotoolbox';
     console.log(`[Server] Starting extraction (${encoder}): ${job.momentId} [${job.start.toFixed(1)}s - ${job.end.toFixed(1)}s = ${duration.toFixed(1)}s]`);
 
-    const ffmpegArgs = useSoftwareEncoder ? [
+    const uaArgs = needsUserAgent ? ['-user_agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'] : [];
+    const ffmpegArgs = [
+        ...uaArgs,
         '-ss', String(job.start),
         '-i', inputSource,
         '-t', String(duration),
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
-        '-movflags', '+faststart',
-        '-f', 'mp4', '-y', partPath
-    ] : [
-        '-ss', String(job.start),
-        '-i', inputSource,
-        '-t', String(duration),
-        '-c:v', 'h264_videotoolbox', '-b:v', '5M',
+        ...(useSoftwareEncoder
+            ? ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']
+            : ['-c:v', 'h264_videotoolbox', '-b:v', '5M']),
         '-c:a', 'aac', '-b:a', '128k', '-ac', '2',
         '-movflags', '+faststart',
         '-f', 'mp4', '-y', partPath
     ];
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
-        detached: true,
         stdio: ['ignore', 'pipe', 'pipe']
     });
     job.process = ffmpeg;
@@ -850,7 +890,6 @@ function runDownload(jobId) {
     ];
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
-        detached: true,
         stdio: ['ignore', 'pipe', 'pipe']
     });
     job.process = ffmpeg;
@@ -1182,6 +1221,12 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
         return;
     }
 
+    // Validate URL protocol to prevent server crash from malformed URLs
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+        callback(new Error(`Invalid URL protocol: ${targetUrl.substring(0, 30)}`));
+        return;
+    }
+
     const mod = targetUrl.startsWith('https') ? https : http;
     const headers = { 'User-Agent': 'Plexd/1.0', ...extraHeaders };
     const req = mod.get(targetUrl, { headers, timeout: 30000 }, (proxyRes) => {
@@ -1198,6 +1243,91 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
     req.on('timeout', () => {
         req.destroy(new Error('Request timeout'));
     });
+}
+
+// Promise wrapper around fetchUrl for scraping (returns full body as string)
+function fetchPage(url) {
+    return new Promise((resolve, reject) => {
+        fetchUrl(url, (err, res) => {
+            if (err) return reject(err);
+            if (res.statusCode !== 200) {
+                res.resume();
+                return reject(new Error('HTTP ' + res.statusCode));
+            }
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => resolve(body));
+            res.on('error', reject);
+        });
+    });
+}
+
+// Scrape xHamster listing page for video URLs
+async function scrapeXhamsterListing(count) {
+    const page = Math.floor(Math.random() * 50) + 1;
+    const listUrl = 'https://xhamster.com/newest/' + page;
+    console.log('[Demo] Fetching listing: ' + listUrl);
+
+    const html = await fetchPage(listUrl);
+
+    // Extract video page URLs from listing
+    const linkPattern = /href="(https:\/\/xhamster\.com\/videos\/[^"]+)"/g;
+    const urls = [];
+    const seen = new Set();
+    let match;
+    while ((match = linkPattern.exec(html)) !== null) {
+        if (!seen.has(match[1])) {
+            seen.add(match[1]);
+            urls.push(match[1]);
+        }
+    }
+
+    // Grab more than needed to absorb failures
+    return urls.slice(0, Math.ceil(count * 1.5));
+}
+
+// Extract HLS URL + title from an xHamster video page
+async function scrapeXhamsterVideo(pageUrl) {
+    const html = await fetchPage(pageUrl);
+
+    // Extract title
+    const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+    const title = titleMatch
+        ? titleMatch[1].replace(/ - xHamster.*$/i, '').trim()
+        : 'Untitled';
+
+    // Try window.initials JSON (primary method)
+    const initialsMatch = html.match(
+        /window\.initials\s*=\s*(\{.+?\});\s*<\/script>/s
+    );
+    if (initialsMatch) {
+        try {
+            const initials = JSON.parse(initialsMatch[1]);
+            const sources = initials
+                && initials.videoModel
+                && initials.videoModel.sources;
+            const hlsUrl = (sources && sources.hls && sources.hls.url)
+                || (sources && sources.mp4 && (
+                    sources.mp4['1080p']
+                    || sources.mp4['720p']
+                    || sources.mp4['480p']
+                ));
+            if (hlsUrl) return { url: hlsUrl, title: title };
+        } catch (e) {
+            console.log('[Demo] JSON parse failed for '
+                + pageUrl + ': ' + e.message);
+        }
+    }
+
+    // Fallback: look for .m3u8 URLs directly in page source
+    const m3u8Match = html.match(/(https?:\/\/[^\s"']+\.m3u8[^\s"']*)/);
+    if (m3u8Match) return { url: m3u8Match[1], title: title };
+
+    // Fallback: look for MP4 URLs
+    const mp4Match = html.match(/(https?:\/\/[^\s"']+\.mp4[^\s"']*)/);
+    if (mp4Match) return { url: mp4Match[1], title: title };
+
+    return null;
 }
 
 // Rewrite URLs in an m3u8 manifest to route through our proxy
@@ -1292,6 +1422,8 @@ const server = http.createServer(async (req, res) => {
         res.end();
         return;
     }
+
+    try { // Top-level try/catch — individual request errors must not crash the server
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
@@ -1536,6 +1668,25 @@ const server = http.createServer(async (req, res) => {
 
         console.log(`[Server] Cancelled all transcodes: ${queuedCount} queued, ${activeCount} active`);
         jsonOk(res, { success: true, cancelledQueued: queuedCount, cancelledActive: activeCount });
+        return;
+    }
+
+    // Extraction queue control
+    if (pathname === '/api/extracts/start' && req.method === 'POST') {
+        extractsPaused = false;
+        console.log('[Server] Extraction queue started');
+        processExtractQueue();
+        jsonOk(res, { success: true, paused: false, queued: extractQueue.length, active: activeExtracts.size });
+        return;
+    }
+    if (pathname === '/api/extracts/pause' && req.method === 'POST') {
+        extractsPaused = true;
+        console.log('[Server] Extraction queue paused');
+        jsonOk(res, { success: true, paused: true });
+        return;
+    }
+    if (pathname === '/api/extracts/status' && req.method === 'GET') {
+        jsonOk(res, { paused: extractsPaused, queued: extractQueue.length, active: activeExtracts.size });
         return;
     }
 
@@ -2092,45 +2243,6 @@ const server = http.createServer(async (req, res) => {
         const targetUrl = url.searchParams.get('url');
         if (!targetUrl) {
             jsonError(res, 400, 'Missing url parameter');
-            return;
-        }
-
-        const extraHeaders = {};
-        if (req.headers.range) extraHeaders['Range'] = req.headers.range;
-
-        // fetchUrl handles redirects (up to 5) and timeout internally
-        fetchUrl(targetUrl, (err, proxyRes) => {
-            if (err) {
-                console.error(`[Server] Video proxy error: ${err.message}`);
-                if (!res.headersSent) {
-                    res.writeHead(502, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
-                }
-                return;
-            }
-
-            const outHeaders = {
-                'Content-Type': proxyRes.headers['content-type'] || 'video/mp4',
-                'Accept-Ranges': 'bytes'
-            };
-            if (proxyRes.headers['content-length']) outHeaders['Content-Length'] = proxyRes.headers['content-length'];
-            if (proxyRes.headers['content-range']) outHeaders['Content-Range'] = proxyRes.headers['content-range'];
-
-            res.writeHead(proxyRes.statusCode, outHeaders);
-            proxyRes.pipe(res);
-            proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
-            // Abort upstream fetch when client disconnects (prevents wasted bandwidth)
-            res.on('close', () => { proxyRes.destroy(); });
-        }, 0, extraHeaders);
-        return;
-    }
-
-    // Video Proxy - CORS bypass with range request support for plain video URLs
-    if (pathname === '/api/proxy/video' && req.method === 'GET') {
-        const targetUrl = url.searchParams.get('url');
-        if (!targetUrl) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing url parameter' }));
             return;
         }
 
@@ -2907,6 +3019,61 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // GET /api/demo/streams - Scrape random streams for xfill demo
+    if (pathname === '/api/demo/streams' && req.method === 'GET') {
+        const count = parseInt(params.get('count')) || 16;
+        const CONCURRENCY = 6;
+
+        try {
+            const videoPageUrls = await scrapeXhamsterListing(count);
+            console.log('[Demo] Found ' + videoPageUrls.length
+                + ' video pages, extracting streams...');
+
+            if (videoPageUrls.length === 0) {
+                jsonOk(res, {
+                    streams: [],
+                    source: 'xhamster',
+                    fetched: 0,
+                    failed: 0,
+                    error: 'No videos found on listing page'
+                });
+                return;
+            }
+
+            // Fetch video pages in batches with concurrency limit
+            const streams = [];
+            let failed = 0;
+            for (let i = 0; i < videoPageUrls.length
+                    && streams.length < count; i += CONCURRENCY) {
+                const batch = videoPageUrls.slice(i, i + CONCURRENCY);
+                const results = await Promise.allSettled(
+                    batch.map(url => scrapeXhamsterVideo(url))
+                );
+                for (const r of results) {
+                    if (r.status === 'fulfilled' && r.value) {
+                        streams.push(r.value);
+                    } else {
+                        failed++;
+                    }
+                }
+            }
+
+            console.log('[Demo] Extracted ' + streams.length
+                + ' streams (' + failed + ' failed)');
+            jsonOk(res, {
+                streams: streams.slice(0, count),
+                source: 'xhamster',
+                fetched: streams.length,
+                failed: failed
+            });
+        } catch (err) {
+            console.error('[Demo] Scrape error:', err.message);
+            jsonError(res, 500,
+                'Failed to scrape demo streams: ' + err.message);
+        }
+        return;
+    }
+
     // Static file serving
     let filePath = pathname === '/' ? '/index.html' : pathname;
     filePath = path.join(WEB_ROOT, filePath);
@@ -2936,6 +3103,13 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
     });
+
+    } catch (err) {
+        console.error(`[Server] Request handler error: ${err.message}`, req.url);
+        if (!res.headersSent) {
+            try { jsonError(res, 500, 'Internal server error'); } catch (_) { res.end(); }
+        }
+    }
 });
 
 // Graceful shutdown - kill active ffmpeg processes

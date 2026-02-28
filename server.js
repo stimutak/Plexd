@@ -1367,13 +1367,16 @@ function decryptChromeCookie(hexStr) {
         decipher.setAutoPadding(false);
         const dec = Buffer.concat([decipher.update(data), decipher.final()]);
         const s = dec.toString('utf8');
-        // Extract JWT (starts with eyJ) or find longest printable suffix
+        // Extract JWT (starts with eyJ)
         const jwtStart = s.indexOf('eyJ');
         if (jwtStart >= 0) {
             const jwtMatch = s.substring(jwtStart).match(/^[A-Za-z0-9_\-\.]+/);
             return jwtMatch ? jwtMatch[0] : '';
         }
-        // Non-JWT: strip leading non-printable bytes
+        // Extract UUID (e.g., app_session_id) — decryption padding can leave garbage prefix
+        const uuidMatch = s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+        if (uuidMatch) return uuidMatch[0];
+        // Non-JWT, non-UUID: strip leading non-printable bytes
         let start = 0;
         while (start < s.length && s.charCodeAt(start) < 32) start++;
         return s.substring(start).replace(/[\x00-\x1f]+$/g, '');
@@ -1413,7 +1416,8 @@ function isJwtExpired(token) {
 }
 
 // Fetch JSON from Brazzers API with proper auth headers
-function fetchBrazzersApi(apiPath, accessToken, instanceToken, method) {
+// CRITICAL: Aylo API requires raw JWT — NO "Bearer" prefix on Authorization header
+function fetchBrazzersApi(apiPath, auth, method) {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(apiPath, 'https://site-api.project1service.com');
         const headers = {
@@ -1421,9 +1425,11 @@ function fetchBrazzersApi(apiPath, accessToken, instanceToken, method) {
             'Origin': 'https://site-ma.brazzers.com',
             'Referer': 'https://site-ma.brazzers.com/',
             'Accept': 'application/json',
-            'Instance': instanceToken
+            'Instance': auth.instanceToken
         };
-        if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
+        if (auth.accessToken) headers['Authorization'] = auth.accessToken;
+        if (auth.appSessionId) headers['X-APP-SESSION-ID'] = auth.appSessionId;
+        if (auth.externalIp) headers['X-Forwarded-For'] = auth.externalIp;
 
         const req = https.request({
             hostname: urlObj.hostname,
@@ -1483,13 +1489,14 @@ function refreshBrazzersAccessToken(instanceToken, refreshToken) {
 async function getBrazzersAuth() {
     const cookies = readChromeCookies('%brazzers%');
     const instanceToken = cookies.instance_token;
+    const appSessionId = cookies.app_session_id || '';
     if (!instanceToken || isJwtExpired(instanceToken)) {
         return { error: 'No valid Brazzers session. Open Chrome and log into site-ma.brazzers.com' };
     }
 
     let accessToken = cookies.access_token_ma;
     if (accessToken && !isJwtExpired(accessToken)) {
-        return { accessToken, instanceToken };
+        return { accessToken, instanceToken, appSessionId };
     }
 
     // Try refresh
@@ -1499,7 +1506,7 @@ async function getBrazzersAuth() {
         accessToken = await refreshBrazzersAccessToken(instanceToken, refreshToken);
         if (accessToken) {
             console.log('[Brazzers] Token refreshed successfully');
-            return { accessToken, instanceToken };
+            return { accessToken, instanceToken, appSessionId };
         }
     }
 
@@ -1507,30 +1514,54 @@ async function getBrazzersAuth() {
     return {
         instanceToken,
         accessToken: null,
+        appSessionId,
         error: 'Brazzers login expired (tokens last ~1hr). Log into site-ma.brazzers.com in Chrome, then try again.'
     };
 }
 
-// Extract best video URL from an Aylo files object (prefers HLS > highest MP4)
+// Extract best video URL from Aylo videos.full.files array
+// Format: [{type: "hls"|"http", format: "320p"|"480p"|..., urls: {view}, sizeBytes}, ...]
 function extractBestVideoUrl(files) {
-    if (!files) return null;
-    // Check for HLS
-    if (files.hls && files.hls.urls && files.hls.urls.view) return files.hls.urls.view;
-    // Collect all MP4 qualities, sort by resolution descending
-    const qualities = Object.keys(files)
-        .filter(k => k !== 'hls' && files[k] && files[k].urls && files[k].urls.view)
-        .sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
-    return qualities.length > 0 ? files[qualities[0]].urls.view : null;
+    if (!files || !Array.isArray(files) || files.length === 0) return null;
+    // Prefer HLS, sorted by resolution descending (pick highest quality)
+    const hlsFiles = files
+        .filter(f => f.type === 'hls' && f.urls && f.urls.view)
+        .sort((a, b) => (parseInt(b.format) || 0) - (parseInt(a.format) || 0));
+    if (hlsFiles.length > 0) return hlsFiles[0].urls.view;
+    // Fallback: highest resolution MP4
+    const mp4s = files
+        .filter(f => f.type === 'http' && f.urls && f.urls.view)
+        .sort((a, b) => (parseInt(b.format) || 0) - (parseInt(a.format) || 0));
+    return mp4s.length > 0 ? mp4s[0].urls.view : null;
+}
+
+// Detect external IP (cached) — needed for X-Forwarded-For header
+let _cachedExternalIp = null;
+function getExternalIp() {
+    if (_cachedExternalIp) return Promise.resolve(_cachedExternalIp);
+    return new Promise(resolve => {
+        https.get('https://api.ipify.org', res => {
+            let body = '';
+            res.on('data', c => body += c);
+            res.on('end', () => {
+                _cachedExternalIp = body.trim() || null;
+                resolve(_cachedExternalIp);
+            });
+        }).on('error', () => resolve(null));
+    });
 }
 
 // Scrape random Brazzers scenes (requires valid accessToken for full scenes)
-async function scrapeBrazzersScenes(count, accessToken, instanceToken) {
-    const offset = Math.floor(Math.random() * 500);
+async function scrapeBrazzersScenes(count, auth) {
+    // Get external IP for X-Forwarded-For header
+    auth.externalIp = await getExternalIp();
+
+    const offset = Math.floor(Math.random() * 200);
     const limit = Math.ceil(count * 1.5);
-    const apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=dateReleased&sortOrder=desc`;
+    const apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-dateReleased`;
 
     console.log('[Demo] Fetching Brazzers scenes (offset=' + offset + ')...');
-    const resp = await fetchBrazzersApi(apiPath, accessToken, instanceToken);
+    const resp = await fetchBrazzersApi(apiPath, auth);
 
     if (resp.status !== 200 || !resp.data.result) {
         throw new Error('Brazzers API error: ' + (resp.data.message || resp.status));
@@ -3283,7 +3314,7 @@ const server = http.createServer(async (req, res) => {
                     return;
                 }
 
-                const streams = await scrapeBrazzersScenes(count, auth.accessToken, auth.instanceToken);
+                const streams = await scrapeBrazzersScenes(count, auth);
                 console.log('[Demo] Brazzers: ' + streams.length + ' full scenes');
 
                 jsonOk(res, {

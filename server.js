@@ -1331,6 +1331,225 @@ async function scrapeXhamsterVideo(pageUrl) {
     return null;
 }
 
+// ── Brazzers/Aylo Integration ──────────────────────────────────────────────
+// Chrome cookie decryption (macOS) + Brazzers API helpers
+// Auth tokens: access_token_ma (~1hr), refresh_token_ma (~30min), instance_token (~2 days)
+// All stored as encrypted cookies in Chrome profile
+
+const CHROME_COOKIE_DB = path.join(__dirname, '.chrome-profile', 'Default', 'Cookies');
+let _chromeCookieKey = null; // Cached decryption key
+
+function getChromeCookieKey() {
+    if (_chromeCookieKey) return _chromeCookieKey;
+    try {
+        const { execSync } = require('child_process');
+        const chromePass = execSync(
+            'security find-generic-password -w -s "Chrome Safe Storage" -a "Chrome"',
+            { encoding: 'utf8' }
+        ).trim();
+        _chromeCookieKey = crypto.pbkdf2Sync(chromePass, 'saltysalt', 1003, 16, 'sha1');
+        return _chromeCookieKey;
+    } catch (e) {
+        console.error('[Brazzers] Failed to get Chrome cookie key:', e.message);
+        return null;
+    }
+}
+
+function decryptChromeCookie(hexStr) {
+    const key = getChromeCookieKey();
+    if (!key || !hexStr) return '';
+    try {
+        const enc = Buffer.from(hexStr, 'hex');
+        if (enc.length < 4) return '';
+        const data = enc.slice(3); // Strip "v10" prefix
+        const iv = Buffer.alloc(16, 0x20);
+        const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+        decipher.setAutoPadding(false);
+        const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+        const s = dec.toString('utf8');
+        // Extract JWT (starts with eyJ) or find longest printable suffix
+        const jwtStart = s.indexOf('eyJ');
+        if (jwtStart >= 0) {
+            const jwtMatch = s.substring(jwtStart).match(/^[A-Za-z0-9_\-\.]+/);
+            return jwtMatch ? jwtMatch[0] : '';
+        }
+        // Non-JWT: strip leading non-printable bytes
+        let start = 0;
+        while (start < s.length && s.charCodeAt(start) < 32) start++;
+        return s.substring(start).replace(/[\x00-\x1f]+$/g, '');
+    } catch (e) {
+        return '';
+    }
+}
+
+function readChromeCookies(hostPattern) {
+    try {
+        const { execSync } = require('child_process');
+        const rows = execSync(
+            `sqlite3 "${CHROME_COOKIE_DB}" "SELECT name, hex(encrypted_value) FROM cookies WHERE host_key LIKE '${hostPattern}'"`,
+            { encoding: 'utf8' }
+        ).trim();
+        const cookies = {};
+        for (const line of rows.split('\n')) {
+            if (!line) continue;
+            const [name, hex] = line.split('|');
+            const val = decryptChromeCookie(hex);
+            if (val) cookies[name] = val;
+        }
+        return cookies;
+    } catch (e) {
+        console.error('[Brazzers] Failed to read Chrome cookies:', e.message);
+        return {};
+    }
+}
+
+function isJwtExpired(token) {
+    try {
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        return !payload.exp || (payload.exp * 1000) < Date.now();
+    } catch (e) {
+        return true;
+    }
+}
+
+// Fetch JSON from Brazzers API with proper auth headers
+function fetchBrazzersApi(apiPath, accessToken, instanceToken, method) {
+    return new Promise((resolve, reject) => {
+        const urlObj = new URL(apiPath, 'https://site-api.project1service.com');
+        const headers = {
+            'User-Agent': BROWSER_UA,
+            'Origin': 'https://site-ma.brazzers.com',
+            'Referer': 'https://site-ma.brazzers.com/',
+            'Accept': 'application/json',
+            'Instance': instanceToken
+        };
+        if (accessToken) headers['Authorization'] = 'Bearer ' + accessToken;
+
+        const req = https.request({
+            hostname: urlObj.hostname,
+            path: urlObj.pathname + urlObj.search,
+            method: method || 'GET',
+            headers: headers
+        }, res => {
+            let body = '';
+            res.on('data', c => body += c);
+            res.on('end', () => {
+                try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
+                catch (e) { resolve({ status: res.statusCode, data: body }); }
+            });
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+// Try to refresh access_token using refresh_token via auth service
+function refreshBrazzersAccessToken(instanceToken, refreshToken) {
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify({ refreshToken: refreshToken });
+        const req = https.request({
+            hostname: 'auth-service.project1service.com',
+            path: '/v1/authenticate/renew',
+            method: 'POST',
+            headers: {
+                'User-Agent': BROWSER_UA,
+                'Origin': 'https://site-ma.brazzers.com',
+                'Referer': 'https://site-ma.brazzers.com/',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'Instance': instanceToken
+            }
+        }, res => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    if (res.statusCode === 200 && json.access_token) {
+                        resolve(json.access_token);
+                    } else {
+                        resolve(null);
+                    }
+                } catch (e) { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.write(body);
+        req.end();
+    });
+}
+
+// Get valid Brazzers auth tokens from Chrome cookies, refreshing if needed
+async function getBrazzersAuth() {
+    const cookies = readChromeCookies('%brazzers%');
+    const instanceToken = cookies.instance_token;
+    if (!instanceToken || isJwtExpired(instanceToken)) {
+        return { error: 'No valid Brazzers session. Open Chrome and log into site-ma.brazzers.com' };
+    }
+
+    let accessToken = cookies.access_token_ma;
+    if (accessToken && !isJwtExpired(accessToken)) {
+        return { accessToken, instanceToken };
+    }
+
+    // Try refresh
+    const refreshToken = cookies.refresh_token_ma;
+    if (refreshToken && !isJwtExpired(refreshToken)) {
+        console.log('[Brazzers] Access token expired, attempting refresh...');
+        accessToken = await refreshBrazzersAccessToken(instanceToken, refreshToken);
+        if (accessToken) {
+            console.log('[Brazzers] Token refreshed successfully');
+            return { accessToken, instanceToken };
+        }
+    }
+
+    // No usable auth — full scenes require login
+    return {
+        instanceToken,
+        accessToken: null,
+        error: 'Brazzers login expired (tokens last ~1hr). Log into site-ma.brazzers.com in Chrome, then try again.'
+    };
+}
+
+// Extract best video URL from an Aylo files object (prefers HLS > highest MP4)
+function extractBestVideoUrl(files) {
+    if (!files) return null;
+    // Check for HLS
+    if (files.hls && files.hls.urls && files.hls.urls.view) return files.hls.urls.view;
+    // Collect all MP4 qualities, sort by resolution descending
+    const qualities = Object.keys(files)
+        .filter(k => k !== 'hls' && files[k] && files[k].urls && files[k].urls.view)
+        .sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+    return qualities.length > 0 ? files[qualities[0]].urls.view : null;
+}
+
+// Scrape random Brazzers scenes (requires valid accessToken for full scenes)
+async function scrapeBrazzersScenes(count, accessToken, instanceToken) {
+    const offset = Math.floor(Math.random() * 500);
+    const limit = Math.ceil(count * 1.5);
+    const apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=dateReleased&sortOrder=desc`;
+
+    console.log('[Demo] Fetching Brazzers scenes (offset=' + offset + ')...');
+    const resp = await fetchBrazzersApi(apiPath, accessToken, instanceToken);
+
+    if (resp.status !== 200 || !resp.data.result) {
+        throw new Error('Brazzers API error: ' + (resp.data.message || resp.status));
+    }
+
+    const streams = [];
+    for (const scene of resp.data.result) {
+        const videos = scene.videos || {};
+        // With access_token: videos.full.files has HLS/MP4 URLs for the full scene
+        const url = (videos.full && extractBestVideoUrl(videos.full.files)) || null;
+        if (url) {
+            streams.push({ url, title: scene.title || 'Brazzers Scene' });
+        }
+        if (streams.length >= count) break;
+    }
+
+    return streams;
+}
+
 // Rewrite URLs in an m3u8 manifest to route through our proxy
 function rewriteM3u8(content, manifestUrl) {
     return content.split('\n').map(line => {
@@ -3020,11 +3239,69 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // GET /api/demo/auth-status - Check Brazzers login status
+    if (pathname === '/api/demo/auth-status' && req.method === 'GET') {
+        const auth = await getBrazzersAuth();
+        jsonOk(res, {
+            brazzers: {
+                loggedIn: !!auth.accessToken,
+                hasSession: !!auth.instanceToken,
+                warning: auth.warning || auth.error || null
+            }
+        });
+        return;
+    }
+
     // GET /api/demo/streams - Scrape random streams for xfill demo
+    // ?source=xhamster|brazzers (default: brazzers if auth available, else xhamster)
+    // ?count=16
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
         const count = parseInt(url.searchParams.get('count')) || 16;
-        const CONCURRENCY = 6;
+        let source = url.searchParams.get('source') || 'auto';
 
+        // Auto-detect: prefer Brazzers if logged in, fall back to xHamster
+        if (source === 'auto') {
+            const auth = await getBrazzersAuth();
+            source = auth.accessToken ? 'brazzers' : 'xhamster';
+            if (!auth.accessToken && auth.instanceToken) {
+                // Has session but no auth — offer brazzers trailers or xhamster
+                source = 'xhamster'; // Full xHamster > Brazzers trailers
+            }
+        }
+
+        if (source === 'brazzers') {
+            try {
+                const auth = await getBrazzersAuth();
+                if (!auth.accessToken) {
+                    jsonOk(res, {
+                        streams: [],
+                        source: 'brazzers',
+                        fetched: 0,
+                        failed: 0,
+                        error: auth.error || 'Brazzers login required'
+                    });
+                    return;
+                }
+
+                const streams = await scrapeBrazzersScenes(count, auth.accessToken, auth.instanceToken);
+                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes');
+
+                jsonOk(res, {
+                    streams: streams.slice(0, count),
+                    source: 'brazzers',
+                    fetched: streams.length,
+                    failed: 0,
+                    authenticated: true
+                });
+            } catch (err) {
+                console.error('[Demo] Brazzers error:', err.message);
+                jsonError(res, 500, 'Failed to fetch Brazzers streams: ' + err.message);
+            }
+            return;
+        }
+
+        // Default: xHamster scraping
+        const CONCURRENCY = 6;
         try {
             const videoPageUrls = await scrapeXhamsterListing(count);
             console.log('[Demo] Found ' + videoPageUrls.length

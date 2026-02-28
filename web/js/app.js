@@ -1525,18 +1525,23 @@ const PlexdApp = (function() {
      */
     /**
      * xfill - Load random demo streams from server scraper
+     * @param {string} source - 'auto', 'brazzers', or 'xhamster'
+     * @param {number} count - number of streams to load
      */
     var _xfillLoading = false;
-    async function xfill(count) {
+    async function xfill(source, count) {
         if (_xfillLoading) return;
+        // Handle xfill(16) shorthand — single number arg means count
+        if (typeof source === 'number') { count = source; source = 'auto'; }
         _xfillLoading = true;
+        source = source || 'auto';
         count = count || 16;
 
         var btn = document.getElementById('xfill-btn');
         if (btn) btn.textContent = 'Loading...';
 
         try {
-            var resp = await fetch('/api/demo/streams?count=' + count);
+            var resp = await fetch('/api/demo/streams?count=' + count + '&source=' + source);
             var data = await resp.json();
 
             if (!data.streams || data.streams.length === 0) {
@@ -1564,12 +1569,10 @@ const PlexdApp = (function() {
             });
             if (deferred.length > 0) staggerActivate(deferred);
 
-            showMessage(
-                'Added ' + data.streams.length + ' demo streams'
-                + (data.failed
-                    ? ' (' + data.failed + ' failed)' : ''),
-                'success'
-            );
+            var msg = 'Added ' + data.streams.length + ' ' + (data.source || 'demo') + ' streams';
+            if (data.failed) msg += ' (' + data.failed + ' failed)';
+            if (data.warning) msg += ' — ' + data.warning;
+            showMessage(msg, data.warning ? 'warning' : 'success');
         } catch (err) {
             console.error('[xfill] Error:', err);
             showMessage(

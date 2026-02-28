@@ -3021,7 +3021,7 @@ const server = http.createServer(async (req, res) => {
 
     // GET /api/demo/streams - Scrape random streams for xfill demo
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
-        const count = parseInt(params.get('count')) || 16;
+        const count = parseInt(url.searchParams.get('count')) || 16;
         const CONCURRENCY = 6;
 
         try {

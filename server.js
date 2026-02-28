@@ -1246,6 +1246,7 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
 }
 
 // Promise wrapper around fetchUrl for scraping (returns full body as string)
+const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 function fetchPage(url) {
     return new Promise((resolve, reject) => {
         fetchUrl(url, (err, res) => {
@@ -1258,7 +1259,7 @@ function fetchPage(url) {
             res.on('data', chunk => body += chunk);
             res.on('end', () => resolve(body));
             res.on('error', reject);
-        });
+        }, 0, { 'User-Agent': BROWSER_UA });
     });
 }
 
@@ -1270,8 +1271,8 @@ async function scrapeXhamsterListing(count) {
 
     const html = await fetchPage(listUrl);
 
-    // Extract video page URLs from listing
-    const linkPattern = /href="(https:\/\/xhamster\.com\/videos\/[^"]+)"/g;
+    // Extract video page URLs from listing (exclude /my/ nav links)
+    const linkPattern = /href="(https:\/\/xhamster\.com\/videos\/[a-z0-9][\w-]+-\w+)"/gi;
     const urls = [];
     const seen = new Set();
     let match;
@@ -1290,10 +1291,10 @@ async function scrapeXhamsterListing(count) {
 async function scrapeXhamsterVideo(pageUrl) {
     const html = await fetchPage(pageUrl);
 
-    // Extract title
-    const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+    // Extract title (xHamster uses <title > with space before >)
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const title = titleMatch
-        ? titleMatch[1].replace(/ - xHamster.*$/i, '').trim()
+        ? titleMatch[1].replace(/\s*[\|:]\s*xHamster.*$/i, '').trim()
         : 'Untitled';
 
     // Try window.initials JSON (primary method)

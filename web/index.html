@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/plexd.css?v=102">
+    <link rel="stylesheet" href="css/plexd.css?v=103">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -85,6 +85,7 @@
                 <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list [S]">Strms</button>
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
+                <button id="xfill-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.xfill()" title="Load 16 random demo streams">xfill</button>
             </div>
         </header>
 
@@ -177,9 +178,9 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
     <!-- Scripts -->
-    <script src="js/grid.js?v=102"></script>
-    <script src="js/stream.js?v=102"></script>
-    <script src="js/moments.js?v=102"></script>
-    <script src="js/app.js?v=102"></script>
+    <script src="js/grid.js?v=103"></script>
+    <script src="js/stream.js?v=103"></script>
+    <script src="js/moments.js?v=103"></script>
+    <script src="js/app.js?v=103"></script>
 </body>
 </html>

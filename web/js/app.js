@@ -898,28 +898,8 @@ const PlexdApp = (function() {
         });
         updateMomentBadges();
 
-        // Resume extraction polling / queue unextracted moments
-        setTimeout(function() {
-            PlexdMoments.getAllMoments().forEach(function(mom) {
-                if (!mom.extracted && mom.sourceUrl && !mom.sourceUrl.startsWith('blob:')) {
-                    fetch('/api/moments/status?momentId=' + encodeURIComponent(mom.id))
-                        .then(function(r) { return r.json(); })
-                        .then(function(data) {
-                            if (data.status === 'complete' && data.extractedUrl) {
-                                PlexdMoments.updateMoment(mom.id, { extracted: true, extractedPath: data.extractedUrl });
-                            } else if (data.status === 'queued' || data.status === 'extracting') {
-                                startExtractionPoller(mom.id);
-                            } else if (data.status === 'none') {
-                                // Never extracted — queue it now
-                                var stream = resolveMomentStream(mom);
-                                if (stream) queueMomentExtraction(mom, stream);
-                            }
-                        }).catch(function(err) {
-                            console.warn('[Moments] Startup extraction check failed for', mom.id, ':', err.message);
-                        });
-                }
-            });
-        }, 3000);
+        // Extraction status checks disabled — server reconciles on startup,
+        // client gets updated extracted flags via moments sync.
 
         updateModeIndicator();
 
@@ -1543,7 +1523,70 @@ const PlexdApp = (function() {
      * This avoids Chrome's 6-connection HTTP/1.1 limit by letting each batch finish
      * buffering before starting the next one.
      */
+    /**
+     * xfill - Load random demo streams from server scraper
+     */
+    var _xfillLoading = false;
+    async function xfill(count) {
+        if (_xfillLoading) return;
+        _xfillLoading = true;
+        count = count || 16;
+
+        var btn = document.getElementById('xfill-btn');
+        if (btn) btn.textContent = 'Loading...';
+
+        try {
+            var resp = await fetch('/api/demo/streams?count=' + count);
+            var data = await resp.json();
+
+            if (!data.streams || data.streams.length === 0) {
+                showMessage(
+                    data.error || 'No demo streams found. Try again?',
+                    'error'
+                );
+                return;
+            }
+
+            var IMMEDIATE = 6;
+            for (var i = 0; i < data.streams.length; i++) {
+                addStreamSilent(
+                    data.streams[i].url,
+                    i >= IMMEDIATE ? { deferred: true } : undefined
+                );
+            }
+            updateLayout();
+
+            // Stagger-activate deferred streams
+            // (same pattern as session restore)
+            var allStreams = PlexdStream.getAllStreams();
+            var deferred = allStreams.filter(function(s) {
+                return s.deferred;
+            });
+            if (deferred.length > 0) staggerActivate(deferred);
+
+            showMessage(
+                'Added ' + data.streams.length + ' demo streams'
+                + (data.failed
+                    ? ' (' + data.failed + ' failed)' : ''),
+                'success'
+            );
+        } catch (err) {
+            console.error('[xfill] Error:', err);
+            showMessage(
+                'Failed to load demo streams: ' + err.message,
+                'error'
+            );
+        } finally {
+            _xfillLoading = false;
+            if (btn) btn.textContent = 'xfill';
+        }
+    }
+
+    var _staggerCancelled = false;
+    function cancelStagger() { _staggerCancelled = true; }
+
     function staggerActivate(streamList) {
+        _staggerCancelled = false;
         var BATCH = 6;
         var FALLBACK_MS = 2000;
         var idx = 0;
@@ -1552,6 +1595,7 @@ const PlexdApp = (function() {
         console.log('[Plexd] staggerActivate: ' + streamList.length + ' deferred streams in ' + totalBatches + ' batches of ' + BATCH);
 
         function activateBatch() {
+            if (_staggerCancelled) { console.log('[Plexd] stagger cancelled'); return; }
             batchNum++;
             var end = Math.min(idx + BATCH, streamList.length);
             var batch = [];
@@ -2912,92 +2956,43 @@ const PlexdApp = (function() {
         vid.playsInline = true;
         vid.preload = 'auto';
         vid.crossOrigin = 'anonymous';
-        vid.src = mom.extractedPath;
         vid._plexdExtracted = true;
         vid.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
         document.body.appendChild(vid);
         _extractedVideos[mom.id] = vid;
+        vid.src = mom.extractedPath;
         return { video: vid, id: 'extracted_' + mom.id, _isExtracted: true };
     }
 
     function resolveMomentStream(mom) {
-        // Find the loaded stream for this moment (for direct video element reuse)
-        var stream = PlexdStream.getStream(mom.streamId);
-        if (stream && stream.video) return stream;
-        var all = PlexdStream.getAllStreams();
-        for (var i = 0; i < all.length; i++) {
-            var sUrl = all[i].serverUrl || all[i].url;
-            if (sUrl === mom.sourceUrl) return all[i];
-        }
-        // Fallback: use extracted MP4 clip when source stream not loaded
+        // 1. Extracted clip on disk — always preferred (local, fast)
         if (mom.extracted && mom.extractedPath) {
             return _makeExtractedVideoSource(mom);
         }
-        // Last resort: create temporary video from source URL (server files, HLS)
-        if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:')) {
-            return _makeSourceVideoFallback(mom);
+        // 2. Reuse already-loaded stream (zero new connections)
+        function isVideoUsable(v) {
+            return v && !v.error && v.networkState !== 3 && v.readyState >= 1;
         }
-        return null;
-    }
-
-    function _makeSourceVideoFallback(mom) {
-        var key = 'src_' + mom.id;
-        if (_extractedVideos[key]) {
-            return { video: _extractedVideos[key], id: key, _isExtracted: false };
+        var stream = PlexdStream.getStream(mom.streamId);
+        if (stream && stream.video && isVideoUsable(stream.video)) return stream;
+        var all = PlexdStream.getAllStreams();
+        for (var i = 0; i < all.length; i++) {
+            var sUrl = all[i].serverUrl || all[i].url;
+            if (sUrl === mom.sourceUrl && isVideoUsable(all[i].video)) return all[i];
         }
-        var vid = document.createElement('video');
-        vid.muted = true;
-        vid.playsInline = true;
-        vid.preload = 'auto';
-        vid.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
-        document.body.appendChild(vid);
-        _extractedVideos[key] = vid;
-
-        var url = mom.sourceUrl;
-        var fileId = mom.sourceFileId || extractServerFileId(url);
-
-        // Server files: try HLS first (originals deleted after transcode), fall back to raw
-        if (fileId && !url.includes('.m3u8')) {
-            var hlsUrl = '/api/hls/' + encodeURIComponent(fileId) + '/playlist.m3u8';
-            if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-                var hls = new Hls();
-                hls.loadSource(hlsUrl);
-                hls.attachMedia(vid);
-                vid._hlsInstance = hls;
-                // If HLS fails (no transcode exists), fall back to raw file URL
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                    if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                        console.log('[MomentFallback] HLS not available for', fileId, '— trying raw URL');
-                        hls.destroy();
-                        vid._hlsInstance = null;
-                        vid.src = url;
-                    }
-                });
-            } else if (vid.canPlayType('application/vnd.apple.mpegurl')) {
-                // Safari native HLS
-                vid.src = hlsUrl;
-                vid.addEventListener('error', function() {
-                    console.log('[MomentFallback] Native HLS failed for', fileId, '— trying raw URL');
-                    vid.src = url;
-                }, { once: true });
-            } else {
-                vid.src = url;
+        // 3. Try local clip (server may have it even if client flag is stale)
+        var clipUrl = '/api/moments/' + mom.id + '/clip.mp4';
+        var tempMom = { id: mom.id, extractedPath: clipUrl };
+        var source = _makeExtractedVideoSource(tempMom);
+        // If clip 404s, queue extraction (download once from Stash, save locally)
+        source.video.addEventListener('error', function() {
+            if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
+                mom._extractionQueued = true;
+                console.log('[Moments] Clip missing for', mom.id, '— queuing extraction');
+                queueMomentExtraction(mom, null);
             }
-        } else {
-            // External URL — proxy all cross-origin URLs (HLS + plain video)
-            var proxied = PlexdStream.getProxiedHlsUrl(url);
-            // Only enable CORS mode when routed through our proxy (server returns CORS headers)
-            if (proxied.startsWith('/api/proxy/')) vid.crossOrigin = 'anonymous';
-            if (proxied.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                var hls2 = new Hls();
-                hls2.loadSource(proxied);
-                hls2.attachMedia(vid);
-                vid._hlsInstance = hls2;
-            } else {
-                vid.src = proxied;
-            }
-        }
-        return { video: vid, id: key, _isExtracted: false };
+        }, { once: true });
+        return source;
     }
 
     // Repair missing thumbnails: scan moments without thumbnails, try to capture from loaded streams
@@ -3025,7 +3020,7 @@ const PlexdApp = (function() {
         });
         if (repaired > 0) {
             console.log('[Moments] Repaired ' + repaired + ' missing thumbnails');
-            renderCurrentBrowserMode();
+            if (momentBrowserState.mode <= 1) renderCurrentBrowserMode();
         }
         // Retry if streams are still loading (back off: 500ms, 2s, 5s)
         if (pending > 0 && retries > 0) {
@@ -3091,8 +3086,8 @@ const PlexdApp = (function() {
                             thumbnailDataUrl: null // clear client-side thumb — server generates from clip
                         });
                         console.log('[Moments] Extraction complete:', momentId);
-                        // Refresh browser so poster images load server-generated thumbnails
-                        if (momentBrowserState.open) renderCurrentBrowserMode();
+                        // Refresh Grid/Wall so poster images update — skip Player/Collage (destroys playback)
+                        if (momentBrowserState.open && momentBrowserState.mode <= 1) renderCurrentBrowserMode();
                     } else if (data.status === 'failed') {
                         clearInterval(_extractionPollers[momentId]);
                         delete _extractionPollers[momentId];
@@ -3131,7 +3126,11 @@ const PlexdApp = (function() {
     }
 
     function showMomentBrowser() {
-        // Pause all main streams (remember which were playing to resume on close)
+        // Stop stagger from activating more streams while browser is open
+        cancelStagger();
+        // Pause remote control polling — frees 7 req/sec from the 6-connection pool
+        if (typeof PlexdRemote !== 'undefined') PlexdRemote.pausePolling();
+        // Pause all main streams — keep buffered data for resolveMomentStream reuse
         momentBrowserState._pausedStreams = [];
         PlexdStream.getAllStreams().forEach(function(s) {
             if (s.video && !s.video.paused) {
@@ -3473,6 +3472,7 @@ const PlexdApp = (function() {
         Object.keys(_extractedVideos).forEach(function(momentId) {
             var vid = _extractedVideos[momentId];
             if (vid._hlsInstance) { vid._hlsInstance.destroy(); vid._hlsInstance = null; }
+            if (vid._blobUrl) { URL.revokeObjectURL(vid._blobUrl); vid._blobUrl = null; }
             vid.pause();
             vid.removeAttribute('src');
             vid.load();
@@ -3866,10 +3866,8 @@ const PlexdApp = (function() {
                 }
             }
             if (!sourceStream || !sourceStream.video) {
-                // Create temporary source video from server
-                var fallback = _makeSourceVideoFallback(mom);
-                if (!fallback || !fallback.video) return false;
-                sourceStream = fallback;
+                // No loaded stream available — edit within extracted clip bounds only
+                return false;
             }
             // Save original extracted vid, swap to source
             ref._origExtractedVid = ref.sourceVid;
@@ -4307,13 +4305,12 @@ const PlexdApp = (function() {
     }
 
     // Reel canvas mirror state
-    var reelMirror = { rafId: null, sourceVid: null, loopHandler: null, prevMuteStates: null };
+    var reelMirror = { rafId: null, sourceVid: null, loopHandler: null, prevMuteStates: null, generation: 0 };
 
     function stopReelMirror() {
         if (reelMirror.rafId) { cancelAnimationFrame(reelMirror.rafId); reelMirror.rafId = null; }
         // Clean up crescendo handler properly (addEventListener-based)
         teardownCrescendo();
-        // Restore mute states
         // Pause extracted video (don't let it buffer in background)
         if (reelMirror.sourceVid && reelMirror.sourceVid._plexdExtracted) {
             reelMirror.sourceVid.pause();
@@ -4384,6 +4381,7 @@ const PlexdApp = (function() {
             var img = document.createElement('img');
             img.src = momentThumbUrl(mom);
             img.draggable = false;
+            img.onerror = function() { this.style.display = 'none'; thumb.style.background = '#333'; };
             thumb.appendChild(img);
             // Drag-to-reorder
             setupDragToReorder(thumb, idx, strip);
@@ -4413,14 +4411,18 @@ const PlexdApp = (function() {
 
         // Stop previous mirror
         stopReelMirror();
+        // Generation counter: async callbacks check this to skip stale completions
+        var gen = ++reelMirror.generation;
 
         var canvas = document.getElementById('moment-reel-canvas');
 
         // Show thumbnail immediately so canvas is never black
-        if (canvas && mom.thumbnailDataUrl) {
+        var thumbUrl = mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
+        if (canvas) {
             var thumbCtx = canvas.getContext('2d');
             var thumbImg = new Image();
             thumbImg.onload = function() {
+                if (reelMirror.generation !== gen) return; // stale
                 // Only draw if we haven't started the live mirror yet
                 if (!reelMirror.sourceVid || (reelMirror.sourceVid && reelMirror.sourceVid.readyState < 2)) {
                     canvas.width = thumbImg.width || 1280;
@@ -4428,65 +4430,77 @@ const PlexdApp = (function() {
                     thumbCtx.drawImage(thumbImg, 0, 0, canvas.width, canvas.height);
                 }
             };
-            thumbImg.src = mom.thumbnailDataUrl;
+            thumbImg.src = thumbUrl;
+        }
+
+        function startCanvasMirror(vid) {
+            if (!canvas || reelMirror.generation !== gen) return;
+            var ctx = canvas.getContext('2d');
+            canvas.width = vid.videoWidth || 1280;
+            canvas.height = vid.videoHeight || 720;
+            reelMirror.sourceVid = vid;
+            function drawFrame() {
+                if (reelMirror.generation !== gen || !momentBrowserState.open || momentBrowserState.mode !== 2) {
+                    stopReelMirror();
+                    return;
+                }
+                if (vid.readyState >= 2) {
+                    if (canvas.width !== vid.videoWidth && vid.videoWidth > 0) {
+                        canvas.width = vid.videoWidth;
+                        canvas.height = vid.videoHeight;
+                    }
+                    ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+                }
+                reelMirror.rafId = requestAnimationFrame(drawFrame);
+            }
+            reelMirror.rafId = requestAnimationFrame(drawFrame);
         }
 
         var loadedStream = resolveMomentStream(mom);
         if (loadedStream && loadedStream.video) {
             var sourceVid = loadedStream.video;
             var isExtracted = !!loadedStream._isExtracted;
-            var seekTarget = isExtracted ? 0 : mom.start;
 
-            // Seek + play: immediate if ready, deferred if still loading
-            if (sourceVid.readyState >= 1) {
-                sourceVid.currentTime = seekTarget;
-                if (sourceVid.paused) sourceVid.play().catch(function() {});
+            if (isExtracted) {
+                var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
+                sourceVid.src = clipUrl;
+                sourceVid.currentTime = 0;
+                sourceVid.loop = true;
+                sourceVid.volume = 0;
+                sourceVid.muted = false;
+                // play() triggers loading (needed with preload='none')
+                sourceVid.play().then(function() {
+                    if (reelMirror.generation === gen) sourceVid.volume = 1;
+                }).catch(function() {});
+                if (sourceVid.readyState >= 2) {
+                    startCanvasMirror(sourceVid);
+                } else {
+                    sourceVid.addEventListener('canplay', function reelCanPlay() {
+                        sourceVid.removeEventListener('canplay', reelCanPlay);
+                        if (reelMirror.generation !== gen) return;
+                        startCanvasMirror(sourceVid);
+                    });
+                }
             } else {
-                sourceVid.addEventListener('loadedmetadata', function() {
+                // Loaded stream: seek + play + mirror immediately
+                var seekTarget = mom.start;
+                if (sourceVid.readyState >= 1) {
                     sourceVid.currentTime = seekTarget;
-                    sourceVid.play().catch(function() {});
-                }, { once: true });
-            }
-
-            // Solo audio: mute all others, unmute source
-            // For extracted videos, just unmute the extracted source directly
-            if (!isExtracted) {
+                    if (sourceVid.paused) sourceVid.play().catch(function() {});
+                } else {
+                    sourceVid.addEventListener('loadedmetadata', function() {
+                        if (reelMirror.generation !== gen) return;
+                        sourceVid.currentTime = seekTarget;
+                        sourceVid.play().catch(function() {});
+                    }, { once: true });
+                }
                 reelMirror.prevMuteStates = {};
                 PlexdStream.getAllStreams().forEach(function(s) {
                     reelMirror.prevMuteStates[s.id] = s.video.muted;
                     s.video.muted = (s.id !== loadedStream.id);
                 });
-            }
-            sourceVid.muted = false;
-
-            // Canvas mirror — draw source frames with no new network connections
-            if (canvas) {
-                var ctx = canvas.getContext('2d');
-                canvas.width = sourceVid.videoWidth || 1280;
-                canvas.height = sourceVid.videoHeight || 720;
-                reelMirror.sourceVid = sourceVid;
-                function drawFrame() {
-                    if (!momentBrowserState.open || momentBrowserState.mode !== 2) {
-                        stopReelMirror();
-                        return;
-                    }
-                    if (sourceVid.readyState >= 2) {
-                        // Update canvas size once video metadata is ready
-                        if (canvas.width !== sourceVid.videoWidth && sourceVid.videoWidth > 0) {
-                            canvas.width = sourceVid.videoWidth;
-                            canvas.height = sourceVid.videoHeight;
-                        }
-                        ctx.drawImage(sourceVid, 0, 0, canvas.width, canvas.height);
-                    }
-                    reelMirror.rafId = requestAnimationFrame(drawFrame);
-                }
-                reelMirror.rafId = requestAnimationFrame(drawFrame);
-            }
-
-            // Crescendo loop on source video, or native loop for extracted clips
-            if (isExtracted) {
-                sourceVid.loop = true;
-            } else {
+                sourceVid.muted = false;
+                startCanvasMirror(sourceVid);
                 setupCrescendo(sourceVid, mom);
             }
         }
@@ -4790,8 +4804,6 @@ const PlexdApp = (function() {
         if (popup) {
             popup.querySelectorAll('video').forEach(function(v) {
                 v.pause();
-                // Revoke blob URL to free memory
-                if (v._blobUrl) { URL.revokeObjectURL(v._blobUrl); v._blobUrl = null; }
                 v.removeAttribute('src');
                 v.load(); // Reset media element
             });
@@ -4911,8 +4923,9 @@ const PlexdApp = (function() {
             panel.appendChild(popupTags);
         }
 
-        // Video element — fetch clip as blob first, then play via blob URL.
-        // This bypasses Chrome's media URL resolution which can spuriously error.
+        // Video element — stream directly via src (supports HTTP range requests).
+        // Previous fetch-to-blob approach downloaded entire file into RAM before playing,
+        // causing memory bloat, delayed playback, and failures with large clips (50-80MB).
         var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
         var video = document.createElement('video');
         video.className = 'moment-popup-video';
@@ -4922,50 +4935,22 @@ const PlexdApp = (function() {
         video.poster = momentThumbUrl(mom);
         panel.appendChild(video);
 
-        console.log('[PopupPlayer] Fetching clip:', clipUrl);
+        console.log('[PopupPlayer] Playing clip:', clipUrl);
 
-        fetch(clipUrl).then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.blob();
-        }).then(function(blob) {
-            // Check popup wasn't closed while we were fetching
-            if (!document.getElementById('moment-popup-player')) return;
-            var blobUrl = URL.createObjectURL(blob);
-            video._blobUrl = blobUrl; // Store for cleanup
-            video.src = blobUrl;
-            console.log('[PopupPlayer] Blob ready, size:', blob.size, 'playing...');
-            video.play().catch(function(e) {
-                console.warn('[PopupPlayer] play() rejected:', e.message);
-            });
-        }).catch(function(err) {
-            console.log('[PopupPlayer] Fetch failed:', err.message, '— trying source URL');
-            // Fall back to source URL (original stream) — use crescendo for time-range looping
-            video.loop = false;
-            var videoUrl = mom.sourceUrl;
-            if (!videoUrl || videoUrl.startsWith('blob:')) {
-                var infoEl = popup.querySelector('.moment-popup-info');
-                if (infoEl) infoEl.textContent = 'Clip not available \u2014 source expired';
-                return;
-            }
-            var proxiedUrl = PlexdStream.getProxiedHlsUrl(videoUrl);
-            if (proxiedUrl.startsWith('/api/proxy/')) video.crossOrigin = 'anonymous';
-            if (proxiedUrl.includes('.m3u8') && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                var popupHls = new Hls();
-                popupHls.loadSource(proxiedUrl);
-                popupHls.attachMedia(video);
-                popupHls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.currentTime = mom.peak || mom.start;
-                    video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
-                });
-                popupMirror._hlsInstance = popupHls;
+        video.src = clipUrl;
+        video.play().catch(function() {});
+        // If clip doesn't exist — queue extraction (download once), show message
+        video.addEventListener('error', function popupClipError() {
+            video.removeEventListener('error', popupClipError);
+            var infoEl = popup.querySelector('.moment-popup-info');
+            if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
+                mom._extractionQueued = true;
+                console.log('[PopupPlayer] Clip missing — queuing extraction for', mom.id);
+                queueMomentExtraction(mom, null);
+                if (infoEl) infoEl.textContent = 'Extracting clip\u2026 will be ready next time';
             } else {
-                video.src = proxiedUrl;
-                video.addEventListener('canplay', function() {
-                    video.currentTime = mom.peak || mom.start;
-                    video.play().catch(function(e) { console.warn('[Plexd] Popup play failed:', e.message); });
-                }, { once: true });
+                if (infoEl) infoEl.textContent = 'Clip not available';
             }
-            setupCrescendo(video, mom);
         });
 
         var actions = document.createElement('div');
@@ -5598,6 +5583,30 @@ const PlexdApp = (function() {
         // Let K fall through to main handler for moment capture from streams
         if (e.key === 'k' || e.key === 'K') return false;
 
+        // Seek controls — same keys as main app, targeting moment video
+        switch (e.key) {
+        case ',':
+        case '.':
+        case '<':
+        case '>': {
+            e.preventDefault();
+            var seekAmounts = { ',': -10, '.': 10, '<': -60, '>': 60 };
+            var seekVid = momentBrowserState.popupOpen ? popupMirror.sourceVid : (mode === 2 ? reelMirror.sourceVid : null);
+            if (seekVid) seekVid.currentTime = Math.max(0, seekVid.currentTime + seekAmounts[e.key]);
+            return true;
+        }
+        case ';':
+        case "'": {
+            e.preventDefault();
+            var frameVid = momentBrowserState.popupOpen ? popupMirror.sourceVid : (mode === 2 ? reelMirror.sourceVid : null);
+            if (frameVid) {
+                frameVid.pause();
+                frameVid.currentTime += (e.key === ';' ? -1/30 : 1/30);
+            }
+            return true;
+        }
+        }
+
         // Consume all other keys when browser is open
         e.preventDefault();
         return true;
@@ -5622,6 +5631,7 @@ const PlexdApp = (function() {
         Object.keys(_extractedVideos).forEach(function(momentId) {
             var vid = _extractedVideos[momentId];
             if (vid._hlsInstance) { vid._hlsInstance.destroy(); vid._hlsInstance = null; }
+            if (vid._blobUrl) { URL.revokeObjectURL(vid._blobUrl); vid._blobUrl = null; }
             vid.pause();
             vid.removeAttribute('src');
             vid.load();
@@ -5636,6 +5646,8 @@ const PlexdApp = (function() {
             });
             momentBrowserState._pausedStreams = null;
         }
+        // Resume remote control polling
+        if (typeof PlexdRemote !== 'undefined') PlexdRemote.resumePolling();
     }
 
     // Backward compat aliases
@@ -8261,6 +8273,8 @@ const PlexdApp = (function() {
             if (!shouldSaveStream(s)) return;
             // Prefer serverUrl (HLS/uploaded) over blob/raw URL
             const url = s.serverUrl || s.url;
+            // Skip malformed URLs (must be http://, https://, or local path)
+            if (url && !url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('/')) return;
             const key = urlEqualityKey(url);
             const fileId = extractServerFileId(url);
             if (seen.has(key)) return;
@@ -11640,7 +11654,9 @@ const PlexdApp = (function() {
         stopTranscodePollForStream,
         // Help
         showShortcutsModal,
-        jumpToRandomMoment
+        jumpToRandomMoment,
+        // Demo
+        xfill
     };
 })();
 
@@ -12052,6 +12068,8 @@ const PlexdRemote = (function() {
             url: s.url,
             // Include server URL for remote playback (local files use blob: URLs which don't work remotely)
             serverUrl: s.serverUrl || null,
+            // Proxied URL for remote playback (cross-origin streams need CORS proxy)
+            sourceUrl: s.sourceUrl || null,
             state: s.state,
             paused: s.video ? s.video.paused : true,
             muted: s.video ? s.video.muted : true,
@@ -12145,11 +12163,23 @@ const PlexdRemote = (function() {
         }
     }
 
+    function pausePolling() {
+        if (commandPollInterval) { clearInterval(commandPollInterval); commandPollInterval = null; }
+        if (stateUpdateInterval) { clearInterval(stateUpdateInterval); stateUpdateInterval = null; }
+    }
+
+    function resumePolling() {
+        if (!commandPollInterval) startCommandPolling();
+        if (!stateUpdateInterval) startStateUpdates();
+    }
+
     return {
         init,
         sendState,
         getState,
-        stop
+        stop,
+        pausePolling,
+        resumePolling
     };
 })();
 

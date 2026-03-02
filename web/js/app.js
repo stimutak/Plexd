@@ -1535,7 +1535,7 @@ const PlexdApp = (function() {
         if (typeof source === 'number') { count = source; source = 'auto'; }
         _xfillLoading = true;
         source = source || 'auto';
-        count = count || 16;
+        count = count || 6;
 
         var btn = document.getElementById('xfill-btn');
         if (btn) btn.textContent = 'Loading...';

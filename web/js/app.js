@@ -11781,6 +11781,69 @@ const PlexdApp = (function() {
         showMessage('Rewound ' + count + ' stream' + (count !== 1 ? 's' : '') + ' to start', 'success');
     }
 
+    // ========================================
+    // Cast UI
+    // ========================================
+
+    function toggleCast() {
+        if (typeof PlexdCast === 'undefined') {
+            showMessage('Cast not available');
+            return;
+        }
+        var cState = PlexdCast.getState();
+        if (cState.active) {
+            PlexdCast.stopCasting();
+            showMessage('Cast disconnected');
+        } else if (cState.available) {
+            var target = PlexdStream.getSelectedStream() || PlexdStream.getFullscreenStream();
+            if (target) {
+                PlexdCast.castStream(target.id);
+            } else {
+                showMessage('Select a stream to cast');
+            }
+        } else {
+            showMessage('No cast devices. Use macOS Screen Mirroring.');
+        }
+    }
+
+    function updateCastStatusBar(state) {
+        var bar = document.getElementById('cast-status-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'cast-status-bar';
+            bar.className = 'plexd-cast-status';
+            bar.addEventListener('click', function() { PlexdCast.stopCasting(); });
+            var app = document.querySelector('.plexd-app');
+            if (app) app.appendChild(bar);
+        }
+
+        if (state.active) {
+            var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === state.streamId; });
+            var title = stream ? (stream.url.split('/').pop() || 'Stream') : 'Stream';
+            bar.textContent = '📺 Casting "' + title + '" to ' + state.targetName + ' — click to disconnect';
+            bar.classList.add('visible');
+        } else {
+            bar.classList.remove('visible');
+        }
+
+        updateCastBadge(state);
+    }
+
+    function updateCastBadge(state) {
+        var old = document.querySelector('.plexd-cast-badge');
+        if (old) old.remove();
+
+        if (state.active && state.streamId) {
+            var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === state.streamId; });
+            if (stream && stream.wrapper) {
+                var badge = document.createElement('div');
+                badge.className = 'plexd-cast-badge';
+                badge.textContent = '📺';
+                stream.wrapper.appendChild(badge);
+            }
+        }
+    }
+
     // Public API
     return {
         init,
@@ -11844,6 +11907,7 @@ const PlexdApp = (function() {
         toggleAudioFocus,
         toggleCleanMode,
         toggleGlobalFullscreen,
+        toggleCast,
         randomSeekAll,
         randomSeekSelected,
         rewindSelected,

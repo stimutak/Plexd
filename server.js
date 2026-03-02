@@ -1360,7 +1360,118 @@ const AYLO_SITES = {
 const AYLO_SITE_BY_TAG_ID = {};
 for (const [name, site] of Object.entries(AYLO_SITES)) AYLO_SITE_BY_TAG_ID[site.tagId] = name;
 
-// Chrome cookie decryption (macOS) + Aylo API helpers
+// ── Stash Server Integration ───────────────────────────────────────────────────
+// Stash is a local media server with a GraphQL API. Scenes, tags, performers,
+// and studios are accessed directly — no auth needed on Tailscale.
+// ID namespacing: Stash IDs are offset to avoid collisions with Aylo IDs.
+//   Tags/Performers: stashId + 100000 (Stash tag 42 → 100042)
+//   Studios:         -1000 - stashId  (Stash studio 5 → -1005)
+//   Stash umbrella:  -1000            (all Stash content)
+
+const STASH_CONFIG = {
+    url: 'http://100.100.33.117:9999',
+    apiKey: null,
+};
+const STASH_TAG_OFFSET = 100000;
+const STASH_PERFORMER_OFFSET = 100000;
+const STASH_STUDIO_OFFSET = -1000;
+
+async function fetchStashGraphQL(query, variables) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (STASH_CONFIG.apiKey) headers['ApiKey'] = STASH_CONFIG.apiKey;
+    const resp = await fetch(STASH_CONFIG.url + '/graphql', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query, variables: variables || {} }),
+    });
+    if (!resp.ok) throw new Error('Stash GraphQL error: ' + resp.status);
+    const json = await resp.json();
+    if (json.errors && json.errors.length > 0) throw new Error('Stash: ' + json.errors[0].message);
+    return json.data;
+}
+
+async function checkStashConnection() {
+    try {
+        await fetchStashGraphQL('{ systemStatus { status } }');
+        return { connected: true };
+    } catch (e) {
+        return { connected: false, error: e.message };
+    }
+}
+
+// Scrape scenes from Stash with optional tag/performer/studio filters.
+// Returns streams in the same shape as Aylo: { url, title, tags, actors, category, site }
+async function scrapeStashScenes(count, stashTagIds, stashActorIds, stashStudioIds) {
+    const sceneFilter = {};
+
+    // Un-offset IDs back to real Stash IDs
+    if (stashTagIds && stashTagIds.length > 0) {
+        sceneFilter.tags = {
+            value: stashTagIds.map(id => String(id - STASH_TAG_OFFSET)),
+            modifier: 'INCLUDES',
+        };
+    }
+    if (stashActorIds && stashActorIds.length > 0) {
+        sceneFilter.performers = {
+            value: stashActorIds.map(id => String(id - STASH_PERFORMER_OFFSET)),
+            modifier: 'INCLUDES',
+        };
+    }
+    if (stashStudioIds && stashStudioIds.length > 0) {
+        // Un-offset: -1005 → 5 (STASH_STUDIO_OFFSET is -1000)
+        // Skip umbrella ID (-1000 → 0) — it means "all Stash", not a real studio
+        const realStudioIds = stashStudioIds
+            .map(id => STASH_STUDIO_OFFSET - id)
+            .filter(id => id > 0);
+        if (realStudioIds.length > 0) {
+            sceneFilter.studios = {
+                value: realStudioIds.map(String),
+                modifier: 'INCLUDES',
+            };
+        }
+    }
+
+    const query = `query FindScenes($filter: FindFilterType, $scene_filter: SceneFilterType) {
+        findScenes(filter: $filter, scene_filter: $scene_filter) {
+            scenes {
+                id title rating100
+                paths { stream screenshot }
+                performers { id name }
+                tags { id name }
+                studio { id name }
+                files { width height duration }
+            }
+        }
+    }`;
+
+    const variables = {
+        filter: { per_page: count * 2, sort: 'random', direction: 'DESC' },
+        scene_filter: Object.keys(sceneFilter).length > 0 ? sceneFilter : undefined,
+    };
+
+    const data = await fetchStashGraphQL(query, variables);
+    const scenes = data.findScenes?.scenes || [];
+
+    return scenes.slice(0, count).map(scene => {
+        const tags = (scene.tags || []).map(t => t.name);
+        const actors = (scene.performers || []).map(p => p.name);
+        const studioName = scene.studio?.name || '';
+        // Add "Stash" source tag
+        if (!tags.includes('Stash')) tags.unshift('Stash');
+        return {
+            url: scene.paths?.stream || '',
+            title: scene.title || 'Stash Scene',
+            tags,
+            actors,
+            category: studioName,
+            site: 'Stash',
+            thumbnail: scene.paths?.screenshot || null,
+            rating: scene.rating100 != null ? scene.rating100 : null,
+        };
+    }).filter(s => s.url);
+}
+
+// ── Chrome cookie decryption (macOS) + Aylo API helpers ────────────────────────
 // Auth tokens: access_token_ma (~1hr), refresh_token_ma (~30min), instance_token (~2 days)
 // All stored as encrypted cookies in Chrome profile
 
@@ -1628,6 +1739,9 @@ function getExternalIp() {
 // Background-refreshed for each site with valid auth.
 const CACHE_DIR = path.join(__dirname, 'uploads', 'cache');
 const CATALOG_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+const STASH_TAGS_CACHE = path.join(CACHE_DIR, 'stash-tags.json');
+const STASH_PERFORMERS_CACHE = path.join(CACHE_DIR, 'stash-performers.json');
+const STASH_STUDIOS_CACHE = path.join(CACHE_DIR, 'stash-studios.json');
 
 let _tagCache = null;   // Merged tag cache (byCategory format)
 let _actorCache = null;  // Merged actor cache (sorted array)
@@ -1658,6 +1772,21 @@ function loadCacheFromDisk() {
             actorSites++;
         } catch (e) { /* no cache for this site */ }
     }
+
+    // Load Stash caches (offset IDs already applied in cache files)
+    try {
+        const stashTags = JSON.parse(fs.readFileSync(STASH_TAGS_CACHE, 'utf8'));
+        for (const cat of Object.keys(stashTags)) {
+            if (!allTags[cat]) allTags[cat] = {};
+            for (const t of stashTags[cat]) allTags[cat][t.id] = t;
+        }
+        tagSites++;
+    } catch (e) { /* no stash tags cache */ }
+    try {
+        const stashActors = JSON.parse(fs.readFileSync(STASH_PERFORMERS_CACHE, 'utf8'));
+        for (const a of stashActors) allActors[a.id] = a;
+        actorSites++;
+    } catch (e) { /* no stash performers cache */ }
 
     // Fallback: load old single-file caches if no per-site caches exist
     if (tagSites === 0) {
@@ -1694,10 +1823,11 @@ function saveCacheToDisk(file, data) {
     }
 }
 
-// Rebuild merged caches from all per-site files on disk
+// Rebuild merged caches from all per-site files on disk (Aylo + Stash)
 function rebuildMergedCaches() {
     const allTags = {};
     const allActors = {};
+    // Aylo per-site caches
     for (const siteName of Object.keys(AYLO_SITES)) {
         try {
             const siteTags = JSON.parse(fs.readFileSync(siteTagsCacheFile(siteName), 'utf8'));
@@ -1711,6 +1841,19 @@ function rebuildMergedCaches() {
             for (const a of siteActors) allActors[a.id] = a;
         } catch (e) { /* skip */ }
     }
+    // Stash caches (offset IDs already applied)
+    try {
+        const stashTags = JSON.parse(fs.readFileSync(STASH_TAGS_CACHE, 'utf8'));
+        for (const cat of Object.keys(stashTags)) {
+            if (!allTags[cat]) allTags[cat] = {};
+            for (const t of stashTags[cat]) allTags[cat][t.id] = t;
+        }
+    } catch (e) { /* no stash tags cache */ }
+    try {
+        const stashActors = JSON.parse(fs.readFileSync(STASH_PERFORMERS_CACHE, 'utf8'));
+        for (const a of stashActors) allActors[a.id] = a;
+    } catch (e) { /* no stash performers cache */ }
+
     if (Object.keys(allTags).length > 0) {
         _tagCache = {};
         for (const cat of Object.keys(allTags)) {
@@ -1797,6 +1940,43 @@ async function refreshActorsFromApi(auth) {
     return _actorCache;
 }
 
+// ── Stash cache refresh functions ──────────────────────────────────────────────
+// Tags, performers, and studios fetched via GraphQL, saved with offset IDs.
+
+async function refreshStashTags() {
+    const data = await fetchStashGraphQL('{ allTags { id name } }');
+    const tags = (data.allTags || []).map(t => ({
+        id: parseInt(t.id) + STASH_TAG_OFFSET,
+        name: t.name,
+    }));
+    // Stash tags are flat (no categories) — group under 'Stash'
+    const byCategory = { Stash: tags.sort((a, b) => a.name.localeCompare(b.name)) };
+    saveCacheToDisk(STASH_TAGS_CACHE, byCategory);
+    console.log('[Cache] Refreshed Stash tags: ' + tags.length);
+    rebuildMergedCaches();
+}
+
+async function refreshStashPerformers() {
+    const data = await fetchStashGraphQL('{ allPerformers { id name } }');
+    const performers = (data.allPerformers || []).map(p => ({
+        id: parseInt(p.id) + STASH_PERFORMER_OFFSET,
+        name: p.name,
+    })).sort((a, b) => a.name.localeCompare(b.name));
+    saveCacheToDisk(STASH_PERFORMERS_CACHE, performers);
+    console.log('[Cache] Refreshed Stash performers: ' + performers.length);
+    rebuildMergedCaches();
+}
+
+async function refreshStashStudios() {
+    const data = await fetchStashGraphQL('{ allStudios { id name } }');
+    const studios = (data.allStudios || []).map(s => ({
+        id: parseInt(s.id),
+        name: s.name,
+    })).sort((a, b) => a.name.localeCompare(b.name));
+    saveCacheToDisk(STASH_STUDIOS_CACHE, studios);
+    console.log('[Cache] Refreshed Stash studios: ' + studios.length);
+}
+
 // Background refresh — runs every 6 hours.
 // Only refreshes one site per unique cookieHost (tags/performers overlap across sub-brands).
 async function backgroundCatalogRefresh() {
@@ -1814,6 +1994,13 @@ async function backgroundCatalogRefresh() {
         if (refreshes.length > 0) {
             await Promise.allSettled(refreshes);
             console.log('[Cache] Background refresh complete for ' + seen.size + ' cookie hosts');
+        }
+        // Stash refresh (independent of Aylo auth)
+        try {
+            await Promise.allSettled([refreshStashTags(), refreshStashPerformers(), refreshStashStudios()]);
+            console.log('[Cache] Stash background refresh complete');
+        } catch (e) {
+            console.log('[Cache] Stash refresh failed:', e.message);
         }
     } catch (e) {
         console.log('[Cache] Background refresh failed:', e.message);
@@ -3659,7 +3846,7 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // GET /api/demo/auth-status - Check Aylo login status (all sites)
+    // GET /api/demo/auth-status - Check Aylo + Stash status
     if (pathname === '/api/demo/auth-status' && req.method === 'GET') {
         const aylo = {};
         for (const siteName of Object.keys(AYLO_SITES)) {
@@ -3670,8 +3857,10 @@ const server = http.createServer(async (req, res) => {
                 warning: auth.warning || auth.error || null
             };
         }
+        const stash = await checkStashConnection();
+        stash.url = STASH_CONFIG.url;
         // Backward compat: keep top-level 'brazzers' key pointing to brazzers status
-        jsonOk(res, { aylo, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
+        jsonOk(res, { aylo, stash, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
         return;
     }
 
@@ -3690,18 +3879,35 @@ const server = http.createServer(async (req, res) => {
     }
 
     // GET /api/demo/tags - Serve tags (disk-cached, background-refreshed from all sites)
-    // Includes synthetic "Network" category with site tags (negative IDs)
+    // Includes synthetic "Network" category with Aylo sites + Stash studios (negative IDs)
     if (pathname === '/api/demo/tags' && req.method === 'GET') {
         let tags = _tagCache;
         if (!tags || Object.keys(tags).length === 0) {
+            // Try live fetch from Aylo and/or Stash
             const auth = await getAnyAyloAuth();
-            if (!auth.accessToken) { jsonOk(res, { tags: {}, error: 'No cached data and login required' }); return; }
-            try { tags = await refreshTagsFromApi(auth); }
-            catch (err) { jsonError(res, 500, 'Failed to fetch tags: ' + err.message); return; }
+            if (auth.accessToken) {
+                try { tags = await refreshTagsFromApi(auth); } catch (e) { /* continue */ }
+            }
+            try { await refreshStashTags(); tags = _tagCache; } catch (e) { /* continue */ }
+            if (!tags || Object.keys(tags).length === 0) {
+                jsonOk(res, { tags: {}, error: 'No cached data available' });
+                return;
+            }
         }
-        // Inject "Network" category with site tags so users can filter by site
+        // Inject "Network" category: Aylo sites + Stash umbrella + Stash studios
         const withNetwork = Object.assign({}, tags);
-        withNetwork['Network'] = Object.values(AYLO_SITES).map(s => ({ id: s.tagId, name: s.label }));
+        const networks = Object.values(AYLO_SITES).map(s => ({ id: s.tagId, name: s.label }));
+        // Add Stash umbrella
+        networks.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
+        // Add individual Stash studios from cache
+        try {
+            const studios = JSON.parse(fs.readFileSync(STASH_STUDIOS_CACHE, 'utf8'));
+            for (const s of studios) {
+                networks.push({ id: STASH_STUDIO_OFFSET - s.id, name: s.name });
+            }
+        } catch (e) { /* no studios cache yet */ }
+        networks.sort((a, b) => a.name.localeCompare(b.name));
+        withNetwork['Network'] = networks;
         jsonOk(res, { tags: withNetwork });
         return;
     }
@@ -3786,6 +3992,7 @@ const server = http.createServer(async (req, res) => {
     // GET /api/demo/streams - Scrape random streams for xfill demo
     // ?source=xhamster|brazzers|aylo (default: aylo if any login available, else xhamster)
     // ?count=9 — source=brazzers treated as aylo (backward compat)
+    // Multi-source: IDs are routed by range — Stash tags >= 100000, Stash studios <= -1000
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
         const count = parseInt(url.searchParams.get('count')) || 9;
         let source = url.searchParams.get('source') || 'auto';
@@ -3797,27 +4004,81 @@ const server = http.createServer(async (req, res) => {
         // Treat 'brazzers' as 'aylo' for backward compat
         if (source === 'brazzers') source = 'aylo';
 
-        // Auto-detect: prefer Aylo if any site logged in, fall back to xHamster
+        // Partition IDs by source:
+        //   Stash tags: >= STASH_TAG_OFFSET (100000)
+        //   Stash performers: >= STASH_PERFORMER_OFFSET (100000)
+        //   Stash studios: <= STASH_STUDIO_OFFSET (-1000), including -1000 itself (umbrella)
+        //   Aylo site filters: -1 to -99 (negative but above -1000)
+        //   Aylo tags: positive < 100000
+        const stashTagIds = tagIdList.filter(id => id >= STASH_TAG_OFFSET);
+        const stashStudioIds = tagIdList.filter(id => id <= STASH_STUDIO_OFFSET);
+        const ayloTagIds = tagIdList.filter(id => id > STASH_STUDIO_OFFSET && id < STASH_TAG_OFFSET);
+        const stashActorIds = actorIdList.filter(id => id >= STASH_PERFORMER_OFFSET);
+        const ayloActorIds = actorIdList.filter(id => id < STASH_PERFORMER_OFFSET);
+
+        const hasStashFilters = stashTagIds.length > 0 || stashActorIds.length > 0 || stashStudioIds.length > 0;
+        const hasAyloFilters = ayloTagIds.length > 0 || ayloActorIds.length > 0;
+
+        // Auto-detect: prefer Aylo if logged in, always include Stash if reachable
         if (source === 'auto') {
             const auths = await getAllAyloAuths();
             source = auths.length > 0 ? 'aylo' : 'xhamster';
         }
 
-        if (source === 'aylo') {
+        if (source === 'aylo' || source === 'auto') {
             try {
-                const streams = await scrapeAyloScenes(count, tagIdList, actorIdList);
-                console.log('[Demo] Aylo: ' + streams.length + ' scenes' + (tagIdList.length ? ' (tags: ' + tagIdList.join(',') + ')' : '') + (actorIdList.length ? ' (actors: ' + actorIdList.join(',') + ')' : ''));
+                const results = [];
+
+                if (hasStashFilters && !hasAyloFilters) {
+                    // Only Stash filters — query Stash only
+                    const stashStreams = await scrapeStashScenes(count, stashTagIds, stashActorIds, stashStudioIds);
+                    results.push(...stashStreams);
+                } else if (hasAyloFilters && !hasStashFilters) {
+                    // Only Aylo filters — query Aylo only (existing behavior)
+                    const ayloStreams = await scrapeAyloScenes(count, ayloTagIds, ayloActorIds);
+                    results.push(...ayloStreams);
+                } else if (hasStashFilters && hasAyloFilters) {
+                    // Mixed filters — query both with their respective filters
+                    const [stashStreams, ayloStreams] = await Promise.allSettled([
+                        scrapeStashScenes(Math.ceil(count / 2), stashTagIds, stashActorIds, stashStudioIds),
+                        scrapeAyloScenes(Math.ceil(count / 2), ayloTagIds, ayloActorIds),
+                    ]);
+                    if (stashStreams.status === 'fulfilled') results.push(...stashStreams.value);
+                    if (ayloStreams.status === 'fulfilled') results.push(...ayloStreams.value);
+                } else {
+                    // No filters — query both, split count, shuffle
+                    const stashCount = Math.ceil(count / 3);      // ~33% Stash
+                    const ayloCount = count - stashCount;          // ~67% Aylo
+                    const [stashStreams, ayloStreams] = await Promise.allSettled([
+                        scrapeStashScenes(stashCount),
+                        scrapeAyloScenes(ayloCount, [], []),
+                    ]);
+                    if (stashStreams.status === 'fulfilled') results.push(...stashStreams.value);
+                    if (ayloStreams.status === 'fulfilled') results.push(...ayloStreams.value);
+                }
+
+                // Shuffle merged results for variety
+                for (let i = results.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [results[i], results[j]] = [results[j], results[i]];
+                }
+
+                const streams = results.slice(0, count);
+                const sources = [...new Set(streams.map(s => s.site || 'unknown'))];
+                console.log('[Demo] Multi-source: ' + streams.length + ' scenes from ' + sources.join(', ') +
+                    (tagIdList.length ? ' (tags: ' + tagIdList.join(',') + ')' : '') +
+                    (actorIdList.length ? ' (actors: ' + actorIdList.join(',') + ')' : ''));
 
                 jsonOk(res, {
-                    streams: streams.slice(0, count),
-                    source: 'aylo',
+                    streams,
+                    source: sources.length === 1 ? sources[0].toLowerCase() : 'mixed',
                     fetched: streams.length,
                     failed: 0,
                     authenticated: true
                 });
             } catch (err) {
-                console.error('[Demo] Aylo error:', err.message);
-                jsonError(res, 500, 'Failed to fetch Aylo streams: ' + err.message);
+                console.error('[Demo] Stream fetch error:', err.message);
+                jsonError(res, 500, 'Failed to fetch streams: ' + err.message);
             }
             return;
         }

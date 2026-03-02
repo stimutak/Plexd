@@ -820,6 +820,10 @@ const PlexdApp = (function() {
     }
 
     function mapDensityToOldMode() {
+        // Clean up overlay modes that have no old-mode equivalent
+        if (bugEyeMode) toggleBugEyeMode(true);
+        if (mosaicMode) toggleMosaicMode(true);
+
         setTetrisMode(0);
         setWallMode(0);
         coverflowMode = false;

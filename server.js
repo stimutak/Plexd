@@ -1551,31 +1551,67 @@ function getExternalIp() {
     });
 }
 
-// Scrape random Brazzers scenes (requires valid accessToken for full scenes)
-// sort: 'top' (top rated last 3 months), 'popular' (most viewed last 3 months), 'new' (newest)
-async function scrapeBrazzersScenes(count, auth, sort) {
+// Tag cache for Aylo API
+let _tagCache = null;
+let _tagCacheTime = 0;
+const TAG_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function fetchAyloTags(auth) {
+    if (_tagCache && (Date.now() - _tagCacheTime) < TAG_CACHE_TTL) return _tagCache;
+    auth.externalIp = await getExternalIp();
+
+    let tags;
+    try {
+        const resp = await fetchBrazzersApi('/v2/tags?limit=500&orderBy=name', auth);
+        if (resp.status === 200 && resp.data.result) {
+            tags = resp.data.result.filter(t => t.isVisible !== false)
+                .map(t => ({ id: t.id, name: t.name, category: t.category || 'Other' }));
+        }
+    } catch (e) { /* fall through to scene-based extraction */ }
+
+    if (!tags) {
+        // Fallback: extract tags from 100 recent scenes
+        const resp = await fetchBrazzersApi('/v2/releases?limit=100&type=scene&orderBy=-dateReleased', auth);
+        const tagMap = {};
+        for (const scene of (resp.data.result || [])) {
+            for (const t of (scene.tags || [])) {
+                if (!tagMap[t.id]) tagMap[t.id] = { id: t.id, name: t.name, category: t.category || 'Other' };
+            }
+        }
+        tags = Object.values(tagMap);
+    }
+
+    // Group by category, sort alphabetically within each
+    const byCategory = {};
+    for (const t of tags) {
+        (byCategory[t.category] ||= []).push({ id: t.id, name: t.name });
+    }
+    for (const cat of Object.keys(byCategory)) {
+        byCategory[cat].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    _tagCache = byCategory;
+    _tagCacheTime = Date.now();
+    return _tagCache;
+}
+
+// Scrape top-rated Brazzers scenes from the last 6 months
+async function scrapeBrazzersScenes(count, auth, tagIds) {
     // Get external IP for X-Forwarded-For header
     auth.externalIp = await getExternalIp();
 
-    const offset = Math.floor(Math.random() * 200);
-    const limit = Math.ceil(count * 1.5);
+    const offset = Math.floor(Math.random() * 100);
+    const limit = Math.ceil(count * 3); // Fetch extra to filter by rating
 
-    // Build date filter for last 3 months (ensures high quality + relevant results)
-    const threeMonthsAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const dateFilter = `>${threeMonthsAgo}`;
+    const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const dateFilter = `>${sixMonthsAgo}`;
 
-    let orderBy, useDateFilter;
-    switch (sort) {
-        case 'popular': orderBy = '-stats.views'; useDateFilter = true; break;
-        case 'new':     orderBy = '-dateReleased'; useDateFilter = false; break;
-        case 'top':
-        default:        orderBy = '-stats.rating'; useDateFilter = true; break;
+    let apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating&dateReleased=${encodeURIComponent(dateFilter)}`;
+    if (tagIds && tagIds.length > 0) {
+        apiPath += `&tagId=${tagIds.join(',')}`;
     }
 
-    let apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=${orderBy}`;
-    if (useDateFilter) apiPath += `&dateReleased=${encodeURIComponent(dateFilter)}`;
-
-    console.log('[Demo] Fetching Brazzers scenes (sort=' + (sort || 'top') + ', offset=' + offset + ')...');
+    console.log('[Demo] Fetching Brazzers scenes (5-star, offset=' + offset + (tagIds && tagIds.length ? ', tags=' + tagIds.join(',') : '') + ')...');
     const resp = await fetchBrazzersApi(apiPath, auth);
 
     if (resp.status !== 200 || !resp.data.result) {
@@ -1584,11 +1620,18 @@ async function scrapeBrazzersScenes(count, auth, sort) {
 
     const streams = [];
     for (const scene of resp.data.result) {
+        // Only keep 5-star scenes (90%+ like ratio)
+        const rating = scene.stats && scene.stats.rating;
+        if (rating !== undefined && rating < 90) continue;
+
         const videos = scene.videos || {};
-        // With access_token: videos.full.files has HLS/MP4 URLs for the full scene
         const url = (videos.full && extractBestVideoUrl(videos.full.files)) || null;
         if (url) {
-            streams.push({ url, title: scene.title || 'Brazzers Scene' });
+            // Extract tag names, actor names, and collection (category)
+            const tags = (scene.tags || []).map(t => t.name);
+            const actors = (scene.actors || []).map(a => a.name);
+            const category = (scene.collections || []).map(c => c.name).join(', ');
+            streams.push({ url, title: scene.title || 'Brazzers Scene', tags, actors, category });
         }
         if (streams.length >= count) break;
     }
@@ -3314,14 +3357,88 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // GET /api/demo/tags - Fetch available tags from Aylo API
+    if (pathname === '/api/demo/tags' && req.method === 'GET') {
+        const auth = await getBrazzersAuth();
+        if (!auth.accessToken) { jsonOk(res, { tags: {}, error: 'Login required' }); return; }
+        try {
+            jsonOk(res, { tags: await fetchAyloTags(auth) });
+        } catch (err) {
+            jsonError(res, 500, 'Failed to fetch tags: ' + err.message);
+        }
+        return;
+    }
+
+    // GET /api/demo/performers/search?q=name - Search performers by name
+    if (pathname === '/api/demo/performers/search' && req.method === 'GET') {
+        const query = url.searchParams.get('q') || '';
+        const limit = parseInt(url.searchParams.get('limit')) || 20;
+        if (!query) { jsonOk(res, { performers: [] }); return; }
+        const auth = await getBrazzersAuth();
+        if (!auth.accessToken) { jsonOk(res, { performers: [], error: 'Login required' }); return; }
+        try {
+            auth.externalIp = await getExternalIp();
+            const resp = await fetchBrazzersApi(`/v1/actors?limit=${limit}&search=${encodeURIComponent(query)}`, auth);
+            console.log('[Demo] Performer search status:', resp.status, 'keys:', Object.keys(resp.data));
+            if (resp.status !== 200 || !resp.data.result) {
+                jsonOk(res, { performers: [], debug: { status: resp.status, keys: Object.keys(resp.data), meta: resp.data.meta } });
+                return;
+            }
+            const performers = resp.data.result.map(a => {
+                // Scene count: scenesPerBrand is [{name, sceneCount}, ...]
+                let scenes = 0;
+                if (Array.isArray(a.scenesPerBrand)) {
+                    for (const b of a.scenesPerBrand) scenes += (b.sceneCount || 0);
+                }
+                // Thumbnail: profile image, try multiple size variants
+                const profile = a.images?.profile?.['0'] || a.images?.profile?.[0];
+                const thumb = profile?.xs?.url || profile?.sm?.url || profile?.md?.url || null;
+                return { id: a.id, name: a.name, thumbnail: thumb, scenes };
+            });
+            jsonOk(res, { performers });
+        } catch (err) {
+            jsonError(res, 500, 'Performer search failed: ' + err.message);
+        }
+        return;
+    }
+
+    // GET /api/demo/performers/:id/scenes - Get scenes by performer
+    if (pathname.startsWith('/api/demo/performers/') && pathname.endsWith('/scenes') && req.method === 'GET') {
+        const actorId = pathname.split('/')[4];
+        const count = parseInt(url.searchParams.get('count')) || 6;
+        const auth = await getBrazzersAuth();
+        if (!auth.accessToken) { jsonOk(res, { streams: [], error: 'Login required' }); return; }
+        try {
+            auth.externalIp = await getExternalIp();
+            const resp = await fetchBrazzersApi(`/v2/releases?limit=${count}&type=scene&actorsIds=${actorId}&orderBy=-dateReleased`, auth);
+            if (resp.status !== 200 || !resp.data.result) {
+                jsonOk(res, { streams: [], error: 'No scenes found' });
+                return;
+            }
+            const streams = [];
+            for (const scene of resp.data.result) {
+                const videoUrl = extractBestVideoUrl(scene.videos?.full?.files || scene.videos?.mediabook?.files || []);
+                if (!videoUrl) continue;
+                const tags = (scene.tags || []).map(t => t.name);
+                const actors = (scene.actors || []).map(a => a.name);
+                streams.push({ url: videoUrl, title: scene.title || 'Scene', tags, actors, category: scene.collections?.[0]?.name || '' });
+            }
+            console.log('[Demo] Performer ' + actorId + ': ' + streams.length + ' scenes with video');
+            jsonOk(res, { streams, source: 'brazzers', fetched: streams.length });
+        } catch (err) {
+            jsonError(res, 500, 'Performer scenes failed: ' + err.message);
+        }
+        return;
+    }
+
     // GET /api/demo/streams - Scrape random streams for xfill demo
     // ?source=xhamster|brazzers (default: brazzers if auth available, else xhamster)
-    // ?sort=top|popular|new (default: top = top rated last 3 months)
-    // ?count=16
+    // ?count=6
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
-        const count = parseInt(url.searchParams.get('count')) || 16;
-        const sort = url.searchParams.get('sort') || 'top';
+        const count = parseInt(url.searchParams.get('count')) || 6;
         let source = url.searchParams.get('source') || 'auto';
+        const tagIdsParam = url.searchParams.get('tagIds');
+        const tagIdList = tagIdsParam ? tagIdsParam.split(',').map(Number).filter(Boolean) : [];
 
         // Auto-detect: prefer Brazzers if logged in, fall back to xHamster
         if (source === 'auto') {
@@ -3347,8 +3464,8 @@ const server = http.createServer(async (req, res) => {
                     return;
                 }
 
-                const streams = await scrapeBrazzersScenes(count, auth, sort);
-                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes (sort=' + sort + ')');
+                const streams = await scrapeBrazzersScenes(count, auth, tagIdList);
+                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes' + (tagIdList.length ? ' (tags: ' + tagIdList.join(',') + ')' : ''));
 
                 jsonOk(res, {
                     streams: streams.slice(0, count),

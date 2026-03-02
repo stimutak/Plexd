@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plexd Cast Receiver</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%;
+            background: #000;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #fff;
+        }
+
+        #player {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            object-fit: contain;
+            background: #000;
+            z-index: 1;
+        }
+
+        /* Idle screen — centered branding on black */
+        #idle-screen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            z-index: 10;
+            transition: opacity 0.6s ease;
+        }
+        #idle-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #idle-screen .brand {
+            font-size: 5vw;
+            font-weight: 700;
+            letter-spacing: 0.15em;
+            color: #fff;
+            opacity: 0.7;
+            text-transform: uppercase;
+        }
+
+        /* Title overlay — brief display on load */
+        #title-overlay {
+            position: absolute;
+            bottom: 8vh;
+            left: 0; right: 0;
+            text-align: center;
+            font-size: 2.5vw;
+            font-weight: 500;
+            color: #fff;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+            z-index: 20;
+            pointer-events: none;
+        }
+        #title-overlay.visible {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+<video id="player" autoplay playsinline></video>
+
+<div id="idle-screen">
+    <div class="brand">Plexd</div>
+</div>
+
+<div id="title-overlay"></div>
+
+<!-- HLS.js for adaptive streaming -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
+
+<!-- Google Cast Receiver SDK -->
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+
+<script>
+(function() {
+    'use strict';
+
+    // Dev App ID (Default Media Receiver — replace with registered app ID for production)
+    var CAST_APP_ID = 'CC1AD845';
+
+    var CAST_NAMESPACE = 'urn:x-cast:plexd';
+
+    // DOM refs
+    var video = document.getElementById('player');
+    var idleScreen = document.getElementById('idle-screen');
+    var titleOverlay = document.getElementById('title-overlay');
+
+    // State
+    var hlsInstance = null;
+    var activeConnection = null; // PresentationConnection or Cast sender ID
+    var titleTimer = null;
+    var lastTimeUpdate = 0;
+    var TIME_UPDATE_INTERVAL = 2000; // ms
+
+    // ─── Cast Receiver context (may be null if SDK didn't load) ───
+    var castContext = null;
+    var castPlayerManager = null;
+
+    // =========================================================================
+    //  Video Loading
+    // =========================================================================
+
+    function loadVideo(url, title) {
+        // Tear down previous HLS instance
+        if (hlsInstance) {
+            hlsInstance.destroy();
+            hlsInstance = null;
+        }
+
+        // Show title briefly
+        if (title) {
+            showTitle(title);
+        }
+
+        // Determine if HLS
+        var isHls = url && url.indexOf('.m3u8') !== -1;
+
+        if (isHls) {
+            // Try native HLS first (Safari, iOS)
+            if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = url;
+            } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                hlsInstance = new Hls({
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 60
+                });
+                hlsInstance.loadSource(url);
+                hlsInstance.attachMedia(video);
+                hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        console.error('[Plexd Cast] HLS fatal error:', data.type, data.details);
+                        reportError('HLS error: ' + data.details);
+                        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                            hlsInstance.startLoad();
+                        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                            hlsInstance.recoverMediaError();
+                        }
+                    }
+                });
+            } else {
+                // Last resort — try direct (some environments handle it)
+                video.src = url;
+            }
+        } else {
+            // Direct source (MP4, WebM, etc.)
+            video.src = url;
+        }
+
+        video.play().catch(function(err) {
+            console.warn('[Plexd Cast] Autoplay blocked:', err.message);
+        });
+
+        // Hide idle screen
+        idleScreen.classList.add('hidden');
+    }
+
+    function showTitle(text) {
+        titleOverlay.textContent = text;
+        titleOverlay.classList.add('visible');
+
+        if (titleTimer) clearTimeout(titleTimer);
+        titleTimer = setTimeout(function() {
+            titleOverlay.classList.remove('visible');
+            titleTimer = null;
+        }, 4000);
+    }
+
+    // =========================================================================
+    //  Message Handling (shared across all receiver modes)
+    // =========================================================================
+
+    function handleMessage(msg) {
+        // Parse if string
+        if (typeof msg === 'string') {
+            try { msg = JSON.parse(msg); } catch (e) {
+                console.warn('[Plexd Cast] Invalid message:', msg);
+                return;
+            }
+        }
+
+        var cmd = msg.cmd;
+        if (!cmd) return;
+
+        switch (cmd) {
+            case 'load':
+                loadVideo(msg.url, msg.title);
+                break;
+
+            case 'play':
+                video.play().catch(function() {});
+                break;
+
+            case 'pause':
+                video.pause();
+                break;
+
+            case 'seek':
+                if (typeof msg.time === 'number' && isFinite(msg.time)) {
+                    video.currentTime = msg.time;
+                }
+                break;
+
+            case 'volume':
+                if (typeof msg.level === 'number') {
+                    video.volume = Math.max(0, Math.min(1, msg.level));
+                }
+                break;
+
+            default:
+                console.warn('[Plexd Cast] Unknown command:', cmd);
+        }
+    }
+
+    // =========================================================================
+    //  State Reporting
+    // =========================================================================
+
+    function sendState(event, data) {
+        var payload = { event: event };
+        if (data) {
+            for (var key in data) {
+                if (data.hasOwnProperty(key)) payload[key] = data[key];
+            }
+        }
+
+        var json = JSON.stringify(payload);
+
+        // Send via Cast SDK
+        if (castContext) {
+            try {
+                castContext.sendCustomMessage(CAST_NAMESPACE, undefined, payload);
+            } catch (e) { /* no sender connected */ }
+        }
+
+        // Send via Presentation API
+        if (activeConnection && activeConnection.send) {
+            try {
+                activeConnection.send(json);
+            } catch (e) { /* connection closed */ }
+        }
+    }
+
+    function reportError(message) {
+        sendState('error', { message: message });
+    }
+
+    // Video event listeners for state reporting
+    video.addEventListener('loadedmetadata', function() {
+        sendState('loaded', {
+            duration: video.duration,
+            width: video.videoWidth,
+            height: video.videoHeight
+        });
+    });
+
+    video.addEventListener('playing', function() {
+        sendState('state', { state: 'playing', currentTime: video.currentTime });
+    });
+
+    video.addEventListener('pause', function() {
+        sendState('state', { state: 'paused', currentTime: video.currentTime });
+    });
+
+    video.addEventListener('waiting', function() {
+        sendState('state', { state: 'buffering', currentTime: video.currentTime });
+    });
+
+    video.addEventListener('error', function() {
+        var err = video.error;
+        var msg = err ? ('MediaError code ' + err.code + (err.message ? ': ' + err.message : '')) : 'Unknown error';
+        reportError(msg);
+    });
+
+    video.addEventListener('ended', function() {
+        sendState('state', { state: 'ended', currentTime: video.currentTime });
+        // Show idle screen again
+        idleScreen.classList.remove('hidden');
+    });
+
+    // Throttled timeupdate
+    video.addEventListener('timeupdate', function() {
+        var now = Date.now();
+        if (now - lastTimeUpdate >= TIME_UPDATE_INTERVAL) {
+            lastTimeUpdate = now;
+            sendState('timeupdate', {
+                currentTime: video.currentTime,
+                duration: video.duration || 0,
+                buffered: video.buffered.length > 0
+                    ? video.buffered.end(video.buffered.length - 1) : 0
+            });
+        }
+    });
+
+    // =========================================================================
+    //  Mode A: Google Cast Receiver
+    // =========================================================================
+
+    function initCastReceiver() {
+        if (typeof cast === 'undefined' || !cast.framework) {
+            console.log('[Plexd Cast] Cast SDK not available, skipping Cast receiver init');
+            return false;
+        }
+
+        try {
+            castContext = cast.framework.CastReceiverContext.getInstance();
+            castPlayerManager = castContext.getPlayerManager();
+
+            // Handle LOAD requests (standard Cast media loading)
+            castPlayerManager.setMessageInterceptor(
+                cast.framework.messages.MessageType.LOAD,
+                function(loadRequestData) {
+                    var media = loadRequestData.media;
+                    if (media && media.contentId) {
+                        loadVideo(media.contentId, media.metadata ? media.metadata.title : '');
+                    }
+                    // Return null to prevent default player from handling it
+                    // (we manage the video element directly)
+                    return null;
+                }
+            );
+
+            // Listen for custom messages on our namespace
+            castContext.addCustomMessageListener(CAST_NAMESPACE, function(event) {
+                handleMessage(event.data);
+            });
+
+            // Start the receiver
+            var options = new cast.framework.CastReceiverOptions();
+            options.disableIdleTimeout = true;
+            castContext.start(options);
+
+            console.log('[Plexd Cast] Cast receiver initialized');
+            return true;
+        } catch (e) {
+            console.error('[Plexd Cast] Cast receiver init failed:', e);
+            castContext = null;
+            return false;
+        }
+    }
+
+    // =========================================================================
+    //  Mode B: Presentation API Receiver
+    // =========================================================================
+
+    function initPresentationReceiver() {
+        if (!navigator.presentation || !navigator.presentation.receiver) {
+            console.log('[Plexd Cast] Presentation API receiver not available');
+            return false;
+        }
+
+        try {
+            navigator.presentation.receiver.connectionList.then(function(list) {
+                console.log('[Plexd Cast] Presentation API receiver ready');
+
+                function attachConnection(conn) {
+                    activeConnection = conn;
+                    conn.onmessage = function(event) {
+                        handleMessage(event.data);
+                    };
+                    conn.onclose = function() {
+                        if (activeConnection === conn) {
+                            activeConnection = null;
+                        }
+                    };
+                }
+
+                // Attach to any existing connections
+                list.connections.forEach(attachConnection);
+
+                // Listen for new connections
+                list.onconnectionavailable = function(event) {
+                    attachConnection(event.connection);
+                };
+            }).catch(function(err) {
+                console.warn('[Plexd Cast] Presentation receiver error:', err);
+            });
+
+            return true;
+        } catch (e) {
+            console.error('[Plexd Cast] Presentation receiver init failed:', e);
+            return false;
+        }
+    }
+
+    // =========================================================================
+    //  Mode C: Standalone (dev testing via ?url= query param)
+    // =========================================================================
+
+    function initStandalone() {
+        var params = new URLSearchParams(window.location.search);
+        var url = params.get('url');
+
+        if (!url) return false;
+
+        var title = params.get('title') || '';
+        console.log('[Plexd Cast] Standalone mode, loading:', url);
+        loadVideo(url, title);
+        return true;
+    }
+
+    // =========================================================================
+    //  Initialization — try all three modes
+    // =========================================================================
+
+    // Try Cast receiver (works on Chromecast devices)
+    initCastReceiver();
+
+    // Try Presentation API (works on second screens via browser API)
+    initPresentationReceiver();
+
+    // Try standalone (dev/testing — ?url= param)
+    initStandalone();
+
+    console.log('[Plexd Cast] Receiver page loaded');
+
+})();
+</script>
+
+</body>
+</html>

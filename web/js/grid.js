@@ -1978,6 +1978,515 @@ const PlexdGrid = (function() {
         return { cells, rows: bottomThumbs > 0 ? 2 : 1, cols: count, mode: 'spotlight' };
     }
 
+    // =========================================================================
+    // Unified Density Layout Engine
+    // =========================================================================
+    // Dispatches to level-specific layout functions based on density (-1 to 5)
+    // and variant (0+). Each level has a distinct visual density, from fullscreen
+    // (single stream) through mosaic (maximum streams visible).
+
+    /**
+     * Unified entry point for the density layout system.
+     * @param {number} density - Density level: -1=Fullscreen, 0=Focused, 1=Spotlight, 2=Grid, 3=Fill, 4=Strips, 5=Mosaic
+     * @param {number} variant - Style variant within the density level (0-based)
+     * @param {Object} container - {width, height} of the layout container
+     * @param {Array} streams - Array of stream objects
+     * @param {number} selectedIdx - Index of the selected/hero stream (-1 if none)
+     * @returns {Object} Layout: { cells: [...], rows, cols, mode, ... }
+     */
+    function calculateDensityLayout(density, variant, container, streams, selectedIdx) {
+        if (streams.length === 0) return { cells: [], rows: 0, cols: 0, mode: 'empty' };
+        switch (density) {
+            case -1: return densityFullscreen(container, streams, selectedIdx);
+            case  0: return densityFocused(container, streams, selectedIdx);
+            case  1: return densitySpotlight(variant, container, streams, selectedIdx);
+            case  2: return densityGrid(variant, container, streams, selectedIdx);
+            case  3: return densityFill(variant, container, streams, selectedIdx);
+            case  4: return densityStrips(variant, container, streams, selectedIdx);
+            case  5: return densityMosaic(variant, container, streams, selectedIdx);
+            default: return densityGrid(0, container, streams, selectedIdx);
+        }
+    }
+
+    /**
+     * Density -1: Fullscreen — selected stream fills container, others hidden.
+     */
+    function densityFullscreen(container, streams, selectedIdx) {
+        var idx = (selectedIdx >= 0 && selectedIdx < streams.length) ? selectedIdx : 0;
+        var cells = streams.map(function(s, i) {
+            if (i === idx) {
+                return {
+                    streamId: s.id,
+                    x: 0,
+                    y: 0,
+                    width: container.width,
+                    height: container.height,
+                    objectFit: 'contain',
+                    zIndex: 10
+                };
+            }
+            return {
+                streamId: s.id,
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+                hidden: true
+            };
+        });
+        return { cells: cells, rows: 1, cols: 1, mode: 'density-fullscreen', selectedIndex: idx };
+    }
+
+    /**
+     * Density 0: Focused — same positioning as fullscreen but mode signals
+     * app.js to use browser-level focus (not true fullscreen API).
+     */
+    function densityFocused(container, streams, selectedIdx) {
+        var layout = densityFullscreen(container, streams, selectedIdx);
+        layout.mode = 'density-focused';
+        return layout;
+    }
+
+    /**
+     * Density 1: Spotlight — hero stream prominent, others as thumbnails.
+     * Variant 0: Hero + side column (reuses existing spotlight algorithm)
+     * Variant 1: Hero + bottom row
+     */
+    function densitySpotlight(variant, container, streams, selectedIdx) {
+        var idx = (selectedIdx >= 0 && selectedIdx < streams.length) ? selectedIdx : 0;
+
+        // Move selected stream to front for hero treatment
+        var reordered = [streams[idx]];
+        for (var i = 0; i < streams.length; i++) {
+            if (i !== idx) reordered.push(streams[i]);
+        }
+
+        if (variant === 1) {
+            return densitySpotlightBottom(container, reordered);
+        }
+        // Variant 0: delegate to existing spotlight with reordered streams
+        var layout = calculateSpotlightLayout(container, reordered);
+        layout.mode = 'density-spotlight';
+        layout.selectedIndex = idx;
+        return layout;
+    }
+
+    /**
+     * Spotlight variant 1: Hero on top (~70% height), thumbs in bottom row.
+     */
+    function densitySpotlightBottom(container, streams) {
+        var count = streams.length;
+        if (count === 1) {
+            return {
+                cells: [{
+                    streamId: streams[0].id,
+                    x: 0, y: 0,
+                    width: container.width,
+                    height: container.height,
+                    objectFit: 'cover',
+                    isSpotlightHero: true
+                }],
+                rows: 1, cols: 1, mode: 'density-spotlight'
+            };
+        }
+
+        var gap = 3;
+        var heroRatio = 0.70;
+        var heroHeight = Math.floor(container.height * heroRatio) - gap;
+        var thumbCount = count - 1;
+        var bottomHeight = container.height - heroHeight - gap;
+        var thumbWidth = (container.width - gap * (thumbCount - 1)) / thumbCount;
+
+        var cells = [];
+
+        // Hero — full width, top 70%
+        cells.push({
+            streamId: streams[0].id,
+            x: 0, y: 0,
+            width: container.width,
+            height: heroHeight,
+            objectFit: 'cover',
+            isSpotlightHero: true
+        });
+
+        // Bottom row thumbnails
+        for (var i = 0; i < thumbCount; i++) {
+            cells.push({
+                streamId: streams[1 + i].id,
+                x: i * (thumbWidth + gap),
+                y: heroHeight + gap,
+                width: thumbWidth,
+                height: bottomHeight,
+                objectFit: 'cover'
+            });
+        }
+
+        return { cells: cells, rows: 2, cols: thumbCount, mode: 'density-spotlight' };
+    }
+
+    /**
+     * Density 2: Grid — standard grid layouts.
+     * Variant 0: Standard even grid (reuses calculateLayout)
+     * Variant 1: Z-depth overlap — selected 65% centered, others fanned behind
+     * Variant 2: Content-visible — standard grid, cells marked contentVisible
+     */
+    function densityGrid(variant, container, streams, selectedIdx) {
+        if (variant === 1) {
+            return densityGridZDepth(container, streams, selectedIdx);
+        }
+        if (variant === 2) {
+            return densityGridContentVisible(container, streams);
+        }
+        // Variant 0: standard even grid
+        var layout = calculateLayout(container, streams);
+        layout.mode = 'density-grid';
+        return layout;
+    }
+
+    /**
+     * Grid variant 1: Z-depth overlap.
+     * Selected stream at 65% container size centered at full opacity.
+     * Others fanned behind with decreasing size, opacity, and zIndex.
+     */
+    function densityGridZDepth(container, streams, selectedIdx) {
+        var count = streams.length;
+        var idx = (selectedIdx >= 0 && selectedIdx < count) ? selectedIdx : 0;
+        var cells = [];
+
+        // Selected stream: 65% of container, centered
+        var heroW = container.width * 0.65;
+        var heroH = container.height * 0.65;
+        var heroAR = streams[idx].aspectRatio || 16 / 9;
+        var heroFit = fitToContainer({ width: heroW, height: heroH }, heroAR);
+
+        cells.push({
+            streamId: streams[idx].id,
+            x: (container.width - heroFit.width) / 2,
+            y: (container.height - heroFit.height) / 2,
+            width: heroFit.width,
+            height: heroFit.height,
+            zIndex: 100,
+            opacity: 1,
+            transform: 'none'
+        });
+
+        // Fan remaining streams behind the hero
+        var others = [];
+        for (var i = 0; i < count; i++) {
+            if (i !== idx) others.push(streams[i]);
+        }
+
+        var otherCount = others.length;
+        for (var j = 0; j < otherCount; j++) {
+            // Distribute evenly across container width
+            var position = (j + 1) / (otherCount + 1); // 0..1 spread
+            var scale = Math.max(0.25, 0.55 - j * 0.05);
+            var w = container.width * scale;
+            var h = container.height * scale;
+            var ar = others[j].aspectRatio || 16 / 9;
+            var fit = fitToContainer({ width: w, height: h }, ar);
+
+            var xPos = container.width * position - fit.width / 2;
+            var yPos = (container.height - fit.height) / 2 + (j % 2 === 0 ? -15 : 15);
+
+            cells.push({
+                streamId: others[j].id,
+                x: xPos,
+                y: yPos,
+                width: fit.width,
+                height: fit.height,
+                zIndex: 50 - j * 5,
+                opacity: Math.max(0.2, 0.7 - j * 0.1),
+                transform: 'none'
+            });
+        }
+
+        return { cells: cells, rows: 1, cols: count, mode: 'density-grid-zdepth', selectedIndex: idx };
+    }
+
+    /**
+     * Grid variant 2: Content-visible — standard grid with contentVisible flag.
+     * Uses contain fit (no cropping) so all video content is visible.
+     */
+    function densityGridContentVisible(container, streams) {
+        var layout = calculateLayout(container, streams);
+        layout.mode = 'density-grid-content-visible';
+        for (var i = 0; i < layout.cells.length; i++) {
+            layout.cells[i].contentVisible = true;
+        }
+        return layout;
+    }
+
+    /**
+     * Density 3: Fill — edge-to-edge dense layouts.
+     * Variant 0: Crop tiles — cover grid with wallCropZoom
+     * Variant 1: Skyline bin-pack — columns with aspect-aware placement
+     * Variant 2: Masonry column-pack — shortest-column-first (Pinterest style)
+     */
+    function densityFill(variant, container, streams, selectedIdx) {
+        if (variant === 1) {
+            return densityFillSkyline(container, streams);
+        }
+        if (variant === 2) {
+            return densityFillMasonry(container, streams);
+        }
+        // Variant 0: Crop tiles
+        return densityFillCropTiles(container, streams, selectedIdx);
+    }
+
+    /**
+     * Fill variant 0: Crop tiles — edge-to-edge grid, all cover, with wallCropZoom.
+     * Finds optimal rows/cols that maximize 16:9 cell aspect ratio.
+     */
+    function densityFillCropTiles(container, streams, selectedIdx) {
+        var count = streams.length;
+        var idx = (selectedIdx >= 0 && selectedIdx < count) ? selectedIdx : -1;
+        var targetAR = 16 / 9;
+        var bestRows = 1, bestCols = count, bestScore = -Infinity;
+
+        for (var rows = 1; rows <= count; rows++) {
+            var cols = Math.ceil(count / rows);
+            var emptyCells = rows * cols - count;
+            if (emptyCells >= cols) continue;
+
+            var cellW = container.width / cols;
+            var cellH = container.height / rows;
+            var cellAR = cellW / cellH;
+            var ratioScore = 1 - Math.abs(cellAR - targetAR) / targetAR;
+            var fillScore = count / (rows * cols);
+            var score = ratioScore * 0.6 + fillScore * 0.4;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestRows = rows;
+                bestCols = cols;
+            }
+        }
+
+        var cellH = container.height / bestRows;
+        var cells = [];
+        var si = 0;
+
+        for (var r = 0; r < bestRows && si < count; r++) {
+            var remaining = count - si;
+            var inRow = (r === bestRows - 1) ? remaining : Math.min(bestCols, remaining);
+            var cellW = container.width / inRow;
+
+            for (var c = 0; c < inRow; c++) {
+                var isSelected = (si === idx);
+                cells.push({
+                    streamId: streams[si].id,
+                    x: c * cellW,
+                    y: r * cellH,
+                    width: cellW,
+                    height: cellH,
+                    objectFit: 'cover',
+                    wallCropZoom: isSelected ? 2.2 : 1.8,
+                    isWallCropSelected: isSelected
+                });
+                si++;
+            }
+        }
+
+        return { cells: cells, rows: bestRows, cols: bestCols, mode: 'density-fill', efficiency: 1.0 };
+    }
+
+    /**
+     * Fill variant 1: Skyline bin-pack.
+     * Determines column count from stream count and aspect ratios.
+     * Tracks per-column height (skyline), places each stream at the shortest column.
+     * Scales to fit container height.
+     */
+    function densityFillSkyline(container, streams) {
+        var count = streams.length;
+        var gap = 2;
+
+        // Determine column count: ~sqrt(count) biased by container aspect ratio
+        var containerAR = container.width / container.height;
+        var baseCols = Math.round(Math.sqrt(count * containerAR));
+        var cols = Math.max(1, Math.min(count, baseCols));
+        var colWidth = (container.width - gap * (cols - 1)) / cols;
+
+        // Skyline: track height of each column
+        var skyline = [];
+        for (var c = 0; c < cols; c++) skyline.push(0);
+
+        var cells = [];
+
+        for (var i = 0; i < count; i++) {
+            var s = streams[i];
+            var ar = (s.video && s.video.videoWidth && s.video.videoHeight)
+                ? s.video.videoWidth / s.video.videoHeight
+                : (s.aspectRatio || 16 / 9);
+
+            // Cell height determined by aspect ratio
+            var cellH = colWidth / ar;
+
+            // Find the shortest column
+            var minCol = 0;
+            for (var c = 1; c < cols; c++) {
+                if (skyline[c] < skyline[minCol]) minCol = c;
+            }
+
+            cells.push({
+                streamId: s.id,
+                x: minCol * (colWidth + gap),
+                y: skyline[minCol],
+                width: colWidth,
+                height: cellH,
+                objectFit: 'cover'
+            });
+
+            skyline[minCol] += cellH + gap;
+        }
+
+        // Find max skyline height and scale everything to fit container
+        var maxH = 0;
+        for (var c = 0; c < cols; c++) {
+            if (skyline[c] > maxH) maxH = skyline[c];
+        }
+
+        if (maxH > 0 && maxH !== container.height) {
+            var scale = container.height / maxH;
+            for (var i = 0; i < cells.length; i++) {
+                cells[i].x *= scale;
+                cells[i].y *= scale;
+                cells[i].width *= scale;
+                cells[i].height *= scale;
+            }
+        }
+
+        var rows = Math.ceil(count / cols);
+        return { cells: cells, rows: rows, cols: cols, mode: 'density-fill-skyline' };
+    }
+
+    /**
+     * Fill variant 2: Masonry / column-pack (Pinterest-style).
+     * Shortest column gets the next item. Respects stream aspect ratios.
+     * 2px gaps between items.
+     */
+    function densityFillMasonry(container, streams) {
+        var count = streams.length;
+        var gap = 2;
+
+        // Column count: similar heuristic as skyline
+        var containerAR = container.width / container.height;
+        var cols = Math.max(1, Math.min(count, Math.round(Math.sqrt(count * containerAR))));
+        var colWidth = (container.width - gap * (cols - 1)) / cols;
+
+        // Track column heights
+        var colHeights = [];
+        for (var c = 0; c < cols; c++) colHeights.push(0);
+
+        var cells = [];
+
+        for (var i = 0; i < count; i++) {
+            var s = streams[i];
+            var ar = (s.video && s.video.videoWidth && s.video.videoHeight)
+                ? s.video.videoWidth / s.video.videoHeight
+                : (s.aspectRatio || 16 / 9);
+
+            var cellH = colWidth / ar;
+
+            // Shortest column
+            var minCol = 0;
+            for (var c = 1; c < cols; c++) {
+                if (colHeights[c] < colHeights[minCol]) minCol = c;
+            }
+
+            cells.push({
+                streamId: s.id,
+                x: minCol * (colWidth + gap),
+                y: colHeights[minCol],
+                width: colWidth,
+                height: cellH,
+                objectFit: 'contain'
+            });
+
+            colHeights[minCol] += cellH + gap;
+        }
+
+        // Scale to fit container vertically
+        var maxH = 0;
+        for (var c = 0; c < cols; c++) {
+            if (colHeights[c] > maxH) maxH = colHeights[c];
+        }
+        if (maxH > 0 && maxH !== container.height) {
+            var scale = container.height / maxH;
+            for (var i = 0; i < cells.length; i++) {
+                cells[i].x *= scale;
+                cells[i].y *= scale;
+                cells[i].width *= scale;
+                cells[i].height *= scale;
+            }
+        }
+
+        var rows = Math.ceil(count / cols);
+        return { cells: cells, rows: rows, cols: cols, mode: 'density-fill-masonry' };
+    }
+
+    /**
+     * Density 4: Strips — thin continuous strips.
+     * Variant 0: Vertical columns (reuses existing strips layout)
+     * Variant 1: Horizontal rows — full-width rows stacked vertically
+     */
+    function densityStrips(variant, container, streams, selectedIdx) {
+        if (variant === 1) {
+            return densityStripsHorizontal(container, streams);
+        }
+        // Variant 0: vertical columns
+        var layout = calculateStripsLayout(container, streams);
+        layout.mode = 'density-strips';
+        return layout;
+    }
+
+    /**
+     * Strips variant 1: Horizontal rows.
+     * Each stream gets a full-width row, height = container.height / count.
+     */
+    function densityStripsHorizontal(container, streams) {
+        var count = streams.length;
+        var rowHeight = container.height / count;
+
+        var cells = streams.map(function(s, i) {
+            return {
+                streamId: s.id,
+                x: 0,
+                y: i * rowHeight,
+                width: container.width,
+                height: rowHeight,
+                objectFit: 'cover'
+            };
+        });
+
+        return { cells: cells, rows: count, cols: 1, mode: 'density-strips' };
+    }
+
+    /**
+     * Density 5: Mosaic — maximum stream density.
+     * Variant 0: Mosaic grid — returns signal for CSS grid positioning
+     * Variant 1: Bug Eye — returns signal for canvas overlay activation
+     */
+    function densityMosaic(variant, container, streams, selectedIdx) {
+        if (variant === 1) {
+            return { type: 'overlay', mode: 'bugeye' };
+        }
+
+        // Variant 0: Mosaic grid signal — cells have streamId but zero positions
+        // (CSS grid handles actual positioning in app.js)
+        var cells = streams.map(function(s) {
+            return {
+                streamId: s.id,
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0
+            };
+        });
+
+        return { type: 'mosaic-grid', cells: cells, rows: 0, cols: 0, mode: 'density-mosaic' };
+    }
+
     // Public API
     return {
         calculateLayout,
@@ -1985,6 +2494,7 @@ const PlexdGrid = (function() {
         calculateTetrisLayout,
         calculateStripsLayout,
         calculateSpotlightLayout,
+        calculateDensityLayout,
         applyLayout,
         onContainerResize,
         fitToContainer,

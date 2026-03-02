@@ -2402,6 +2402,29 @@ const PlexdApp = (function() {
         inputEl.focus();
     }
 
+    // Detect Stash URLs and fetch metadata (tags, actors, studio) from server.
+    // Fire-and-forget: stream appears immediately, metadata populates async.
+    function enrichStashStream(stream) {
+        if (!stream || !stream.url) return;
+        // Match Stash URL pattern: /scene/{id}/stream
+        if (!/\/scene\/\d+/.test(stream.url)) return;
+        fetch('/api/stash/scene-info?url=' + encodeURIComponent(stream.url))
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(info) {
+                if (!info) return;
+                // Re-find stream in case it was removed while we fetched
+                var current = PlexdStream.getAllStreams().find(function(s) { return s.id === stream.id; });
+                if (!current) return;
+                current.aiTags = info.tags || [];
+                current.actors = info.actors || [];
+                current.category = info.category || '';
+                current.title = info.title || '';
+                current.site = info.site || '';
+                updateStreamInfoOverlay(current);
+            })
+            .catch(function() { /* Stash unreachable — no metadata, no problem */ });
+    }
+
     /**
      * Add a stream to the display
      */
@@ -2428,6 +2451,9 @@ const PlexdApp = (function() {
 
         // Auto-assign rating to the new video
         PlexdStream.distributeRatingsEvenly();
+
+        // Enrich Stash streams with metadata (async, fire-and-forget)
+        enrichStashStream(stream);
 
         // Add to history
         addToHistory(url);

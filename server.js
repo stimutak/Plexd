@@ -4509,6 +4509,59 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // POST /api/moments/enrich-stash - Backfill Stash metadata for moments with scene URLs
+    // Finds moments whose sourceUrl matches /scene/{id}/ and fetches title/performers/tags
+    if (pathname === '/api/moments/enrich-stash' && req.method === 'POST') {
+        const stashMoments = momentsDb.filter(m =>
+            m.sourceUrl && /\/scene\/\d+/.test(m.sourceUrl)
+        );
+        let enriched = 0, failed = 0;
+        for (const mom of stashMoments) {
+            const match = mom.sourceUrl.match(/\/scene\/(\d+)/);
+            if (!match) continue;
+            try {
+                const data = await fetchStashGraphQL(`query ($id: ID!) {
+                    findScene(id: $id) {
+                        id title rating100
+                        performers { name }
+                        tags { name }
+                        studio { name }
+                    }
+                }`, { id: match[1] });
+                const scene = data.findScene;
+                if (!scene) { failed++; continue; }
+                // Only update fields that are missing or are raw URLs
+                if (!mom.sourceTitle || mom.sourceTitle.includes('/scene/') || mom.sourceTitle === 'Stash Scene') {
+                    // Use scene title, or studio+performers fallback, or "Scene #id"
+                    var fallback = scene.studio?.name
+                        ? scene.studio.name + (scene.performers?.length ? ': ' + scene.performers.map(p => p.name).join(', ') : '')
+                        : 'Scene #' + match[1];
+                    mom.sourceTitle = scene.title || fallback;
+                }
+                if (!mom.performers || mom.performers.length === 0) {
+                    mom.performers = (scene.performers || []).map(p => p.name);
+                }
+                // Merge Stash tags into userTags (don't overwrite aiTags)
+                const stashTags = (scene.tags || []).map(t => t.name);
+                if (stashTags.length > 0) {
+                    const existing = new Set(mom.userTags || []);
+                    stashTags.forEach(t => existing.add(t));
+                    mom.userTags = Array.from(existing);
+                }
+                if (scene.studio?.name && !mom.category) {
+                    mom.category = scene.studio.name;
+                }
+                enriched++;
+            } catch (err) {
+                failed++;
+            }
+        }
+        if (enriched > 0) saveMomentsDb();
+        console.log(`[Server] Enriched ${enriched}/${stashMoments.length} Stash moments (${failed} failed)`);
+        jsonOk(res, { total: stashMoments.length, enriched, failed });
+        return;
+    }
+
     // POST /api/demo/refresh-auth - Force re-authenticate all Aylo sites using instance tokens
     if (pathname === '/api/demo/refresh-auth' && req.method === 'POST') {
         _refreshedTokens = {}; // Clear cached tokens to force re-auth

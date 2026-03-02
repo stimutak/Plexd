@@ -787,7 +787,6 @@ const PlexdApp = (function() {
         // Build tags from stream metadata (site, performers, content tags)
         var momentTags = [];
         if (stream.site) momentTags.push(stream.site);
-        if (stream.actors && stream.actors.length) momentTags = momentTags.concat(stream.actors);
         if (stream.category) momentTags.push(stream.category);
         return PlexdMoments.createMoment({
             sourceUrl: srcUrl,
@@ -801,6 +800,7 @@ const PlexdApp = (function() {
             loved: PlexdStream.isFavorite(stream.id),
             thumbnailDataUrl: PlexdStream.captureStreamFrame(stream.id),
             tags: momentTags,
+            performers: stream.actors || [],
             aiTags: stream.aiTags || []
         });
     }
@@ -924,7 +924,6 @@ const PlexdApp = (function() {
                 var dur = s.video.duration;
                 var momTags = [];
                 if (s.site) momTags.push(s.site);
-                if (s.actors && s.actors.length) momTags = momTags.concat(s.actors);
                 if (s.category) momTags.push(s.category);
                 var newMom = PlexdMoments.createMoment({
                     sourceUrl: srcUrl,
@@ -938,6 +937,7 @@ const PlexdApp = (function() {
                     loved: PlexdStream.isFavorite(s.id),
                     thumbnailDataUrl: PlexdStream.captureStreamFrame(s.id),
                     tags: momTags,
+                    performers: s.actors || [],
                     aiTags: s.aiTags || []
                 });
                 queueMomentExtraction(newMom, s);
@@ -1543,6 +1543,10 @@ const PlexdApp = (function() {
         if (!stream || !containerEl) return null;
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
+        // Enrich Stash streams with metadata (title, performers, tags).
+        // Without this, session-restored Stash streams have no metadata,
+        // and moments captured from them get raw URLs as titles.
+        enrichStashStream(stream);
         // NOTE: updateLayout() is NOT called here — callers must batch it.
         return stream;
     }
@@ -2479,10 +2483,15 @@ const PlexdApp = (function() {
                 current.aiTags = info.tags || [];
                 current.actors = info.actors || [];
                 current.category = info.category || '';
-                current.title = info.title || '';
                 current.site = info.site || '';
+                // Use scene title, or build from studio+actors
+                var sceneTitle = info.title && info.title !== 'Stash Scene' ? info.title : '';
+                if (!sceneTitle && info.actors && info.actors.length > 0) {
+                    sceneTitle = (info.category ? info.category + ': ' : '') + info.actors.join(', ');
+                }
+                current.title = sceneTitle || current.title || '';
                 updateStreamInfoOverlay(current);
-                if (info.title) updateHistoryTitle(current.url, info.title);
+                if (current.title) updateHistoryTitle(current.url, current.title);
             })
             .catch(function() { /* Stash unreachable — no metadata, no problem */ });
     }
@@ -4253,18 +4262,20 @@ const PlexdApp = (function() {
             });
             card.appendChild(img);
 
-            // Info overlay: sourceTitle, duration, rating, loved
+            // Info overlay: performers, sourceTitle, duration, rating, loved
             var info = document.createElement('div');
             info.className = 'moment-card-info';
+            var performers = (mom.performers || []).join(', ');
             var title = mom.sourceTitle || '';
             if (title.length > 20) title = title.slice(0, 18) + '\u2026';
             var dur = (mom.end - mom.start).toFixed(1) + 's';
             var ratingText = mom.rating > 0 ? ' \u2605' + mom.rating : '';
             var lovedText = mom.loved ? ' \u2665' : '';
-            if (title) {
+            var displayLabel = performers || title;
+            if (displayLabel) {
                 var titleSpan = document.createElement('div');
                 titleSpan.className = 'moment-card-title';
-                titleSpan.textContent = title;
+                titleSpan.textContent = displayLabel.length > 20 ? displayLabel.slice(0, 18) + '\u2026' : displayLabel;
                 info.appendChild(titleSpan);
             }
             var metaSpan = document.createElement('div');
@@ -4716,12 +4727,14 @@ const PlexdApp = (function() {
             cell.appendChild(timeline);
             cell._timeline = { fill: fill, peakDot: peakDot, handleL: handleL, handleR: handleR, bar: timeline };
 
-            // Tag labels (user + AI)
+            // Performer + tag labels
+            var performers = mom.performers || [];
             var tags = (mom.userTags || []).concat(mom.aiTags || []);
-            if (tags.length > 0) {
+            var labels = performers.concat(tags);
+            if (labels.length > 0) {
                 var tagLabel = document.createElement('div');
                 tagLabel.className = 'wall-cell-tags';
-                tagLabel.textContent = tags.slice(0, 3).join(' \u00b7 ');
+                tagLabel.textContent = labels.slice(0, 3).join(' \u00b7 ');
                 cell.appendChild(tagLabel);
             }
             cell._moment = mom;
@@ -5239,8 +5252,11 @@ const PlexdApp = (function() {
         if (infoEl) {
             var dur = (mom.end - mom.start).toFixed(1) + 's';
             var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
-            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 25) + ' \u2014 ' : '';
-            infoEl.textContent = title + (idx + 1) + '/' + moments.length + ' \u2014 ' + dur + rating;
+            var performers = (mom.performers || []).join(', ');
+            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 25) : '';
+            var label = performers || title;
+            if (performers && title) label = performers.slice(0, 20) + ' \u2014 ' + title;
+            infoEl.textContent = (label ? label + ' \u2014 ' : '') + (idx + 1) + '/' + moments.length + ' \u2014 ' + dur + rating;
         }
 
         // Sync cursor to playing index
@@ -5565,13 +5581,17 @@ const PlexdApp = (function() {
         overlay.className = 'popup-info-overlay';
 
         var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 40) : '';
+        var performers = (mom.performers || []).join(', ');
         var dur = (mom.end - mom.start).toFixed(1) + 's';
         var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
         var loved = mom.loved ? ' \u2665' : '';
-        var tags = (mom.aiTags || []).join(' \u00b7 ');
+        var allTags = (mom.userTags || []).concat(mom.aiTags || []);
+        var tags = allTags.join(' \u00b7 ');
 
         var lines = [];
-        lines.push((idx + 1) + '/' + moments.length + (title ? ' \u2014 ' + title : ''));
+        var label = performers || title;
+        if (performers && title) label = performers + ' \u2014 ' + title;
+        lines.push((idx + 1) + '/' + moments.length + (label ? ' \u2014 ' + label : ''));
         lines.push(dur + rating + loved);
         if (tags) lines.push(tags);
         overlay.textContent = lines.join('\n');
@@ -5592,15 +5612,19 @@ const PlexdApp = (function() {
         var infoEl = panel.querySelector('.moment-popup-info');
         if (infoEl) {
             var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
+            var performers = (mom.performers || []).join(', ');
             var dur = (mom.end - mom.start).toFixed(1) + 's';
             var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
             var loved = mom.loved ? ' \u2665' : '';
-            infoEl.textContent = (title ? title + ' \u2014 ' : '') + dur + rating + loved;
+            var infoText = performers || title;
+            if (performers && title) infoText = performers + ' \u2014 ' + title;
+            infoEl.textContent = (infoText ? infoText + ' \u2014 ' : '') + dur + rating + loved;
         }
 
         // Update windowed tags row
         var tagsEl = panel.querySelector('.moment-popup-tags');
-        if (mom.aiTags && mom.aiTags.length > 0) {
+        var allPopupTags = (mom.userTags || []).concat(mom.aiTags || []);
+        if (allPopupTags.length > 0) {
             if (!tagsEl) {
                 tagsEl = document.createElement('div');
                 tagsEl.className = 'moment-popup-tags';
@@ -5609,7 +5633,7 @@ const PlexdApp = (function() {
                 if (videoEl) panel.insertBefore(tagsEl, videoEl);
                 else panel.appendChild(tagsEl);
             }
-            tagsEl.textContent = mom.aiTags.join(' \u00b7 ');
+            tagsEl.textContent = allPopupTags.join(' \u00b7 ');
         } else if (tagsEl) {
             tagsEl.textContent = '';
         }
@@ -5638,17 +5662,21 @@ const PlexdApp = (function() {
         var info = document.createElement('div');
         info.className = 'moment-popup-info';
         var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
+        var performers = (mom.performers || []).join(', ');
         var dur = (mom.end - mom.start).toFixed(1) + 's';
         var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
         var loved = mom.loved ? ' \u2665' : '';
-        info.textContent = (title ? title + ' \u2014 ' : '') + dur + rating + loved;
+        var infoText = performers || title;
+        if (performers && title) infoText = performers + ' \u2014 ' + title;
+        info.textContent = (infoText ? infoText + ' \u2014 ' : '') + dur + rating + loved;
         panel.appendChild(info);
 
-        // AI tags row
-        if (mom.aiTags && mom.aiTags.length > 0) {
+        // Tags row (AI + user tags)
+        var allTags = (mom.userTags || []).concat(mom.aiTags || []);
+        if (allTags.length > 0) {
             var popupTags = document.createElement('div');
             popupTags.className = 'moment-popup-tags';
-            popupTags.textContent = mom.aiTags.join(' \u00b7 ');
+            popupTags.textContent = allTags.join(' \u00b7 ');
             panel.appendChild(popupTags);
         }
 
@@ -5769,8 +5797,12 @@ const PlexdApp = (function() {
             block.appendChild(peak);
 
             block.addEventListener('click', function() {
-                stream.video.currentTime = mom.peak;
-                showMessage('Jumped to moment', 'info');
+                // Resolve stream fresh at click time (captured ref may be stale)
+                var s = PlexdStream.getStream(stageHeroId);
+                if (!s || !s.video) { showMessage('Stream not available', 'info'); return; }
+                s.video.currentTime = mom.peak;
+                if (s.video.paused) s.video.play();
+                showMessage('Jumped to moment ★' + (mom.rating || 0), 'info');
             });
 
             strip.appendChild(block);

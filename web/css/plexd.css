@@ -350,8 +350,12 @@ body {
     outline: none;
 }
 
+.plexd-seek-bar:hover {
+    height: 12px;
+}
+
 .plexd-seek-bar::-webkit-slider-runnable-track {
-    height: 8px;
+    height: inherit;
     border-radius: 4px;
 }
 
@@ -4221,7 +4225,7 @@ body {
     bottom: 0;
     left: 0;
     right: 0;
-    height: 6px;
+    height: 10px;
     background: rgba(255, 255, 255, 0.05);
     z-index: 150000;
     pointer-events: auto;
@@ -4233,11 +4237,11 @@ body {
     background: rgba(212, 175, 55, 0.4);
     border-radius: 2px;
     cursor: pointer;
-    min-width: 3px;
+    min-width: 5px;
 }
 .stage-moment-block:hover {
     background: rgba(212, 175, 55, 0.8);
-    box-shadow: 0 0 6px var(--gold);
+    box-shadow: 0 0 8px var(--gold);
 }
 .stage-moment-peak {
     position: absolute;

@@ -2425,15 +2425,15 @@ async function refreshReptyleActorsFromApi(auth) {
 
 // Reverse-map a Reptyle offset tag ID back to the tag name string (for ES query filtering)
 function reptyleTagIdToName(tagId) {
-    // Read cached tags and find by ID
-    try {
-        const cached = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
-        for (const tags of Object.values(cached)) {
-            for (const t of tags) {
+    // Use in-memory merged tag cache (populated by loadCacheFromDisk/rebuildMergedCaches)
+    if (_tagCache) {
+        const reptyleTags = _tagCache['Reptyle'];
+        if (reptyleTags) {
+            for (const t of reptyleTags) {
                 if (t.id === tagId) return t.name;
             }
         }
-    } catch (e) { /* no cache */ }
+    }
     return null;
 }
 
@@ -4579,9 +4579,13 @@ const server = http.createServer(async (req, res) => {
                 error: auth.error || null
             };
         }
-        // Reptyle
+        // Reptyle — save old token, restore on failure (same pattern as keepalive)
+        const oldReptyleToken = _reptyleAccessToken;
         _reptyleAccessToken = null;
         const reptyleAuth = await getReptyleAuth();
+        if (!reptyleAuth.accessToken && oldReptyleToken && !isJwtExpired(oldReptyleToken)) {
+            _reptyleAccessToken = oldReptyleToken; // restore still-valid token
+        }
         results.reptyle = {
             loggedIn: !!reptyleAuth.accessToken,
             hasSession: !!getReptyleRefreshToken(),

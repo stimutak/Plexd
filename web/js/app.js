@@ -3850,13 +3850,30 @@ const PlexdApp = (function() {
         cancelStagger();
         // Pause remote control polling — frees 7 req/sec from the 6-connection pool
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.pausePolling();
-        // Pause all main streams — keep buffered data for resolveMomentStream reuse
-        momentBrowserState._pausedStreams = [];
+        // Suspend all main streams — release HTTP connections so clip videos can load.
+        // Chrome allows only 6 connections per host (HTTP/1.1). With 18+ streams,
+        // clip videos get stuck at readyState=0 waiting for a connection slot.
+        // pause() alone doesn't help — paused videos still hold connections for buffering.
+        momentBrowserState._suspendedStreams = [];
         PlexdStream.getAllStreams().forEach(function(s) {
-            if (s.video && !s.video.paused) {
-                s.video.pause();
-                momentBrowserState._pausedStreams.push(s.id);
+            if (!s.video) return;
+            var info = {
+                id: s.id,
+                wasPaused: s.video.paused,
+                time: s.video.currentTime,
+                src: s.video.src,
+                muted: s.video.muted
+            };
+            // Save HLS instance state
+            if (s.hls) {
+                s.hls.stopLoad();
+                info.hadHls = true;
             }
+            // Release the network connection
+            s.video.pause();
+            s.video.removeAttribute('src');
+            s.video.load(); // Resets network state, frees the connection
+            momentBrowserState._suspendedStreams.push(info);
         });
 
         // Clean up any active canvas mirrors BEFORE removing DOM
@@ -6400,12 +6417,29 @@ const PlexdApp = (function() {
         });
         _extractedVideos = {};
 
-        // Resume streams that were playing before browser opened
-        if (momentBrowserState._pausedStreams) {
-            momentBrowserState._pausedStreams.forEach(function(id) {
-                PlexdStream.resumeStream(id);
+        // Restore suspended streams — reload their sources and resume playback
+        if (momentBrowserState._suspendedStreams) {
+            momentBrowserState._suspendedStreams.forEach(function(info) {
+                var stream = PlexdStream.getStream(info.id);
+                if (!stream || !stream.video) return;
+                // Restore HLS
+                if (info.hadHls && stream.hls) {
+                    stream.hls.startLoad();
+                } else if (info.src) {
+                    stream.video.src = info.src;
+                }
+                stream.video.muted = info.muted;
+                // Seek and play once metadata is available
+                if (!info.wasPaused) {
+                    stream.video.addEventListener('loadedmetadata', function onMeta() {
+                        stream.video.removeEventListener('loadedmetadata', onMeta);
+                        if (info.time > 0) stream.video.currentTime = info.time;
+                        stream.video.play().catch(function() {});
+                    });
+                }
+                stream.video.load();
             });
-            momentBrowserState._pausedStreams = null;
+            momentBrowserState._suspendedStreams = null;
         }
         // Resume remote control polling
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.resumePolling();

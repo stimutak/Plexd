@@ -3838,8 +3838,15 @@ const PlexdApp = (function() {
                             thumbnailDataUrl: null // clear client-side thumb — server generates from clip
                         });
                         console.log('[Moments] Extraction complete:', momentId);
-                        // Refresh Grid/Wall so poster images update — skip Player/Collage (destroys playback)
-                        if (momentBrowserState.open && momentBrowserState.mode <= 1) renderCurrentBrowserMode();
+                        // Update just the affected cell's poster — do NOT call renderCurrentBrowserMode()
+                        // which tears down ALL canvas mirrors and rebuilds the entire view
+                        if (momentBrowserState.open) {
+                            var cell = document.querySelector('[data-moment-id="' + momentId + '"]');
+                            if (cell) {
+                                var img = cell.querySelector('img');
+                                if (img) img.src = '/api/moments/' + momentId + '/thumbnail?' + Date.now();
+                            }
+                        }
                     } else if (data.status === 'failed') {
                         clearInterval(_extractionPollers[momentId]);
                         delete _extractionPollers[momentId];
@@ -3882,17 +3889,40 @@ const PlexdApp = (function() {
         cancelStagger();
         // Pause remote control polling — frees 7 req/sec from the 6-connection pool
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.pausePolling();
-        // Do NOT suspend/destroy grid streams here. Wall and Collage modes mirror
-        // grid stream videos via canvas — they need the streams alive, seekable,
-        // and playing. Destroying streams forces resolveMomentStream() to create
-        // new extracted <video> elements per cell, which spawns out of control.
-        // Grid mode uses thumbnail images (no video needed), so no suspension needed either.
+        // Suspend grid streams — stop timeout retries from saturating connections.
+        // With 22 streams all timing out and retrying, they eat all 6 HTTP/1.1
+        // connections to localhost, starving local clip video loads.
+        // Canvas mirrors won't work (streams are dead anyway from timeouts),
+        // so wall/collage modes use local extracted clips instead.
+        // CRITICAL: Stop health watchdog FIRST — otherwise it detects suspended
+        // streams as "stalled" and triggers recovery, re-saturating connections.
+        PlexdStream.stopHealthMonitoring();
         momentBrowserState._suspendedStreams = [];
         PlexdStream.getAllStreams().forEach(function(s) {
             if (!s.video) return;
-            momentBrowserState._suspendedStreams.push({
-                id: s.id, wasPaused: s.video.paused
-            });
+            var info = {
+                id: s.id,
+                wasPaused: s.video.paused,
+                time: s.video.currentTime,
+                muted: s.video.muted
+            };
+            if (s.hls) {
+                info.hadHls = true;
+                info.hlsSourceUrl = s.sourceUrl || s.url;
+                s.hls.destroy();
+                s.hls = null;
+            }
+            // Cancel any pending recovery timer before removing src
+            if (s.recovery && s.recovery.retryTimer) {
+                clearTimeout(s.recovery.retryTimer);
+                s.recovery.retryTimer = null;
+                s.recovery.isRecovering = false;
+            }
+            s.suspended = true;
+            s.video.pause();
+            s.video.removeAttribute('src');
+            s.video.load();
+            momentBrowserState._suspendedStreams.push(info);
         });
 
         // Clean up any active canvas mirrors BEFORE removing DOM
@@ -4719,6 +4749,7 @@ const PlexdApp = (function() {
         var canvasRefs = []; // { canvas, ctx, sourceVid, mom }
         wallMirrorState.canvasRefs = canvasRefs; // expose for edit-mode source swap
         var wallSourceHandled = {}; // Track which source videos already have loop handlers
+        wallMirrorState._sourceHandled = wallSourceHandled; // expose for selection change reset
 
         // --- Phase 1: Create lightweight cells with thumbnail posters (no video elements) ---
         moments.forEach(function(mom, idx) {
@@ -4837,6 +4868,7 @@ const PlexdApp = (function() {
             if (loadedStream && loadedStream.video) {
                 var sourceVid = loadedStream.video;
                 var isExtracted = !!loadedStream._isExtracted;
+                if (isExtracted) wallMirrorState._extractedMomId = mom.id;
                 canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom });
 
                 // Save play state before forcing play
@@ -4903,19 +4935,9 @@ const PlexdApp = (function() {
                 if (selMom && selMom.extracted) upgradeEditCellToSource(selMom);
             }
         } else {
-            // Normal Wall mode: lazy-init visible cells via IntersectionObserver
-            var wallObserver = new IntersectionObserver(function(entries) {
-                entries.forEach(function(entry) {
-                    if (entry.isIntersecting) {
-                        initWallCell(entry.target);
-                        wallObserver.unobserve(entry.target);
-                    }
-                });
-            }, { root: viewport, rootMargin: '100px' });
-            grid.querySelectorAll('.moment-wall-cell').forEach(function(cell) {
-                wallObserver.observe(cell);
-            });
-            wallMirrorState._observer = wallObserver;
+            // Normal Wall mode: only live-mirror the selected cell (saves connections/memory)
+            var selectedCell = grid.querySelector('.moment-wall-cell.selected');
+            if (selectedCell) initWallCell(selectedCell);
         }
 
         // rAF mirror loop — draws only initialized canvasRefs (visible cells)
@@ -5048,6 +5070,28 @@ const PlexdApp = (function() {
             var idx = parseInt(cell.dataset.index, 10);
             cell.classList.toggle('selected', idx === momentBrowserState.selectedIndex);
         });
+        // Normal wall mode: stop old mirrors, init only the new selected cell
+        if (!wallEditMode) {
+            stopWallMirrors();
+            // Release extracted video from previous cell
+            if (wallMirrorState._extractedMomId) {
+                _releaseExtractedVideo(wallMirrorState._extractedMomId);
+                wallMirrorState._extractedMomId = null;
+            }
+            var canvasRefs = wallMirrorState.canvasRefs;
+            if (canvasRefs) canvasRefs.length = 0;
+            // Reset source handled map so new cell can register its handler
+            if (wallMirrorState._sourceHandled) {
+                var sh = wallMirrorState._sourceHandled;
+                for (var k in sh) delete sh[k];
+            }
+            var selected = document.querySelector('.moment-wall-cell.selected');
+            if (selected) {
+                // Reset init flag so it re-inits with fresh video mirror
+                selected._wallInitialized = false;
+                if (wallMirrorState._initCell) wallMirrorState._initCell(selected);
+            }
+        }
         if (wallEditMode) {
             var moments = momentBrowserState.filteredMoments;
             var mom = moments[momentBrowserState.selectedIndex] || null;
@@ -5187,7 +5231,13 @@ const PlexdApp = (function() {
             momentBrowserState.playerHistoryPos = -1; // at head
         }
 
-        // Stop previous mirror
+        // Stop previous mirror and release its extracted video slot
+        // (Player only uses one video at a time — keeping old ones fills the
+        //  MAX_EXTRACTED_VIDEOS=3 pool and forces later moments to thumbnail)
+        if (reelMirror._extractedMomId && reelMirror._extractedMomId !== mom.id) {
+            _releaseExtractedVideo(reelMirror._extractedMomId);
+            reelMirror._extractedMomId = null;
+        }
         stopReelMirror();
         // Generation counter: async callbacks check this to skip stale completions
         var gen = ++reelMirror.generation;
@@ -5240,6 +5290,7 @@ const PlexdApp = (function() {
             var isExtracted = !!loadedStream._isExtracted;
 
             if (isExtracted) {
+                reelMirror._extractedMomId = mom.id;
                 var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
                 sourceVid.src = clipUrl;
                 sourceVid.currentTime = 0;
@@ -5593,6 +5644,15 @@ const PlexdApp = (function() {
     }
 
     var _popupInfoVisible = false;
+    var _browserInfoVisible = true; // Info overlays on grid/wall/player cards — visible by default
+
+    function toggleMomentBrowserInfo() {
+        _browserInfoVisible = !_browserInfoVisible;
+        // Toggle CSS class on the browser overlay to show/hide all info elements
+        var overlay = document.getElementById('encore-overlay');
+        if (overlay) overlay.classList.toggle('hide-moment-info', !_browserInfoVisible);
+        showMessage('Moment info: ' + (_browserInfoVisible ? 'ON' : 'OFF'), 'info');
+    }
 
     function togglePopupInfoOverlay() {
         _popupInfoVisible = !_popupInfoVisible;
@@ -6010,11 +6070,11 @@ const PlexdApp = (function() {
 
             case 'i':
                 e.preventDefault();
-                // Fullscreen popup: toggle info overlay on video
+                // Toggle info (performers, title, tags) across all modes
                 if (momentBrowserState.popupOpen) {
                     togglePopupInfoOverlay();
                 } else {
-                    toggleStatusLog();
+                    toggleMomentBrowserInfo();
                 }
                 return true;
 
@@ -6351,9 +6411,13 @@ const PlexdApp = (function() {
                 var curMoments = momentBrowserState.filteredMoments;
                 var curIdx = momentBrowserState.selectedIndex;
                 if (curMoments.length > 0 && curMoments[curIdx]) {
-                    PlexdMoments.updateMoment(curMoments[curIdx].id, { rating: pressedRating });
+                    var ratedId = curMoments[curIdx].id;
+                    PlexdMoments.updateMoment(ratedId, { rating: pressedRating });
                     showMessage(pressedRating > 0 ? '\u2605' + pressedRating : 'Rating cleared', 'info');
                     momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                    // Follow the rated moment to its new position after re-sort
+                    var newIdx = momentBrowserState.filteredMoments.findIndex(function(m) { return m.id === ratedId; });
+                    if (newIdx >= 0) momentBrowserState.selectedIndex = newIdx;
                     renderCurrentBrowserMode();
                     updateSelectedMomentStatus();
                 }
@@ -6436,16 +6500,25 @@ const PlexdApp = (function() {
         });
         _extractedVideos = {};
 
-        // Resume streams that wall/collage mode may have paused
+        // Restore streams that were suspended — reload source (src was removed)
         if (momentBrowserState._suspendedStreams) {
             momentBrowserState._suspendedStreams.forEach(function(info) {
                 var stream = PlexdStream.getStream(info.id);
                 if (!stream || !stream.video) return;
-                if (!info.wasPaused && stream.video.paused) {
-                    stream.video.play().catch(function() {});
+                stream.suspended = false;
+                // reloadStream re-initializes HLS/src with proxied URL and restores position
+                PlexdStream.reloadStream(info.id);
+                // If stream was paused before suspension, pause it after reload starts
+                if (info.wasPaused) {
+                    // Give reloadStream a tick to set src before pausing
+                    setTimeout(function() {
+                        if (stream.video) stream.video.pause();
+                    }, 50);
                 }
             });
             momentBrowserState._suspendedStreams = null;
+            // Restart health watchdog now that streams have sources again
+            PlexdStream.startHealthMonitoring();
         }
         // Resume remote control polling
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.resumePolling();
@@ -9326,6 +9399,14 @@ const PlexdApp = (function() {
             }
         }
 
+        // Collect stream ratings for ALL streams (URL-based, not just local files)
+        const streamRatings = {};
+        validUrlStreams.forEach(s => {
+            const url = s.serverUrl || s.url;
+            const rating = PlexdStream.getRating(s.url, s.fileName);
+            if (rating > 0) streamRatings[url] = rating;
+        });
+
         // Collect favorites data (which streams are favorited)
         const favoriteUrls = [];
         const favoriteFileNames = [];
@@ -9371,6 +9452,7 @@ const PlexdApp = (function() {
             urls: urls,
             localFiles: localFiles,
             localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
+            streamRatings: Object.keys(streamRatings).length > 0 ? streamRatings : undefined,
             localFilesSavedToDisc: savedToDisc,
             loginDomains: loginDomains,
             favoriteUrls: favoriteUrls.length > 0 ? favoriteUrls : undefined,
@@ -9545,6 +9627,14 @@ const PlexdApp = (function() {
         });
         const loginDomains = extractLoginDomains(urls);
 
+        // Collect stream ratings for all URL streams
+        const streamRatings = {};
+        validUrlStreams.forEach(s => {
+            const url = s.serverUrl || s.url;
+            const rating = PlexdStream.getRating(s.url, s.fileName);
+            if (rating > 0) streamRatings[url] = rating;
+        });
+
         // Check if user wants to save local files to disc
         let savedToDisc = false;
         if (localFileStreams.length > 0) {
@@ -9584,6 +9674,7 @@ const PlexdApp = (function() {
             urls: urls,
             localFiles: localFiles,
             localFileRatings: Object.keys(localFileRatings).length > 0 ? localFileRatings : undefined,
+            streamRatings: Object.keys(streamRatings).length > 0 ? streamRatings : undefined,
             localFilesSavedToDisc: savedToDisc,
             loginDomains: loginDomains,
             savedAt: Date.now(),
@@ -10306,6 +10397,29 @@ const PlexdApp = (function() {
                 }
             }
         });
+
+        // Apply saved ratings from localStorage and set data
+        // (must happen after all streams are created but before stagger-activate)
+        var streamRatings = combo.streamRatings || {};
+        setTimeout(function() {
+            // First restore set-specific ratings (handles URL changes across sessions)
+            var allLoadedStreams = PlexdStream.getAllStreams();
+            var setRatingsApplied = 0;
+            Object.keys(streamRatings).forEach(function(url) {
+                var match = allLoadedStreams.find(function(s) { return s.url === url || s.serverUrl === url; });
+                if (match) {
+                    PlexdStream.setRating(match.id, streamRatings[url]);
+                    setRatingsApplied++;
+                }
+            });
+            // Then sync any other ratings from localStorage (catch-all)
+            PlexdStream.syncRatingStatus();
+            PlexdStream.syncFavoriteStatus();
+            // Auto-assign only truly unrated streams
+            var assigned = PlexdStream.distributeRatingsEvenly();
+            if (setRatingsApplied > 0) console.log('[Plexd] Restored ' + setRatingsApplied + ' set ratings');
+            if (assigned > 0) console.log('[Plexd] Auto-assigned ' + assigned + ' unrated streams');
+        }, 50);
 
         // Restore favorites
         let favoritesRestored = 0;

@@ -356,6 +356,9 @@ const PlexdStream = (function() {
             return url;
         }
 
+        // Normalize URL to avoid double-encoding (Aylo API returns URLs with %3D etc.)
+        try { url = decodeURIComponent(url); } catch (e) { /* malformed encoding, use as-is */ }
+
         // HLS gets the manifest-rewriting proxy
         if (url.toLowerCase().includes('.m3u8')) {
             return `/api/proxy/hls?url=${encodeURIComponent(url)}`;
@@ -561,6 +564,9 @@ const PlexdStream = (function() {
      * Prevents thundering herd when many streams stall simultaneously.
      */
     function scheduleRecovery(stream, reason) {
+        if (stream.suspended) {
+            return; // Stream suspended by moment browser — don't recover
+        }
         if (stream.recovery.isRecovering) {
             return; // Already recovering
         }
@@ -630,6 +636,10 @@ const PlexdStream = (function() {
      * Perform actual stream recovery
      */
     function performRecovery(stream) {
+        if (stream.suspended) {
+            releaseRecoverySlot();
+            return; // Stream suspended — don't reload
+        }
         const attempt = stream.recovery.retryCount;
         const video = stream.video;
         const savedTime = video.currentTime || 0;
@@ -722,7 +732,7 @@ const PlexdStream = (function() {
                 }, { once: true });
                 video.play().catch(() => {});
             } else {
-                video.src = stream.url;
+                video.src = loadUrl;
                 video.load();
                 video.addEventListener('loadedmetadata', () => {
                     if (savedTime > 1) video.currentTime = savedTime + 2;
@@ -2528,13 +2538,14 @@ const PlexdStream = (function() {
 
             // If not already using HLS.js, try loading as HLS (might be HLS without extension)
             if (!stream.hls && hlsAvailable && !stream.hlsFallbackAttempted && mightBeHlsUrl(stream.url)) {
-                console.log(`[${stream.id}] Trying HLS.js fallback for: ${stream.url}`);
+                const fallbackUrl = stream.sourceUrl || stream.url;
+                console.log(`[${stream.id}] Trying HLS.js fallback for: ${fallbackUrl}`);
                 stream.hlsFallbackAttempted = true;
                 stream.error = null;
                 stream.state = 'loading';
 
-                // Try loading with HLS.js
-                const hls = createHlsInstance(stream, stream.url);
+                // Try loading with HLS.js — use proxied sourceUrl, not raw url
+                const hls = createHlsInstance(stream, fallbackUrl);
                 stream.hls = hls;
                 return; // Don't show error yet, wait for HLS result
             }
@@ -2989,7 +3000,7 @@ const PlexdStream = (function() {
                         } catch (_) {}
                     }, { once: true });
                 }
-                video.src = url;
+                video.src = loadUrl;
                 video.load();
                 if (shouldPlay) video.play().catch(() => {});
             }
@@ -4633,6 +4644,12 @@ const PlexdStream = (function() {
         isPageVisible = !document.hidden;
 
         if (isPageVisible) {
+            // Check if streams are suspended (moment browser has freed connections for clip playback)
+            var anySuspended = Array.from(streams.values()).some(function(s) { return s.suspended; });
+            if (anySuspended) {
+                console.log('Page visible - streams suspended, skipping resume');
+                return;
+            }
             console.log('Page visible - resuming streams (staggered)');
             // Page is visible again - resume/recover streams with staggered play to avoid thundering herd
             var resumeDelay = 0;

@@ -100,6 +100,9 @@ let extractsPaused = false; // One at a time (MAX_CONCURRENT_EXTRACTS=1), trigge
 const MOMENTS_JSON = path.join(MOMENTS_DIR, 'moments.json');
 const MOMENTS_THUMBS = path.join(MOMENTS_DIR, 'thumbnails');
 
+// Limit concurrent ffmpeg thumbnail generation to 1 (prevents server overload)
+let _thumbGenActive = false;
+
 // Ensure moments directories exist
 if (!fs.existsSync(MOMENTS_DIR)) {
     fs.mkdirSync(MOMENTS_DIR, { recursive: true });
@@ -1278,7 +1281,7 @@ function queuePendingTranscodes() {
 // setTimeout(queuePendingTranscodes, 2000);
 
 // Fetch a URL with redirect following (up to 5 redirects)
-function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
+function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}, timeoutMs = 30000) {
     if (redirectCount > 5) {
         callback(new Error('Too many redirects'));
         return;
@@ -1292,12 +1295,12 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}) {
 
     const mod = targetUrl.startsWith('https') ? https : http;
     const headers = { 'User-Agent': 'Plexd/1.0', ...extraHeaders };
-    const req = mod.get(targetUrl, { headers, timeout: 30000 }, (proxyRes) => {
+    const req = mod.get(targetUrl, { headers, timeout: timeoutMs }, (proxyRes) => {
         // Follow redirects
         if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
             const redirectUrl = new URL(proxyRes.headers.location, targetUrl).href;
             proxyRes.resume(); // Consume response to free socket
-            fetchUrl(redirectUrl, callback, redirectCount + 1, extraHeaders);
+            fetchUrl(redirectUrl, callback, redirectCount + 1, extraHeaders, timeoutMs);
             return;
         }
         callback(null, proxyRes);
@@ -2774,7 +2777,9 @@ function rewriteM3u8(content, manifestUrl) {
         if (trimmed.startsWith('#') && trimmed.includes('URI=')) {
             return line.replace(/URI="([^"]+)"/g, (match, uri) => {
                 const absoluteUrl = new URL(uri, manifestUrl).href;
-                return `URI="/api/proxy/hls?url=${encodeURIComponent(absoluteUrl)}"`;
+                // Decode first to avoid double-encoding (CDN URLs may contain %3D etc.)
+                const normalized = safeDecodeURI(absoluteUrl);
+                return `URI="/api/proxy/hls?url=${encodeURIComponent(normalized)}"`;
             });
         }
 
@@ -2783,8 +2788,14 @@ function rewriteM3u8(content, manifestUrl) {
 
         // Non-comment lines are URLs (segments or sub-playlists)
         const absoluteUrl = new URL(trimmed, manifestUrl).href;
-        return `/api/proxy/hls?url=${encodeURIComponent(absoluteUrl)}`;
+        const normalized = safeDecodeURI(absoluteUrl);
+        return `/api/proxy/hls?url=${encodeURIComponent(normalized)}`;
     }).join('\n');
+}
+
+// Decode a URL to normalize percent-encoding (prevents double-encoding in proxy URLs)
+function safeDecodeURI(url) {
+    try { return decodeURIComponent(url); } catch { return url; }
 }
 
 // MIME types
@@ -3732,9 +3743,10 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // 8s timeout for HLS (segments are small, expired URLs shouldn't block connections for 30s)
         fetchUrl(targetUrl, (err, proxyRes) => {
             if (err) {
-                console.error(`[Server] Proxy error: ${err.message}`);
+                console.error(`[Server] HLS proxy error: ${err.message}`);
                 if (!res.headersSent) {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
@@ -3769,17 +3781,17 @@ const server = http.createServer(async (req, res) => {
                 });
             } else {
                 // Stream segment/binary data directly
-                const headers = {
+                const outHeaders = {
                     'Content-Type': contentType || 'video/mp2t',
                     'Cache-Control': 'max-age=86400'
                 };
                 if (proxyRes.headers['content-length']) {
-                    headers['Content-Length'] = proxyRes.headers['content-length'];
+                    outHeaders['Content-Length'] = proxyRes.headers['content-length'];
                 }
-                res.writeHead(200, headers);
+                res.writeHead(200, outHeaders);
                 proxyRes.pipe(res);
             }
-        });
+        }, 0, {}, 8000);
         return;
     }
 
@@ -4225,7 +4237,9 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 2) No cached thumb — extract via ffmpeg from clip or source video
+        // 2) No cached thumb — extract via ffmpeg from LOCAL clip or source video only.
+        //    Never spawn ffmpeg for external URLs — signed URLs expire and ffmpeg hangs
+        //    for 10s per process, crashing the server when dozens fire simultaneously.
         const clipPath = path.join(MOMENTS_DIR, `${momentId}.mp4`);
         let inputPath = null;
         let seekTime = 0.5;
@@ -4233,7 +4247,7 @@ const server = http.createServer(async (req, res) => {
         if (clipPath.startsWith(MOMENTS_DIR) && fs.existsSync(clipPath)) {
             inputPath = clipPath;
         } else {
-            // 3) No clip — try source video at the moment's peak time
+            // 3) No clip — try LOCAL source video at the moment's peak time
             const mom = momentsDb.find(m => m.id === momentId);
             if (mom) {
                 seekTime = mom.peak || mom.start || 0;
@@ -4249,10 +4263,8 @@ const server = http.createServer(async (req, res) => {
                         const hlsPlaylist = path.join(hlsDir, 'playlist.m3u8');
                         if (fs.existsSync(hlsPlaylist)) inputPath = hlsPlaylist;
                     }
-                } else if (srcUrl.startsWith('http')) {
-                    // External URL — ffmpeg can fetch directly
-                    inputPath = srcUrl;
                 }
+                // External URLs (http) are NOT used — signed URLs expire and ffmpeg hangs
             }
         }
 
@@ -4261,17 +4273,21 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // Limit concurrent ffmpeg thumbnail generation to 1 to prevent server overload
+        if (_thumbGenActive) {
+            jsonError(res, 503, 'Thumbnail generation busy');
+            return;
+        }
+        _thumbGenActive = true;
+
         const ffArgs = ['-ss', String(seekTime), '-i', inputPath,
             '-vframes', '1',
             '-vf', 'scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2',
             '-q:v', '4',
             '-y', thumbPath];
-        // External URLs need a timeout and user-agent
-        if (inputPath.startsWith('http')) {
-            ffArgs.unshift('-timeout', '10000000', '-user_agent', 'Mozilla/5.0');
-        }
         const ffmpeg = spawn('ffmpeg', ffArgs);
         ffmpeg.on('close', (code) => {
+            _thumbGenActive = false;
             if (code !== 0 || !fs.existsSync(thumbPath)) {
                 jsonError(res, 500, 'Thumbnail generation failed');
                 return;
@@ -4285,6 +4301,7 @@ const server = http.createServer(async (req, res) => {
             fs.createReadStream(thumbPath).pipe(res);
         });
         ffmpeg.on('error', () => {
+            _thumbGenActive = false;
             jsonError(res, 500, 'ffmpeg not available');
         });
         return;

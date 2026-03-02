@@ -4202,6 +4202,14 @@ body {
 .moment-popup-panel.fullscreen .moment-popup-video {
     max-height: none;
 }
+/* I key toggle: hide info overlays across all moment browser modes */
+.hide-moment-info .moment-card-info,
+.hide-moment-info .wall-cell-tags,
+.hide-moment-info .moment-reel-info,
+.hide-moment-info .moment-popup-info,
+.hide-moment-info .moment-popup-tags {
+    display: none !important;
+}
 
 /* Popup Info Overlay (fullscreen viewer, toggled with i) */
 .popup-info-overlay {

@@ -956,6 +956,22 @@ const PlexdApp = (function() {
             }
         }, 3000);
 
+        // Background refresh tags & performers cache (stale-while-revalidate)
+        setTimeout(function() {
+            fetch('/api/demo/tags').then(function(r) { return r.json(); }).then(function(data) {
+                if (data.tags) {
+                    _tagCache = data.tags;
+                    try { localStorage.setItem('plexd_tagCache', JSON.stringify(_tagCache)); } catch(e) {}
+                }
+            }).catch(function() {});
+            fetch('/api/demo/actors').then(function(r) { return r.json(); }).then(function(data) {
+                if (data.actors) {
+                    _performerCache = data.actors;
+                    try { localStorage.setItem('plexd_performerCache', JSON.stringify(_performerCache)); } catch(e) {}
+                }
+            }).catch(function() {});
+        }, 3000);
+
         // Cast state listener
         if (typeof PlexdCast !== 'undefined') {
             PlexdCast.onStateChange(function(state) {
@@ -1543,10 +1559,9 @@ const PlexdApp = (function() {
         if (!stream || !containerEl) return null;
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
-        // Enrich Stash streams with metadata (title, performers, tags).
-        // Without this, session-restored Stash streams have no metadata,
-        // and moments captured from them get raw URLs as titles.
-        enrichStashStream(stream);
+        // NOTE: enrichStashStream() NOT called here — it fires HTTP requests that
+        // compete for the 6-connection limit and can hang if Stash is unreachable.
+        // Enrichment happens lazily in addStream() (interactive adds only).
         // NOTE: updateLayout() is NOT called here — callers must batch it.
         return stream;
     }
@@ -1558,7 +1573,7 @@ const PlexdApp = (function() {
      * buffering before starting the next one.
      */
     // ── Tag Browser ──────────────────────────────────────
-    var _tagCache = null;
+    var _tagCache = JSON.parse(localStorage.getItem('plexd_tagCache') || 'null');
     var _selectedTagIds = new Set(
         JSON.parse(localStorage.getItem('plexd_selectedTags') || '[]')
     );
@@ -1572,6 +1587,7 @@ const PlexdApp = (function() {
             return null;
         }
         _tagCache = data.tags;
+        try { localStorage.setItem('plexd_tagCache', JSON.stringify(_tagCache)); } catch(e) {}
         return _tagCache;
     }
 
@@ -1705,7 +1721,7 @@ const PlexdApp = (function() {
     }
 
     // ── Performer Browser (state) ───────────────────────
-    var _performerCache = null;
+    var _performerCache = JSON.parse(localStorage.getItem('plexd_performerCache') || 'null');
     var _selectedPerformerIds = new Set(
         JSON.parse(localStorage.getItem('plexd_selectedPerformers') || '[]')
     );
@@ -1782,6 +1798,7 @@ const PlexdApp = (function() {
             return null;
         }
         _performerCache = data.actors;
+        try { localStorage.setItem('plexd_performerCache', JSON.stringify(_performerCache)); } catch(e) {}
         return _performerCache;
     }
 
@@ -3666,11 +3683,14 @@ const PlexdApp = (function() {
     }
 
     var _extractedVideos = {};
+    var MAX_EXTRACTED_VIDEOS = 3; // Chrome limits WebMediaPlayers per page (crbug.com/1144736)
 
     function _makeExtractedVideoSource(mom) {
         if (_extractedVideos[mom.id]) {
             return { video: _extractedVideos[mom.id], id: 'extracted_' + mom.id, _isExtracted: true };
         }
+        // Enforce limit — too many video elements crashes Chrome
+        if (Object.keys(_extractedVideos).length >= MAX_EXTRACTED_VIDEOS) return null;
         var vid = document.createElement('video');
         vid.muted = true;
         vid.playsInline = true;
@@ -3682,6 +3702,17 @@ const PlexdApp = (function() {
         _extractedVideos[mom.id] = vid;
         vid.src = mom.extractedPath;
         return { video: vid, id: 'extracted_' + mom.id, _isExtracted: true };
+    }
+
+    // Free an extracted video slot so a new one can be created
+    function _releaseExtractedVideo(momentId) {
+        var vid = _extractedVideos[momentId];
+        if (!vid) return;
+        vid.pause();
+        vid.removeAttribute('src');
+        vid.load();
+        if (vid.parentNode) vid.parentNode.removeChild(vid);
+        delete _extractedVideos[momentId];
     }
 
     function resolveMomentStream(mom) {
@@ -3700,10 +3731,11 @@ const PlexdApp = (function() {
             var sUrl = all[i].serverUrl || all[i].url;
             if (sUrl === mom.sourceUrl && isVideoUsable(all[i].video)) return all[i];
         }
-        // 3. Try local clip (server may have it even if client flag is stale)
+        // 3. Try local clip — but respect the video element limit
         var clipUrl = '/api/moments/' + mom.id + '/clip.mp4';
         var tempMom = { id: mom.id, extractedPath: clipUrl };
         var source = _makeExtractedVideoSource(tempMom);
+        if (!source) return null; // Limit reached — caller shows thumbnail
         // If clip 404s, queue extraction (download once from Stash, save locally)
         source.video.addEventListener('error', function() {
             if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
@@ -3850,30 +3882,17 @@ const PlexdApp = (function() {
         cancelStagger();
         // Pause remote control polling — frees 7 req/sec from the 6-connection pool
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.pausePolling();
-        // Suspend all main streams — release HTTP connections so clip videos can load.
-        // Chrome allows only 6 connections per host (HTTP/1.1). With 18+ streams,
-        // clip videos get stuck at readyState=0 waiting for a connection slot.
-        // pause() alone doesn't help — paused videos still hold connections for buffering.
+        // Do NOT suspend/destroy grid streams here. Wall and Collage modes mirror
+        // grid stream videos via canvas — they need the streams alive, seekable,
+        // and playing. Destroying streams forces resolveMomentStream() to create
+        // new extracted <video> elements per cell, which spawns out of control.
+        // Grid mode uses thumbnail images (no video needed), so no suspension needed either.
         momentBrowserState._suspendedStreams = [];
         PlexdStream.getAllStreams().forEach(function(s) {
             if (!s.video) return;
-            var info = {
-                id: s.id,
-                wasPaused: s.video.paused,
-                time: s.video.currentTime,
-                src: s.video.src,
-                muted: s.video.muted
-            };
-            // Save HLS instance state
-            if (s.hls) {
-                s.hls.stopLoad();
-                info.hadHls = true;
-            }
-            // Release the network connection
-            s.video.pause();
-            s.video.removeAttribute('src');
-            s.video.load(); // Resets network state, frees the connection
-            momentBrowserState._suspendedStreams.push(info);
+            momentBrowserState._suspendedStreams.push({
+                id: s.id, wasPaused: s.video.paused
+            });
         });
 
         // Clean up any active canvas mirrors BEFORE removing DOM
@@ -6417,27 +6436,14 @@ const PlexdApp = (function() {
         });
         _extractedVideos = {};
 
-        // Restore suspended streams — reload their sources and resume playback
+        // Resume streams that wall/collage mode may have paused
         if (momentBrowserState._suspendedStreams) {
             momentBrowserState._suspendedStreams.forEach(function(info) {
                 var stream = PlexdStream.getStream(info.id);
                 if (!stream || !stream.video) return;
-                // Restore HLS
-                if (info.hadHls && stream.hls) {
-                    stream.hls.startLoad();
-                } else if (info.src) {
-                    stream.video.src = info.src;
+                if (!info.wasPaused && stream.video.paused) {
+                    stream.video.play().catch(function() {});
                 }
-                stream.video.muted = info.muted;
-                // Seek and play once metadata is available
-                if (!info.wasPaused) {
-                    stream.video.addEventListener('loadedmetadata', function onMeta() {
-                        stream.video.removeEventListener('loadedmetadata', onMeta);
-                        if (info.time > 0) stream.video.currentTime = info.time;
-                        stream.video.play().catch(function() {});
-                    });
-                }
-                stream.video.load();
             });
             momentBrowserState._suspendedStreams = null;
         }

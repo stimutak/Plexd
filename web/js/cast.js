@@ -99,7 +99,7 @@ const PlexdCast = (function() {
      */
     function detectAvailability() {
         // Chrome Cast SDK
-        if (window.chrome && window.chrome.cast) {
+        if (window.cast && cast.framework) {
             availability.cast = true;
             initChromeCast();
         }
@@ -111,7 +111,7 @@ const PlexdCast = (function() {
         }
 
         // Presentation API (Chrome, Edge)
-        if (navigator.presentation && navigator.presentation.request) {
+        if (window.PresentationRequest) {
             availability.presentation = true;
         }
 
@@ -433,8 +433,19 @@ const PlexdCast = (function() {
 
     // --- Public API ---
 
+    // Called when Chrome Cast SDK loads (may be after init)
+    function initCastLate() {
+        if (availability.cast) return; // already detected
+        if (window.cast && cast.framework) {
+            availability.cast = true;
+            initChromeCast();
+            notifyStateChange();
+        }
+    }
+
     return {
         init: init,
+        initCast: initCastLate,
         getState: getState,
         getAvailability: getAvailability,
         castStream: castStream,
@@ -447,16 +458,14 @@ const PlexdCast = (function() {
 
 // --- Outside IIFE: SDK callback + fallback init ---
 
-// Chrome Cast SDK calls this when ready
+// Always init on DOM ready for AirPlay/Presentation detection
+document.addEventListener('DOMContentLoaded', function() {
+    PlexdCast.init();
+});
+
+// Chrome Cast SDK calls this when ready (may fire after DOMContentLoaded)
 window['__onGCastApiAvailable'] = function(isAvailable) {
     if (isAvailable) {
-        PlexdCast.init();
+        PlexdCast.initCast();
     }
 };
-
-// If Cast SDK not present, init on DOM ready for AirPlay/Presentation detection
-if (!window.chrome || !window.chrome.cast) {
-    document.addEventListener('DOMContentLoaded', function() {
-        PlexdCast.init();
-    });
-}

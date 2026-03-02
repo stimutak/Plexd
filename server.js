@@ -884,7 +884,7 @@ function runDownload(jobId) {
         '-i', job.url,
         '-c', 'copy',
         '-bsf:a', 'aac_adtstoasc',
-        '-movflags', 'frag_keyframe+empty_moov',
+        '-movflags', '+faststart',
         '-f', 'mp4',
         '-y', partPath
     ];
@@ -1332,33 +1332,53 @@ async function scrapeXhamsterVideo(pageUrl) {
 }
 
 // ── Aylo Network Integration ──────────────────────────────────────────────
-// Multi-site support: Brazzers, Mofos, and any other Aylo (MindGeek) network login.
-// All sites share the same API (site-api.project1service.com) with identical cookie names
-// (access_token_ma, refresh_token_ma, instance_token, app_session_id).
-// Only the cookie host domain and Origin/Referer headers differ per site.
-// Sub-brands (Digital Playground, Reality Kings, Babes, etc.) are accessible through
-// the parent network's auth token — no separate login needed.
+// Multi-site Aylo (MindGeek) support.
+// All sites share the API at site-api.project1service.com with identical cookie names.
+// Auth cookie domains: site-ma.brazzers.com, site-ma.mofos.com, etc.
+// Cross-network access: a subscription (e.g. Mofos) unlocks content from other brands
+// via the `groupId` API parameter (each brand has a numeric group ID).
 
-// Each entry maps a network to its API origin and cookie source.
-// cookieHost: which Chrome cookie domain to read auth from.
-// Multiple networks can share a cookieHost (e.g. Mofos login grants access to all).
 const AYLO_SITES = {
-    brazzers:         { origin: 'site-ma.brazzers.com',         cookieHost: 'brazzers', tagId: -1,  label: 'Brazzers' },
-    mofos:            { origin: 'site-ma.mofos.com',            cookieHost: 'mofos',    tagId: -2,  label: 'Mofos' },
-    realitykings:     { origin: 'site-ma.realitykings.com',     cookieHost: 'mofos',    tagId: -3,  label: 'Reality Kings' },
-    babes:            { origin: 'site-ma.babes.com',            cookieHost: 'mofos',    tagId: -4,  label: 'Babes' },
-    digitalplayground:{ origin: 'site-ma.digitalplayground.com',cookieHost: 'mofos',    tagId: -5,  label: 'Digital Playground' },
-    twistys:          { origin: 'site-ma.twistys.com',          cookieHost: 'mofos',    tagId: -6,  label: 'Twistys' },
-    fakehub:          { origin: 'site-ma.fakehub.com',          cookieHost: 'mofos',    tagId: -7,  label: 'Fake Hub' },
-    seancody:         { origin: 'site-ma.seancody.com',         cookieHost: 'mofos',    tagId: -8,  label: 'Sean Cody' },
-    bromo:            { origin: 'site-ma.bromo.com',            cookieHost: 'mofos',    tagId: -9,  label: 'Bromo' },
-    transangels:      { origin: 'site-ma.transangels.com',      cookieHost: 'mofos',    tagId: -10, label: 'Trans Angels' },
-    milehighmedia:    { origin: 'site-ma.milehighmedia.com',    cookieHost: 'mofos',    tagId: -11, label: 'Mile High Media' },
-    metrohd:          { origin: 'site-ma.metrohd.com',          cookieHost: 'mofos',    tagId: -12, label: 'Metro HD' },
+    brazzers:     { origin: 'site-ma.brazzers.com',     cookieHost: 'brazzers' },
+    mofos:        { origin: 'site-ma.mofos.com',        cookieHost: 'mofos' },
+    spicevids:    { origin: 'site-ma.spicevids.com',    cookieHost: 'spicevids' },
+    spicevidsgay: { origin: 'site-ma.spicevidsgay.com', cookieHost: 'spicevidsgay' },
+    // Add more: log into site-ma.X.com in Chrome, then add entry here
 };
-// Reverse lookup: tagId → siteName
-const AYLO_SITE_BY_TAG_ID = {};
-for (const [name, site] of Object.entries(AYLO_SITES)) AYLO_SITE_BY_TAG_ID[site.tagId] = name;
+
+// Brand groups: accessible via `groupId=` parameter on /v2/releases.
+// A subscription may unlock multiple groups. Groups with no video files through a
+// given subscription are auto-detected and skipped at startup.
+// Synthetic tag IDs: -(groupId) e.g. groupId 1 → tagId -1
+const AYLO_GROUPS = {
+    'Reality Kings':      { groupId: 1 },
+    'Babes':              { groupId: 3 },
+    'Brazzers':           { groupId: 5 },
+    'Bromo':              { groupId: 7 },
+    'Digital Playground': { groupId: 9 },
+    'Erito':              { groupId: 11 },
+    'Hentai Pros':        { groupId: 13 },
+    'Mofos':              { groupId: 15 },
+    'Men':                { groupId: 17 },
+    'Reality Dudes':      { groupId: 19 },
+    'Sean Cody':          { groupId: 21 },
+    'Trans Angels':       { groupId: 23 },
+    'True Amateurs':      { groupId: 27 },
+    'Twistys':            { groupId: 29 },
+};
+
+// Per-auth playable groups — populated at startup by probing each group for video files.
+// Map: siteName → [{ name, groupId, tagId, total, native }]
+let _playableGroups = {};
+
+// Reverse lookup: synthetic tagId → { groupName, groupId }
+const AYLO_GROUP_BY_TAG_ID = {};
+for (const [name, g] of Object.entries(AYLO_GROUPS)) {
+    AYLO_GROUP_BY_TAG_ID[-g.groupId] = { name, groupId: g.groupId };
+}
+
+// Collection (sub-brand) cache — populated from /v1/collections API per site.
+let _collectionCache = null;
 
 // ── Stash Server Integration ───────────────────────────────────────────────────
 // Stash is a local media server with a GraphQL API. Scenes, tags, performers,
@@ -1910,13 +1930,24 @@ async function refreshActorsFromApi(auth) {
     auth.externalIp = await getExternalIp();
     const siteName = auth._site || 'brazzers';
 
-    // Extract female actors from top-rated (4+ star) scenes of all time
-    const pages = Array.from({ length: 10 }, (_, i) => i * 50);
-    const pageResults = await Promise.allSettled(
-        pages.map(offset => fetchAyloApi(
-            `/v2/releases?limit=50&offset=${offset}&type=scene&orderBy=-stats.rating`, auth
-        ))
-    );
+    // Build group queries: native (no groupId) + each playable cross-network group
+    const groups = _playableGroups[siteName] || [];
+    const groupQueries = ['']; // empty = native catalog
+    for (const g of groups) {
+        if (!g.native && g.groupId) groupQueries.push('&groupId=' + g.groupId);
+    }
+
+    // Extract performers from top-rated scenes across all accessible groups
+    const allQueries = [];
+    for (const groupParam of groupQueries) {
+        const pages = Array.from({ length: 5 }, (_, i) => i * 50);
+        for (const offset of pages) {
+            allQueries.push(fetchAyloApi(
+                `/v2/releases?limit=50&offset=${offset}&type=scene&orderBy=-stats.rating${groupParam}`, auth
+            ));
+        }
+    }
+    const pageResults = await Promise.allSettled(allQueries);
     const actorMap = {};
     for (const r of pageResults) {
         if (r.status !== 'fulfilled' || r.value.status !== 200) continue;
@@ -1924,7 +1955,7 @@ async function refreshActorsFromApi(auth) {
             const rating = scene.stats && scene.stats.rating;
             if (rating !== undefined && rating < 80) continue;
             for (const a of (scene.actors || [])) {
-                if (a.id && a.name && !actorMap[a.id] && a.gender !== 'male') {
+                if (a.id && a.name && !actorMap[a.id]) {
                     actorMap[a.id] = { id: a.id, name: a.name };
                 }
             }
@@ -1934,7 +1965,7 @@ async function refreshActorsFromApi(auth) {
     const actors = Object.values(actorMap).sort((a, b) => a.name.localeCompare(b.name));
     if (actors.length > 0) {
         saveCacheToDisk(siteActorsCacheFile(siteName), actors);
-        console.log('[Cache] Refreshed ' + siteName + ' performers: ' + actors.length + ' female from 4+ star scenes');
+        console.log('[Cache] Refreshed ' + siteName + ' performers: ' + actors.length + ' from ' + groupQueries.length + ' groups (4+ star scenes)');
         rebuildMergedCaches();
     }
     return _actorCache;
@@ -1977,24 +2008,107 @@ async function refreshStashStudios() {
     console.log('[Cache] Refreshed Stash studios: ' + studios.length);
 }
 
+// Fetch collections (sub-brands) for a site from /v1/collections API
+async function refreshCollectionsFromApi(auth) {
+    const siteName = auth._site || 'unknown';
+    try {
+        const resp = await fetchAyloApi('/v1/collections?limit=100', auth);
+        if (resp.status === 200 && resp.data.result) {
+            return resp.data.result.map(c => ({ name: c.name, collectionId: c.id, site: siteName }));
+        }
+    } catch (e) { /* fall through */ }
+    return [];
+}
+
+// Probe which AYLO_GROUPS are playable through a given auth.
+// A group is playable if at least one recent scene has video files in the response.
+// Also checks "native" content (no groupId) for brands like Brazzers that don't support groupId.
+async function discoverPlayableGroups(auth) {
+    const playable = [];
+    const probes = [];
+
+    // Probe each group with explicit groupId=
+    for (const [name, g] of Object.entries(AYLO_GROUPS)) {
+        probes.push(
+            fetchAyloApi('/v2/releases?limit=5&type=scene&groupId=' + g.groupId + '&orderBy=-dateReleased', auth)
+                .then(r => {
+                    if (r.status === 200 && r.data.result?.length) {
+                        const total = r.data.meta?.total || 0;
+                        const hasFiles = r.data.result.some(s => s.videos?.full?.files?.length > 0);
+                        if (hasFiles) {
+                            playable.push({ name, groupId: g.groupId, tagId: -g.groupId, total, native: false });
+                        }
+                    }
+                })
+                .catch(() => {})
+        );
+    }
+
+    // Also probe native content (no groupId) — the auth's own brand catalog.
+    // Checks 5 scenes because the newest may be upcoming/preview with no video files.
+    probes.push(
+        fetchAyloApi('/v2/releases?limit=5&type=scene&orderBy=-dateReleased', auth)
+            .then(r => {
+                if (r.status !== 200 || !r.data?.result?.length) return;
+                const total = r.data.meta?.total || 0;
+                const brand = r.data.result[0].brand || auth._site;
+                const hasFiles = r.data.result.some(s => s.videos?.full?.files?.length > 0);
+                if (hasFiles) {
+                    for (const [name, g] of Object.entries(AYLO_GROUPS)) {
+                        if (name.toLowerCase().replace(/\s/g, '') === brand.toLowerCase().replace(/\s/g, '')) {
+                            if (!playable.some(p => p.groupId === g.groupId)) {
+                                playable.push({ name, groupId: g.groupId, tagId: -g.groupId, total, native: true });
+                            }
+                            break;
+                        }
+                    }
+                }
+            })
+            .catch(() => {})
+    );
+
+    await Promise.allSettled(probes);
+    // Dedupe by groupId (race between groupId and native probes can cause duplicates)
+    const deduped = new Map();
+    for (const g of playable) {
+        if (!deduped.has(g.groupId)) deduped.set(g.groupId, g);
+    }
+    return [...deduped.values()];
+}
+
 // Background refresh — runs every 6 hours.
-// Only refreshes one site per unique cookieHost (tags/performers overlap across sub-brands).
 async function backgroundCatalogRefresh() {
     try {
-        const seen = new Set();
         const refreshes = [];
+        const collectionResults = [];
         for (const name of Object.keys(AYLO_SITES)) {
-            const host = AYLO_SITES[name].cookieHost;
-            if (seen.has(host)) continue;
-            seen.add(host);
             const auth = await getAyloAuth(name);
             if (!auth.accessToken) continue;
-            refreshes.push(refreshTagsFromApi(auth), refreshActorsFromApi(auth));
+            auth.externalIp = await getExternalIp();
+            refreshes.push(refreshTagsFromApi(auth));
+            refreshes.push(refreshActorsFromApi(auth));
+            collectionResults.push(refreshCollectionsFromApi(auth));
+            refreshes.push(
+                discoverPlayableGroups(auth).then(groups => {
+                    _playableGroups[name] = groups;
+                    console.log('[Cache] ' + name + ' playable groups: ' + groups.map(g => g.name + '(' + g.total + ')').join(', '));
+                })
+            );
         }
         if (refreshes.length > 0) {
             await Promise.allSettled(refreshes);
-            console.log('[Cache] Background refresh complete for ' + seen.size + ' cookie hosts');
         }
+        const allColls = [];
+        const collResults = await Promise.allSettled(collectionResults);
+        for (const r of collResults) {
+            if (r.status === 'fulfilled') allColls.push(...r.value);
+        }
+        if (allColls.length > 0) {
+            _collectionCache = allColls;
+            saveCacheToDisk(path.join(CACHE_DIR, 'collections.json'), _collectionCache);
+        }
+        saveCacheToDisk(path.join(CACHE_DIR, 'playable-groups.json'), _playableGroups);
+        console.log('[Cache] Background refresh complete');
         // Stash refresh (independent of Aylo auth)
         try {
             await Promise.allSettled([refreshStashTags(), refreshStashPerformers(), refreshStashStudios()]);
@@ -2009,131 +2123,139 @@ async function backgroundCatalogRefresh() {
 
 // Load from disk immediately, schedule background refreshes
 loadCacheFromDisk();
-setTimeout(backgroundCatalogRefresh, 10000); // Try refresh 10s after startup
+try {
+    _collectionCache = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'collections.json'), 'utf8'));
+} catch (e) { _collectionCache = null; }
+try {
+    _playableGroups = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'playable-groups.json'), 'utf8'));
+    const total = Object.values(_playableGroups).reduce((s, gs) => s + gs.length, 0);
+    console.log('[Cache] Loaded ' + total + ' playable groups from disk');
+} catch (e) { _playableGroups = {}; }
+setTimeout(backgroundCatalogRefresh, 10000);
 setInterval(backgroundCatalogRefresh, CATALOG_REFRESH_INTERVAL);
 
-// Scrape top-rated scenes from ALL logged-in Aylo sites.
-// Multi-site: fetches from each site in parallel, merges + dedupes by scene ID.
-// Supports relaxed matching: when tagIds/actorIds provided, makes parallel per-filter
-// API calls across all sites, scores scenes by how many filters match (best first).
-// Site filter: negative tagIds (e.g. -1=brazzers, -2=mofos) restrict to specific sites.
+// Build list of { auth, groupId, groupName } combos to query.
+// Groups marked `native: true` are queried WITHOUT groupId (native brand catalog).
+function getAuthGroupCombos(auths, filterGroupIds) {
+    const combos = [];
+    for (const auth of auths) {
+        const groups = _playableGroups[auth._site];
+        if (groups && groups.length > 0) {
+            for (const g of groups) {
+                if (filterGroupIds && !filterGroupIds.has(g.groupId)) continue;
+                combos.push({ auth, groupId: g.native ? null : g.groupId, groupName: g.name, total: g.total || 500 });
+            }
+        } else {
+            if (!filterGroupIds) combos.push({ auth, groupId: null, groupName: auth._site });
+        }
+    }
+    return combos;
+}
+
+// Scrape top-rated scenes from ALL logged-in Aylo sites + cross-network groups.
+// Group filter: negative tagIds (e.g. -1=groupId 1=Reality Kings) restrict to specific brands.
 async function scrapeAyloScenes(count, tagIds, actorIds) {
-    // Separate site filter IDs (negative) from real Aylo tag IDs (positive)
-    const siteFilterNames = [];
+    const filterGroupIds = new Set();
     const realTagIds = [];
+    let hasGroupFilter = false;
     for (const id of (tagIds || [])) {
-        if (AYLO_SITE_BY_TAG_ID[id]) siteFilterNames.push(AYLO_SITE_BY_TAG_ID[id]);
-        else realTagIds.push(id);
+        if (id < 0 && AYLO_GROUP_BY_TAG_ID[id]) {
+            filterGroupIds.add(AYLO_GROUP_BY_TAG_ID[id].groupId);
+            hasGroupFilter = true;
+        } else if (id > 0) {
+            realTagIds.push(id);
+        }
     }
 
-    // Get auths — filtered by site if site tags were selected
-    let auths;
-    if (siteFilterNames.length > 0) {
-        auths = [];
-        for (const name of siteFilterNames) {
-            const auth = await getAyloAuth(name);
-            if (auth.accessToken) auths.push(auth);
-        }
-        if (auths.length === 0) throw new Error('No valid login for selected sites: ' + siteFilterNames.join(', '));
-    } else {
-        auths = await getAllAyloAuths();
-        if (auths.length === 0) throw new Error('No valid Aylo login. Log into any site in Chrome.');
-    }
+    const auths = await getAllAyloAuths();
+    if (auths.length === 0) throw new Error('No valid Aylo login. Log into any site in Chrome.');
 
     const externalIp = await getExternalIp();
     for (const auth of auths) auth.externalIp = externalIp;
 
+    const combos = getAuthGroupCombos(auths, hasGroupFilter ? filterGroupIds : null);
+    if (combos.length === 0) throw new Error('No playable groups for selected brands.');
+
     const limit = Math.ceil(count * 3);
     const hasFilters = (realTagIds.length > 0) || (actorIds && actorIds.length > 0);
-
-    const sceneMap = {}; // id → { scene, score, site }
+    const sceneMap = {};
 
     if (hasFilters) {
-        // Relaxed matching: one API call per filter per site, merge and score
-        // Random offset into the result set for variety across requests
         const tagIdSet = new Set(realTagIds);
         const actorIdSet = new Set(actorIds || []);
-        const offset = Math.floor(Math.random() * 50);
-        const basePath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating`;
 
         const queries = [];
-        for (const auth of auths) {
-            for (const id of tagIdSet) queries.push(fetchAyloApi(basePath + '&tagId=' + id, auth).then(r => ({ r, site: auth._site })));
-            for (const id of actorIdSet) queries.push(fetchAyloApi(basePath + '&actorId=' + id, auth).then(r => ({ r, site: auth._site })));
+        for (const combo of combos) {
+            // Filtered result sets are much smaller (~5-15% of catalog), use conservative offset
+            const maxOffset = Math.max(10, Math.floor((combo.total || 500) * 0.05));
+            const offset = Math.floor(Math.random() * maxOffset);
+            const groupParam = combo.groupId ? '&groupId=' + combo.groupId : '';
+            const basePath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating${groupParam}`;
+            for (const id of tagIdSet) queries.push(fetchAyloApi(basePath + '&tagId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
+            for (const id of actorIdSet) queries.push(fetchAyloApi(basePath + '&actorId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
         }
 
         const results = await Promise.allSettled(queries);
-
         for (const res of results) {
             if (res.status !== 'fulfilled') continue;
-            const { r, site } = res.value;
+            const { r, groupName } = res.value;
             if (r.status !== 200) continue;
             for (const scene of (r.data.result || [])) {
                 if (sceneMap[scene.id]) continue;
                 let score = 0;
                 for (const t of (scene.tags || [])) if (tagIdSet.has(t.id)) score++;
                 for (const a of (scene.actors || [])) if (actorIdSet.has(a.id)) score++;
-                sceneMap[scene.id] = { scene, score, site };
+                sceneMap[scene.id] = { scene, score, groupName };
             }
         }
-
-        console.log('[Demo] Relaxed match: ' + Object.keys(sceneMap).length + ' unique scenes from ' + queries.length + ' queries across ' + auths.length + ' sites');
+        console.log('[Demo] Relaxed match: ' + Object.keys(sceneMap).length + ' unique scenes from ' + combos.length + ' combos');
     } else {
-        // No filters — fetch from each site in parallel, merge
-        const perSite = Math.ceil(limit / auths.length);
-        const siteQueries = auths.map(auth => {
-            const offset = Math.floor(Math.random() * 100);
+        const perCombo = Math.ceil(limit / combos.length);
+        const comboQueries = combos.map(combo => {
+            // Use catalog size to compute a wide random offset — avoids returning the same top-rated scenes every time
+            const maxOffset = Math.max(50, Math.floor((combo.total || 500) * 0.6) - perCombo);
+            const offset = Math.floor(Math.random() * maxOffset);
+            const groupParam = combo.groupId ? '&groupId=' + combo.groupId : '';
             return fetchAyloApi(
-                `/v2/releases?limit=${perSite}&offset=${offset}&type=scene&orderBy=-stats.rating`,
-                auth
-            ).then(resp => ({ resp, site: auth._site }));
+                `/v2/releases?limit=${perCombo}&offset=${offset}&type=scene&orderBy=-stats.rating${groupParam}`,
+                combo.auth
+            ).then(resp => ({ resp, groupName: combo.groupName }));
         });
 
-        const results = await Promise.allSettled(siteQueries);
+        const results = await Promise.allSettled(comboQueries);
         for (const r of results) {
             if (r.status !== 'fulfilled') continue;
-            const { resp, site } = r.value;
-            if (resp.status !== 200 || !resp.data.result) {
-                console.log('[Demo] Aylo:' + site + ' API error: ' + (resp.data?.message || resp.status));
-                continue;
-            }
+            const { resp, groupName } = r.value;
+            if (resp.status !== 200 || !resp.data.result) continue;
             for (const scene of resp.data.result) {
-                if (!sceneMap[scene.id]) sceneMap[scene.id] = { scene, score: 0, site };
+                if (!sceneMap[scene.id]) sceneMap[scene.id] = { scene, score: 0, groupName };
             }
         }
-
-        if (Object.keys(sceneMap).length === 0) {
-            throw new Error('Aylo API returned no scenes from any site');
-        }
-        console.log('[Demo] Multi-site: ' + Object.keys(sceneMap).length + ' unique scenes from ' + auths.length + ' sites');
+        if (Object.keys(sceneMap).length === 0) throw new Error('Aylo API returned no scenes');
+        console.log('[Demo] Multi-group: ' + Object.keys(sceneMap).length + ' unique scenes from ' + combos.length + ' combos');
     }
 
-    // Shuffle first, then stable-sort by score — equal scores get random order
     let sorted = Object.values(sceneMap);
     for (let i = sorted.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
     }
-    if (hasFilters) {
-        sorted.sort((a, b) => b.score - a.score);
-    }
+    if (hasFilters) sorted.sort((a, b) => b.score - a.score);
 
-    // Extract streams — add site tag to each stream
     const streams = [];
     for (const entry of sorted) {
         const scene = entry.scene;
         const rating = scene.stats && scene.stats.rating;
-        if (!hasFilters && rating !== undefined && rating < 90) continue;
+        if (!hasFilters && rating !== undefined && rating < 70) continue;
 
         const url = (scene.videos?.full && extractBestVideoUrl(scene.videos.full.files)) || null;
         if (url) {
             const tags = (scene.tags || []).map(t => t.name);
             const actors = (scene.actors || []).map(a => a.name);
             const category = (scene.collections || []).map(c => c.name).join(', ');
-            // Add site network name as a tag
-            const siteLabel = AYLO_SITES[entry.site]?.label || entry.site;
-            if (siteLabel && !tags.includes(siteLabel)) tags.unshift(siteLabel);
-            streams.push({ url, title: scene.title || category || 'Scene', tags, actors, category, site: siteLabel });
+            const brandName = entry.groupName || scene.brand || '';
+            if (brandName && !tags.includes(brandName)) tags.unshift(brandName);
+            streams.push({ url, title: scene.title || category || 'Scene', tags, actors, category, site: brandName });
         }
         if (streams.length >= count) break;
     }
@@ -3177,7 +3299,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Sanitize filename
-        const safeName = name.replace(/[^a-zA-Z0-9_\-. ]/g, '_').replace(/\.(m3u8|ts)$/i, '') + '.mp4';
+        const safeName = name.replace(/[^a-zA-Z0-9_\-. ]/g, '_').replace(/\.(m3u8|ts|mp4)$/i, '') + '.mp4';
 
         // Dedup: return existing job if same URL is already queued/downloading
         const existingJob = Object.entries(downloadJobs).find(
@@ -3901,8 +4023,12 @@ const server = http.createServer(async (req, res) => {
         }
         const stash = await checkStashConnection();
         stash.url = STASH_CONFIG.url;
+        const groups = {};
+        for (const [site, gs] of Object.entries(_playableGroups)) {
+            groups[site] = gs.map(g => g.name);
+        }
         // Backward compat: keep top-level 'brazzers' key pointing to brazzers status
-        jsonOk(res, { aylo, stash, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
+        jsonOk(res, { aylo, stash, groups, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
         return;
     }
 
@@ -3936,20 +4062,34 @@ const server = http.createServer(async (req, res) => {
                 return;
             }
         }
-        // Inject "Network" category: Aylo sites + Stash umbrella + Stash studios
+        // Inject "Network" category: Aylo groups + Stash umbrella + Stash studios
         const withNetwork = Object.assign({}, tags);
-        const networks = Object.values(AYLO_SITES).map(s => ({ id: s.tagId, name: s.label }));
-        // Add Stash umbrella
-        networks.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
-        // Add individual Stash studios from cache
+        // Build network tags from discovered playable groups
+        const networkTags = [];
+        const seen = new Set();
+        for (const groups of Object.values(_playableGroups)) {
+            for (const g of groups) {
+                if (!seen.has(g.groupId)) {
+                    seen.add(g.groupId);
+                    networkTags.push({ id: g.tagId, name: g.name });
+                }
+            }
+        }
+        if (networkTags.length === 0) {
+            for (const [name, g] of Object.entries(AYLO_GROUPS)) {
+                networkTags.push({ id: -g.groupId, name });
+            }
+        }
+        // Add Stash umbrella + individual studios
+        networkTags.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
         try {
             const studios = JSON.parse(fs.readFileSync(STASH_STUDIOS_CACHE, 'utf8'));
             for (const s of studios) {
-                networks.push({ id: STASH_STUDIO_OFFSET - s.id, name: s.name });
+                networkTags.push({ id: STASH_STUDIO_OFFSET - s.id, name: s.name });
             }
         } catch (e) { /* no studios cache yet */ }
-        networks.sort((a, b) => a.name.localeCompare(b.name));
-        withNetwork['Network'] = networks;
+        networkTags.sort((a, b) => a.name.localeCompare(b.name));
+        withNetwork['Network'] = networkTags;
         jsonOk(res, { tags: withNetwork });
         return;
     }
@@ -4017,9 +4157,9 @@ const server = http.createServer(async (req, res) => {
                     if (!videoUrl) continue;
                     const tags = (scene.tags || []).map(t => t.name);
                     const actors = (scene.actors || []).map(a => a.name);
-                    const siteLabel = AYLO_SITES[site]?.label || site;
-                    if (siteLabel && !tags.includes(siteLabel)) tags.unshift(siteLabel);
-                    sceneMap[scene.id] = { url: videoUrl, title: scene.title || 'Scene', tags, actors, category: scene.collections?.[0]?.name || '', site: siteLabel };
+                    const brandName = scene.brand || site;
+                    if (brandName && !tags.includes(brandName)) tags.unshift(brandName);
+                    sceneMap[scene.id] = { url: videoUrl, title: scene.title || 'Scene', tags, actors, category: scene.collections?.[0]?.name || '', site: brandName };
                 }
             }
             const streams = Object.values(sceneMap).slice(0, count);

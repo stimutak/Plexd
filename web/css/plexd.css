@@ -811,6 +811,11 @@ body {
     padding: 16px;
 }
 
+.plexd-stream.plexd-fullscreen .plexd-info-overlay {
+    padding-top: 108px;  /* Clear fullscreen badges (52px top + 48px height + 8px gap) */
+    font-size: 14px;
+}
+
 /* Hide controls for non-focused streams when in fullscreen/focused mode */
 .plexd-app:has(.plexd-stream.plexd-fullscreen) .plexd-stream:not(.plexd-fullscreen) .plexd-controls {
     opacity: 0 !important;
@@ -878,37 +883,33 @@ body {
 }
 
 .plexd-stream.plexd-selected::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(201, 86, 109, 0.12);
-    pointer-events: none;
-    z-index: 1;
+    display: none;
 }
 
-/* Selected badge (added in stream.js) */
+/* Selected badge (added in stream.js) — centered top to avoid corner overlaps */
 .plexd-selected-badge {
     position: absolute;
-    left: 8px;
+    left: 50%;
     top: 8px;
-    padding: 4px 10px;
+    padding: 3px 10px;
     border-radius: 999px;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.8px;
     text-transform: uppercase;
     background: rgba(201, 86, 109, 0.92);
     color: #fff;
     z-index: 35;
     opacity: 0;
-    transform: translateY(-2px);
+    transform: translateX(-50%) translateY(-2px);
     transition: opacity 0.15s ease, transform 0.15s ease;
     pointer-events: none;
+    white-space: nowrap;
 }
 
 .plexd-stream.plexd-selected .plexd-selected-badge {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
 }
 
 /* Hide selection styling in focused/fullscreen mode - it's redundant */
@@ -943,31 +944,86 @@ body {
    Stream Info Overlay
    ======================================== */
 
+/* Info overlay — positioned at TOP of stream, separate from controls at bottom */
 .plexd-info-overlay {
     position: absolute;
-    bottom: 0;
+    top: 0;
     left: 0;
     right: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 8px 12px;
-    background: linear-gradient(transparent, rgba(6, 5, 10, 0.9));
+    gap: 2px;
+    padding: 34px 8px 10px;  /* 34px top clears corner badges */
+    background: linear-gradient(rgba(6, 5, 10, 0.75) 0%, rgba(6, 5, 10, 0.5) 60%, transparent 100%);
     color: var(--text);
-    font-size: 12px;
-    z-index: 5;
+    font-size: 11px;
+    z-index: 4;  /* below badges (z:5+) and controls (z:30) */
+    pointer-events: none;
+}
+
+.plexd-info-overlay .plexd-info-chip {
+    pointer-events: auto;
 }
 
 .plexd-info-url {
-    font-family: monospace;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-sub);
-    word-break: break-all;
+    line-height: 1.4;
+}
+
+.plexd-info-title {
+    color: var(--text);
+    font-weight: 600;
+}
+
+.plexd-info-chip {
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 0 3px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.plexd-info-chip:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.plexd-info-performer {
+    color: var(--accent-light, #e8839a);
+}
+
+.plexd-info-performer:hover {
+    color: #fff;
+    background: rgba(201, 86, 109, 0.4);
+}
+
+.plexd-info-tag {
+    color: var(--gold);
+}
+
+.plexd-info-tag:hover {
+    color: #fff;
+    background: rgba(201, 163, 85, 0.3);
+}
+
+.plexd-info-tags {
+    font-size: 10px;
+    opacity: 0.7;
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.5;
+    max-height: 3em;  /* ~2 lines in grid cells */
+}
+
+.plexd-stream.plexd-fullscreen .plexd-info-tags {
+    max-height: none;
 }
 
 .plexd-info-stats {
     display: flex;
     gap: 12px;
+    font-size: 10px;
+    opacity: 0.6;
 }
 
 .plexd-info-resolution {
@@ -976,7 +1032,7 @@ body {
 }
 
 .plexd-info-state {
-    font-size: 14px;
+    font-size: 12px;
 }
 
 /* ========================================
@@ -1102,6 +1158,33 @@ body {
     padding: 6px 12px;
     background: var(--surface);
     border-bottom: 1px solid var(--subtle);
+}
+
+.plexd-panel-search {
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    border-bottom: 1px solid var(--subtle);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.plexd-panel-search:focus {
+    background: var(--hover);
+    border-bottom-color: var(--accent);
+}
+
+.plexd-panel-search::placeholder {
+    color: var(--text-dim);
+}
+
+.plexd-tag-chip.highlighted {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
 }
 
 /* ========================================
@@ -1331,6 +1414,11 @@ body {
     padding: 4px 0;
     border-bottom: 1px solid var(--line);
     margin-bottom: 6px;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+.plexd-tag-category-label:hover {
+    color: var(--text);
 }
 
 .plexd-tag-chips {
@@ -1955,9 +2043,8 @@ body {
     height: 100vh;
 }
 
-/* Clean mode - hide all per-stream controls/overlays (except errors) */
+/* Clean mode - hide per-stream controls (Shift+H). Info overlay toggled separately by I key. */
 .plexd-app.clean-mode .plexd-controls,
-.plexd-app.clean-mode .plexd-info-overlay,
 .plexd-app.clean-mode .plexd-status {
     display: none !important;
 }
@@ -2079,7 +2166,8 @@ body {
     box-shadow: 0 2px 12px rgba(201, 163, 85, 0.2);
 }
 
-.plexd-stream:hover .plexd-rating-indicator {
+.plexd-stream:hover .plexd-rating-indicator,
+.plexd-stream.plexd-selected .plexd-rating-indicator {
     opacity: 1;
 }
 
@@ -2177,7 +2265,8 @@ body {
     text-shadow: 0 0 8px rgba(201, 163, 85, 0.4);
 }
 
-.plexd-stream:hover .plexd-favorite-indicator {
+.plexd-stream:hover .plexd-favorite-indicator,
+.plexd-stream.plexd-selected .plexd-favorite-indicator {
     opacity: 1;
 }
 
@@ -2391,7 +2480,10 @@ body {
    Tetris Mode - Intelligent bin-packing
    ======================================== */
 
-/* Tetris mode indicator */
+/* Mode indicators via ::before are redundant with .plexd-mode-indicator badge — hide them all */
+#plexd-container::before { display: none !important; }
+
+/* Tetris mode indicator (legacy, hidden by rule above) */
 .plexd-app.tetris-mode #plexd-container::before {
     content: 'TETRIS';
     position: absolute;
@@ -2685,7 +2777,7 @@ body {
     z-index: 12;
 }
 .plexd-app.wall-strips .plexd-stream.plexd-selected::before {
-    background: rgba(251, 191, 36, 0.06);
+    display: none;
 }
 
 .plexd-app.wall-strips .plexd-stream:hover {
@@ -3023,14 +3115,14 @@ body {
 /* Mode indicator badge */
 .plexd-mode-indicator {
     position: fixed;
-    top: 8px;
-    right: 8px;
+    bottom: 12px;
+    right: 12px;
     z-index: 200000;
     display: flex;
-    gap: 6px;
+    gap: 4px;
     pointer-events: none;
     font-family: 'Outfit', 'SF Mono', 'Fira Code', monospace;
-    font-size: 11px;
+    font-size: 10px;
     transition: opacity 0.2s ease;
 }
 .plexd-mode-indicator:empty { display: none; }
@@ -4001,8 +4093,8 @@ body {
 /* Cast badge on stream wrapper */
 .plexd-cast-badge {
     position: absolute;
-    top: 6px;
-    right: 6px;
+    bottom: 8px;
+    right: 8px;
     background: rgba(66, 133, 244, 0.85);
     color: #fff;
     font-size: 14px;

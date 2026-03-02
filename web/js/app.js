@@ -1583,7 +1583,10 @@ const PlexdApp = (function() {
             return;
         }
         container.textContent = '';
+        // Sort categories alphabetically but pin Network to the top
         var categories = Object.keys(tags).sort();
+        var networkIdx = categories.indexOf('Network');
+        if (networkIdx > 0) { categories.splice(networkIdx, 1); categories.unshift('Network'); }
         for (var i = 0; i < categories.length; i++) {
             var cat = categories[i];
             var chips = tags[cat];
@@ -1592,6 +1595,23 @@ const PlexdApp = (function() {
             var label = document.createElement('div');
             label.className = 'plexd-tag-category-label';
             label.textContent = cat;
+            // Click category label to toggle-select all chips in that category
+            label.style.cursor = 'pointer';
+            label.onclick = (function(catChips) { return function() {
+                var ids = catChips.map(function(t) { return t.id; });
+                var allSelected = ids.every(function(id) { return _selectedTagIds.has(id); });
+                for (var k = 0; k < ids.length; k++) {
+                    if (allSelected) _selectedTagIds.delete(ids[k]);
+                    else _selectedTagIds.add(ids[k]);
+                }
+                // Update chip visuals
+                for (var k = 0; k < ids.length; k++) {
+                    var el = document.querySelectorAll('.plexd-tag-chip[data-tag-id="' + ids[k] + '"]');
+                    for (var m = 0; m < el.length; m++) el[m].classList.toggle('selected', _selectedTagIds.has(ids[k]));
+                }
+                updateTagCountBadge();
+                localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
+            }; })(chips);
             catDiv.appendChild(label);
             var chipsDiv = document.createElement('div');
             chipsDiv.className = 'plexd-tag-chips';
@@ -1608,6 +1628,8 @@ const PlexdApp = (function() {
             container.appendChild(catDiv);
         }
         updateTagCountBadge();
+        // Wire up search filter
+        _setupPanelSearch('tags-search', container);
     }
 
     function toggleTag(tagId) {
@@ -1728,6 +1750,48 @@ const PlexdApp = (function() {
             return;
         }
         container.textContent = '';
+        // Add Network filter at the top (uses tag IDs so it filters with tags+performers together)
+        if (_tagCache && _tagCache['Network'] && _tagCache['Network'].length > 0) {
+            var netDiv = document.createElement('div');
+            netDiv.className = 'plexd-tag-category';
+            var netLabel = document.createElement('div');
+            netLabel.className = 'plexd-tag-category-label';
+            netLabel.textContent = 'Network';
+            netLabel.style.cursor = 'pointer';
+            netLabel.onclick = (function(netChips) { return function() {
+                var ids = netChips.map(function(t) { return t.id; });
+                var allSelected = ids.every(function(id) { return _selectedTagIds.has(id); });
+                for (var k = 0; k < ids.length; k++) {
+                    if (allSelected) _selectedTagIds.delete(ids[k]);
+                    else _selectedTagIds.add(ids[k]);
+                }
+                for (var k = 0; k < ids.length; k++) {
+                    var el = document.querySelectorAll('.plexd-tag-chip[data-tag-id="' + ids[k] + '"]');
+                    for (var m = 0; m < el.length; m++) el[m].classList.toggle('selected', _selectedTagIds.has(ids[k]));
+                }
+                updateTagCountBadge();
+                localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
+            }; })(_tagCache['Network']);
+            netDiv.appendChild(netLabel);
+            var netChips = document.createElement('div');
+            netChips.className = 'plexd-tag-chips';
+            for (var n = 0; n < _tagCache['Network'].length; n++) {
+                var nt = _tagCache['Network'][n];
+                var nchip = document.createElement('span');
+                nchip.className = 'plexd-tag-chip' + (_selectedTagIds.has(nt.id) ? ' selected' : '');
+                nchip.setAttribute('data-tag-id', nt.id);
+                nchip.textContent = nt.name;
+                nchip.onclick = (function(id) { return function() { toggleTag(id); }; })(nt.id);
+                netChips.appendChild(nchip);
+            }
+            netDiv.appendChild(netChips);
+            container.appendChild(netDiv);
+        }
+        // Performers section
+        var perfLabel = document.createElement('div');
+        perfLabel.className = 'plexd-tag-category-label';
+        perfLabel.textContent = 'Performers';
+        container.appendChild(perfLabel);
         var chipsDiv = document.createElement('div');
         chipsDiv.className = 'plexd-tag-chips';
         for (var i = 0; i < actors.length; i++) {
@@ -1741,6 +1805,8 @@ const PlexdApp = (function() {
         }
         container.appendChild(chipsDiv);
         updatePerformerCountBadge();
+        // Wire up search filter
+        _setupPanelSearch('performers-search', container);
     }
 
     function togglePerformer(actorId) {
@@ -1770,6 +1836,179 @@ const PlexdApp = (function() {
         if (badge) badge.textContent = _selectedPerformerIds.size > 0 ? _selectedPerformerIds.size : '';
     }
 
+    // ── Panel search + keyboard navigation ───────────────
+    var _panelHighlightIdx = -1;
+
+    function _setupPanelSearch(inputId, container) {
+        var input = document.getElementById(inputId);
+        if (!input) return;
+        input.value = '';
+        // Remove old listener by replacing with clone
+        var newInput = input.cloneNode(true);
+        input.parentNode.replaceChild(newInput, input);
+        newInput.addEventListener('input', function() {
+            var query = newInput.value.toLowerCase().trim();
+            // Filter chips
+            var chips = container.querySelectorAll('.plexd-tag-chip');
+            for (var i = 0; i < chips.length; i++) {
+                var name = chips[i].textContent.toLowerCase();
+                chips[i].style.display = (!query || name.indexOf(query) !== -1) ? '' : 'none';
+            }
+            // Hide empty categories
+            var cats = container.querySelectorAll('.plexd-tag-category');
+            for (var j = 0; j < cats.length; j++) {
+                var visibleChips = cats[j].querySelectorAll('.plexd-tag-chip:not([style*="display: none"])');
+                cats[j].style.display = visibleChips.length > 0 ? '' : 'none';
+            }
+            // Also hide standalone category labels (performers panel has a loose label)
+            var labels = container.querySelectorAll(':scope > .plexd-tag-category-label');
+            for (var k = 0; k < labels.length; k++) {
+                var nextChips = labels[k].nextElementSibling;
+                if (nextChips && nextChips.classList.contains('plexd-tag-chips')) {
+                    var vis = nextChips.querySelectorAll('.plexd-tag-chip:not([style*="display: none"])');
+                    labels[k].style.display = vis.length > 0 ? '' : 'none';
+                }
+            }
+            _panelHighlightIdx = -1;
+            _clearPanelHighlight(container);
+        });
+        // Arrow keys + Space while search is focused
+        newInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                newInput.blur();
+                return;
+            }
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                _movePanelHighlight(container, e.key);
+                return;
+            }
+            if (e.key === ' ' && _panelHighlightIdx >= 0) {
+                e.preventDefault();
+                _activatePanelHighlight(container);
+                return;
+            }
+            if (e.key === 'Enter') {
+                if (_panelHighlightIdx >= 0) {
+                    e.preventDefault();
+                    _activatePanelHighlight(container);
+                } else {
+                    e.preventDefault();
+                    newInput.blur();
+                    _loadFilteredStreams();
+                }
+                return;
+            }
+        });
+    }
+
+    function _getVisibleChips(container) {
+        var all = container.querySelectorAll('.plexd-tag-chip');
+        var visible = [];
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].style.display !== 'none') visible.push(all[i]);
+        }
+        return visible;
+    }
+
+    function _clearPanelHighlight(container) {
+        var highlighted = container.querySelectorAll('.plexd-tag-chip.highlighted');
+        for (var i = 0; i < highlighted.length; i++) highlighted[i].classList.remove('highlighted');
+    }
+
+    function _movePanelHighlight(container, direction) {
+        var chips = _getVisibleChips(container);
+        if (chips.length === 0) return;
+        _clearPanelHighlight(container);
+
+        if (_panelHighlightIdx < 0) {
+            // Nothing highlighted yet — start at first chip
+            _panelHighlightIdx = 0;
+        } else if (direction === 'ArrowLeft') {
+            _panelHighlightIdx = (_panelHighlightIdx - 1 + chips.length) % chips.length;
+        } else if (direction === 'ArrowRight') {
+            _panelHighlightIdx = (_panelHighlightIdx + 1) % chips.length;
+        } else if (direction === 'ArrowDown' || direction === 'ArrowUp') {
+            // Spatial navigation: find the chip visually above/below
+            var cur = chips[_panelHighlightIdx];
+            var curRect = cur.getBoundingClientRect();
+            var curCenterX = curRect.left + curRect.width / 2;
+            var best = -1;
+            var bestDist = Infinity;
+            for (var i = 0; i < chips.length; i++) {
+                if (i === _panelHighlightIdx) continue;
+                var r = chips[i].getBoundingClientRect();
+                var centerX = r.left + r.width / 2;
+                var centerY = r.top + r.height / 2;
+                var curCenterY = curRect.top + curRect.height / 2;
+                if (direction === 'ArrowDown' && r.top <= curRect.top + 2) continue;
+                if (direction === 'ArrowUp' && r.bottom >= curRect.bottom - 2) continue;
+                // Distance: vertical distance + horizontal offset (weighted less)
+                var dy = Math.abs(centerY - curCenterY);
+                var dx = Math.abs(centerX - curCenterX);
+                var dist = dy + dx * 0.3;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = i;
+                }
+            }
+            if (best >= 0) _panelHighlightIdx = best;
+        }
+        if (_panelHighlightIdx >= 0 && _panelHighlightIdx < chips.length) {
+            chips[_panelHighlightIdx].classList.add('highlighted');
+            chips[_panelHighlightIdx].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function _activatePanelHighlight(container) {
+        var chips = _getVisibleChips(container);
+        if (_panelHighlightIdx < 0 || _panelHighlightIdx >= chips.length) return;
+        var chip = chips[_panelHighlightIdx];
+        chip.click();
+    }
+
+    // Keyboard nav for tag/performer panels when search is NOT focused
+    function handleFilterPanelKeyboard(e) {
+        var tagsPanel = document.getElementById('tags-panel');
+        var perfsPanel = document.getElementById('performers-panel');
+        var panel = null;
+        var container = null;
+        var searchId = null;
+        if (tagsPanel && tagsPanel.classList.contains('plexd-panel-open')) {
+            panel = tagsPanel; container = document.getElementById('tags-list'); searchId = 'tags-search';
+        } else if (perfsPanel && perfsPanel.classList.contains('plexd-panel-open')) {
+            panel = perfsPanel; container = document.getElementById('performers-list'); searchId = 'performers-search';
+        }
+        if (!panel || !container) return false;
+
+        // Let toggle keys (U/Y) fall through so the panel can be closed
+        if ((e.key === 'u' || e.key === 'U') && panel === tagsPanel) return false;
+        if ((e.key === 'y' || e.key === 'Y') && panel === perfsPanel) return false;
+
+        // Any printable character focuses the search input
+        if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            var searchInput = document.getElementById(searchId);
+            if (searchInput) {
+                searchInput.focus();
+                // Don't prevent — let the character be typed into the input
+            }
+            return true;
+        }
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            _movePanelHighlight(container, e.key);
+            return true;
+        }
+        if (e.key === ' ' && _panelHighlightIdx >= 0) {
+            e.preventDefault();
+            _activatePanelHighlight(container);
+            return true;
+        }
+        return false;
+    }
+
     /**
      * xfill - Load random demo streams from server scraper
      * @param {string} source - 'auto', 'brazzers', or 'xhamster'
@@ -1788,7 +2027,13 @@ const PlexdApp = (function() {
         if (btn) btn.textContent = 'Loading...';
 
         try {
-            var resp = await fetch('/api/demo/streams?count=' + count + '&source=' + source);
+            // Include active tag/performer filters if any are selected
+            var queryStr = '/api/demo/streams?count=' + count + '&source=' + source;
+            var activeTagIds = Array.from(_selectedTagIds);
+            var activeActorIds = Array.from(_selectedPerformerIds);
+            if (activeTagIds.length > 0) queryStr += '&tagIds=' + activeTagIds.join(',');
+            if (activeActorIds.length > 0) queryStr += '&actorIds=' + activeActorIds.join(',');
+            var resp = await fetch(queryStr);
             var data = await resp.json();
 
             if (!data.streams || data.streams.length === 0) {
@@ -1847,21 +2092,116 @@ const PlexdApp = (function() {
         if (!stream || !stream.infoOverlay) return;
         var urlEl = stream.infoOverlay.querySelector('.plexd-info-url');
         if (!urlEl) return;
-        var parts = [];
-        if (stream.title) parts.push(stream.title);
-        if (stream.actors && stream.actors.length) parts.push(stream.actors.join(', '));
-        if (stream.category) parts.push(stream.category);
-        if (parts.length) urlEl.textContent = parts.join(' · ');
-        // Add tags row below stats
+
+        // Clear existing content safely
+        while (urlEl.firstChild) urlEl.removeChild(urlEl.firstChild);
+        var hasContent = false;
+
+        // Title (plain text)
+        if (stream.title) {
+            var titleSpan = document.createElement('span');
+            titleSpan.className = 'plexd-info-title';
+            titleSpan.textContent = stream.title;
+            urlEl.appendChild(titleSpan);
+            hasContent = true;
+        }
+
+        // Performers (clickable — opens performer panel with selection)
+        if (stream.actors && stream.actors.length) {
+            if (hasContent) urlEl.appendChild(document.createTextNode(' \u00b7 '));
+            for (var i = 0; i < stream.actors.length; i++) {
+                if (i > 0) urlEl.appendChild(document.createTextNode(', '));
+                var chip = document.createElement('span');
+                chip.className = 'plexd-info-chip plexd-info-performer';
+                chip.textContent = stream.actors[i];
+                chip.title = 'Find more from ' + stream.actors[i];
+                chip.onclick = (function(name) { return function(e) {
+                    e.stopPropagation();
+                    _selectPerformerByName(name);
+                }; })(stream.actors[i]);
+                urlEl.appendChild(chip);
+            }
+            hasContent = true;
+        }
+
+        // Category (clickable as tag)
+        if (stream.category) {
+            if (hasContent) urlEl.appendChild(document.createTextNode(' \u00b7 '));
+            var catChip = document.createElement('span');
+            catChip.className = 'plexd-info-chip plexd-info-tag';
+            catChip.textContent = stream.category;
+            catChip.title = 'Find more with ' + stream.category;
+            catChip.onclick = function(e) {
+                e.stopPropagation();
+                _selectTagByName(stream.category);
+            };
+            urlEl.appendChild(catChip);
+        }
+
+        // Tags row below (clickable)
         var tagsEl = stream.infoOverlay.querySelector('.plexd-info-tags');
         if (stream.aiTags && stream.aiTags.length) {
             if (!tagsEl) {
                 tagsEl = document.createElement('div');
                 tagsEl.className = 'plexd-info-tags';
-                tagsEl.style.cssText = 'font-size:10px;opacity:0.7;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
                 stream.infoOverlay.appendChild(tagsEl);
             }
-            tagsEl.textContent = stream.aiTags.join(' · ');
+            while (tagsEl.firstChild) tagsEl.removeChild(tagsEl.firstChild);
+            for (var j = 0; j < stream.aiTags.length; j++) {
+                if (j > 0) tagsEl.appendChild(document.createTextNode(' \u00b7 '));
+                var tagChip = document.createElement('span');
+                tagChip.className = 'plexd-info-chip plexd-info-tag';
+                tagChip.textContent = stream.aiTags[j];
+                tagChip.title = 'Find more with ' + stream.aiTags[j];
+                tagChip.onclick = (function(name) { return function(e) {
+                    e.stopPropagation();
+                    _selectTagByName(name);
+                }; })(stream.aiTags[j]);
+                tagsEl.appendChild(tagChip);
+            }
+        }
+    }
+
+    // Select a performer by name: find ID in cache, select it, open panel
+    async function _selectPerformerByName(name) {
+        var performers = await fetchPerformers();
+        if (!performers) return;
+        var lowerName = name.toLowerCase();
+        var match = null;
+        for (var i = 0; i < performers.length; i++) {
+            if (performers[i].name.toLowerCase() === lowerName) {
+                match = performers[i]; break;
+            }
+        }
+        if (match) {
+            clearPerformerSelection();
+            togglePerformer(match.id);
+            togglePanel('performers-panel');
+        } else {
+            showMessage('Performer "' + name + '" not found in browser', 'warn');
+        }
+    }
+
+    // Select a tag by name: find ID in cache, select it, open panel
+    async function _selectTagByName(name) {
+        var tags = await fetchTags();
+        if (!tags) return;
+        var lowerName = name.toLowerCase();
+        var matchId = null;
+        for (var cat in tags) {
+            for (var i = 0; i < tags[cat].length; i++) {
+                if (tags[cat][i].name.toLowerCase() === lowerName) {
+                    matchId = tags[cat][i].id; break;
+                }
+            }
+            if (matchId) break;
+        }
+        if (matchId) {
+            clearTagSelection();
+            toggleTag(matchId);
+            togglePanel('tags-panel');
+        } else {
+            showMessage('Tag "' + name + '" not found in browser', 'warn');
         }
     }
 
@@ -7354,6 +7694,9 @@ const PlexdApp = (function() {
         // Handle Sets panel keyboard navigation first
         if (handleSetsPanelKeyboard(e)) return;
 
+        // Handle Tags/Performers panel keyboard navigation
+        if (handleFilterPanelKeyboard(e)) return;
+
         // Moment Browser consumes all keys when open
         if (handleMomentBrowserKeyboard(e)) return;
 
@@ -11188,7 +11531,19 @@ const PlexdApp = (function() {
             } else {
                 selectedSetIndex = -1; // Reset when closing
             }
+            // Reset filter panel state
+            _panelHighlightIdx = -1;
+            var searchId = panelId === 'tags-panel' ? 'tags-search' : panelId === 'performers-panel' ? 'performers-search' : null;
+            if (searchId) {
+                var searchInput = document.getElementById(searchId);
+                if (searchInput) searchInput.value = '';
+            }
             panel.classList.toggle('plexd-panel-open');
+            // Auto-focus search input when opening filter panels
+            if (willOpen && searchId) {
+                var si = document.getElementById(searchId);
+                if (si) setTimeout(function() { si.focus(); }, 50);
+            }
         }
     }
 

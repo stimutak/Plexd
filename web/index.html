@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/plexd.css?v=103">
+    <link rel="stylesheet" href="css/plexd.css?v=104">
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -115,7 +115,7 @@
                     <button onclick="PlexdApp.togglePanel('tags-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
-            <div class="plexd-panel-hint">Select tags, then Load [U]</div>
+            <input id="tags-search" class="plexd-panel-search" type="text" placeholder="Search tags..." autocomplete="off">
             <div id="tags-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">Loading tags...</div>
             </div>
@@ -131,7 +131,7 @@
                     <button onclick="PlexdApp.togglePanel('performers-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
-            <div class="plexd-panel-hint">Select performers, then Load [Y]</div>
+            <input id="performers-search" class="plexd-panel-search" type="text" placeholder="Search performers..." autocomplete="off">
             <div id="performers-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">Loading performers...</div>
             </div>

@@ -1339,11 +1339,22 @@ async function scrapeXhamsterVideo(pageUrl) {
 // Sub-brands (Digital Playground, Reality Kings, Babes, etc.) are accessible through
 // the parent network's auth token — no separate login needed.
 
+// Each entry maps a network to its API origin and cookie source.
+// cookieHost: which Chrome cookie domain to read auth from.
+// Multiple networks can share a cookieHost (e.g. Mofos login grants access to all).
 const AYLO_SITES = {
-    brazzers: { origin: 'site-ma.brazzers.com', cookieHost: 'brazzers', tagId: -1, label: 'Brazzers' },
-    mofos:    { origin: 'site-ma.mofos.com',    cookieHost: 'mofos',    tagId: -2, label: 'Mofos' },
-    // Add more network logins here as discovered (e.g. realitykings, babes)
-    // Use sequential negative tagIds: -3, -4, etc.
+    brazzers:         { origin: 'site-ma.brazzers.com',         cookieHost: 'brazzers', tagId: -1,  label: 'Brazzers' },
+    mofos:            { origin: 'site-ma.mofos.com',            cookieHost: 'mofos',    tagId: -2,  label: 'Mofos' },
+    realitykings:     { origin: 'site-ma.realitykings.com',     cookieHost: 'mofos',    tagId: -3,  label: 'Reality Kings' },
+    babes:            { origin: 'site-ma.babes.com',            cookieHost: 'mofos',    tagId: -4,  label: 'Babes' },
+    digitalplayground:{ origin: 'site-ma.digitalplayground.com',cookieHost: 'mofos',    tagId: -5,  label: 'Digital Playground' },
+    twistys:          { origin: 'site-ma.twistys.com',          cookieHost: 'mofos',    tagId: -6,  label: 'Twistys' },
+    fakehub:          { origin: 'site-ma.fakehub.com',          cookieHost: 'mofos',    tagId: -7,  label: 'Fake Hub' },
+    seancody:         { origin: 'site-ma.seancody.com',         cookieHost: 'mofos',    tagId: -8,  label: 'Sean Cody' },
+    bromo:            { origin: 'site-ma.bromo.com',            cookieHost: 'mofos',    tagId: -9,  label: 'Bromo' },
+    transangels:      { origin: 'site-ma.transangels.com',      cookieHost: 'mofos',    tagId: -10, label: 'Trans Angels' },
+    milehighmedia:    { origin: 'site-ma.milehighmedia.com',    cookieHost: 'mofos',    tagId: -11, label: 'Mile High Media' },
+    metrohd:          { origin: 'site-ma.metrohd.com',          cookieHost: 'mofos',    tagId: -12, label: 'Metro HD' },
 };
 // Reverse lookup: tagId → siteName
 const AYLO_SITE_BY_TAG_ID = {};
@@ -1504,30 +1515,47 @@ function refreshAyloAccessToken(instanceToken, refreshToken, origin) {
     });
 }
 
-// Get valid auth tokens for a specific Aylo site from Chrome cookies
+// Get valid auth tokens for a specific Aylo site from Chrome cookies.
+// Multiple sites can share a cookieHost (e.g. all Mofos-network sites use mofos cookies).
+// Cookie reads are cached per cookieHost to avoid redundant decryption.
+let _cookieCache = {};       // cookieHost → { cookies, ts }
+let _refreshedTokens = {};   // cookieHost → refreshed accessToken
+const COOKIE_CACHE_TTL = 30000; // 30s
+
 async function getAyloAuth(siteName) {
     const site = AYLO_SITES[siteName];
     if (!site) return { error: 'Unknown Aylo site: ' + siteName };
 
-    const cookies = readChromeCookies('%' + site.cookieHost + '%');
+    // Cache cookie reads per cookieHost (many sites share the same cookies)
+    const cached = _cookieCache[site.cookieHost];
+    let cookies;
+    if (cached && (Date.now() - cached.ts) < COOKIE_CACHE_TTL) {
+        cookies = cached.cookies;
+    } else {
+        cookies = readChromeCookies('%' + site.cookieHost + '%');
+        _cookieCache[site.cookieHost] = { cookies, ts: Date.now() };
+    }
+
     const instanceToken = cookies.instance_token;
     const appSessionId = cookies.app_session_id || '';
     if (!instanceToken || isJwtExpired(instanceToken)) {
         return { error: 'No valid ' + siteName + ' session. Log into ' + site.origin + ' in Chrome.', _origin: site.origin, _site: siteName };
     }
 
-    let accessToken = cookies.access_token_ma;
+    // Check for already-refreshed token (shared across sites with same cookieHost)
+    let accessToken = _refreshedTokens[site.cookieHost] || cookies.access_token_ma;
     if (accessToken && !isJwtExpired(accessToken)) {
         return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
     }
 
-    // Try refresh
+    // Try refresh (once per cookieHost)
     const refreshToken = cookies.refresh_token_ma;
     if (refreshToken && !isJwtExpired(refreshToken)) {
         console.log('[Aylo:' + siteName + '] Access token expired, attempting refresh...');
         accessToken = await refreshAyloAccessToken(instanceToken, refreshToken, site.origin);
         if (accessToken) {
             console.log('[Aylo:' + siteName + '] Token refreshed successfully');
+            _refreshedTokens[site.cookieHost] = accessToken;
             return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
     }
@@ -1769,17 +1797,24 @@ async function refreshActorsFromApi(auth) {
     return _actorCache;
 }
 
-// Background refresh — runs every 6 hours for each site with valid auth
+// Background refresh — runs every 6 hours.
+// Only refreshes one site per unique cookieHost (tags/performers overlap across sub-brands).
 async function backgroundCatalogRefresh() {
     try {
-        const auths = await getAllAyloAuths();
-        if (auths.length === 0) return;
+        const seen = new Set();
         const refreshes = [];
-        for (const auth of auths) {
+        for (const name of Object.keys(AYLO_SITES)) {
+            const host = AYLO_SITES[name].cookieHost;
+            if (seen.has(host)) continue;
+            seen.add(host);
+            const auth = await getAyloAuth(name);
+            if (!auth.accessToken) continue;
             refreshes.push(refreshTagsFromApi(auth), refreshActorsFromApi(auth));
         }
-        await Promise.allSettled(refreshes);
-        console.log('[Cache] Background refresh complete for ' + auths.length + ' sites');
+        if (refreshes.length > 0) {
+            await Promise.allSettled(refreshes);
+            console.log('[Cache] Background refresh complete for ' + seen.size + ' cookie hosts');
+        }
     } catch (e) {
         console.log('[Cache] Background refresh failed:', e.message);
     }

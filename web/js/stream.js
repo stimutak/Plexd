@@ -2280,7 +2280,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsSyY=`÷+\-\[\]{}\\|]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsSyYß=`÷+\-\[\]{}\\|]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -4016,13 +4016,34 @@ const PlexdStream = (function() {
             ratings.set(urlKey, rating);
         }
 
-        // For blob URLs (local files), also store by fileName for persistence
-        // Blob URLs change each time, so we need a stable identifier
+        // For blob URLs (local files), store by fileName for persistence
         if (stream.url && stream.url.startsWith('blob:') && stream.fileName) {
             if (rating === 0) {
                 fileNameRatings.delete(stream.fileName);
             } else {
                 fileNameRatings.set(stream.fileName, rating);
+            }
+        }
+
+        // For server file URLs, also store by fileName (fileId = original filename)
+        if (stream.url && !stream.url.startsWith('blob:')) {
+            var fileMatch = stream.url.match(/\/api\/(?:files|hls)\/([^/?]+)/);
+            if (fileMatch) {
+                var fName = decodeURIComponent(fileMatch[1]);
+                if (rating === 0) {
+                    fileNameRatings.delete(fName);
+                } else {
+                    fileNameRatings.set(fName, rating);
+                }
+            }
+        }
+
+        // Also store under serverUrl if available (for blob→server URL transition)
+        if (stream.serverUrl && stream.serverUrl !== urlKey) {
+            if (rating === 0) {
+                ratings.delete(stream.serverUrl);
+            } else {
+                ratings.set(stream.serverUrl, rating);
             }
         }
 
@@ -4089,23 +4110,25 @@ const PlexdStream = (function() {
     function getRating(url, fileName) {
         if (!url) return 0;
 
-        // If caller didn't provide fileName for a blob URL, try to infer it from active streams.
+        // If caller didn't provide fileName for a blob URL, try to infer it from active streams
         if (!fileName && url.startsWith('blob:')) {
             for (const s of streams.values()) {
-                if (s.url === url && s.fileName) {
-                    fileName = s.fileName;
-                    break;
-                }
+                if (s.url === url && s.fileName) { fileName = s.fileName; break; }
             }
         }
 
-        // For blob URLs, check fileName first (stable identifier)
-        if (fileName && url && url.startsWith('blob:')) {
-            const fileNameRating = fileNameRatings.get(fileName);
-            if (fileNameRating !== undefined) {
-                return fileNameRating;
-            }
+        // For server file URLs, extract fileId as stable fileName
+        if (!fileName && !url.startsWith('blob:')) {
+            var fileMatch = url.match(/\/api\/(?:files|hls)\/([^/?]+)/);
+            if (fileMatch) fileName = decodeURIComponent(fileMatch[1]);
         }
+
+        // Check fileName-based rating (stable across blob→server URL changes)
+        if (fileName) {
+            const fileNameRating = fileNameRatings.get(fileName);
+            if (fileNameRating !== undefined) return fileNameRating;
+        }
+
         // Fall back to URL-based rating
         return ratings.get(url) || 0;
     }
@@ -4305,12 +4328,34 @@ const PlexdStream = (function() {
             favorites.delete(urlKey);
         }
 
-        // For blob URLs (local files), also store by fileName for persistence
+        // For blob URLs (local files), store by fileName for persistence
         if (stream.url && stream.url.startsWith('blob:') && stream.fileName) {
             if (isFavorite) {
                 fileNameFavorites.set(stream.fileName, true);
             } else {
                 fileNameFavorites.delete(stream.fileName);
+            }
+        }
+
+        // For server file URLs, also store by fileName (fileId = original filename)
+        if (stream.url && !stream.url.startsWith('blob:')) {
+            var fileMatch = stream.url.match(/\/api\/(?:files|hls)\/([^/?]+)/);
+            if (fileMatch) {
+                var fName = decodeURIComponent(fileMatch[1]);
+                if (isFavorite) {
+                    fileNameFavorites.set(fName, true);
+                } else {
+                    fileNameFavorites.delete(fName);
+                }
+            }
+        }
+
+        // Also store under serverUrl if available (for blob→server URL transition)
+        if (stream.serverUrl && stream.serverUrl !== urlKey) {
+            if (isFavorite) {
+                favorites.set(stream.serverUrl, true);
+            } else {
+                favorites.delete(stream.serverUrl);
             }
         }
 
@@ -4360,20 +4405,22 @@ const PlexdStream = (function() {
         // If caller didn't provide fileName for a blob URL, try to infer it from active streams
         if (!fileName && url.startsWith('blob:')) {
             for (const s of streams.values()) {
-                if (s.url === url && s.fileName) {
-                    fileName = s.fileName;
-                    break;
-                }
+                if (s.url === url && s.fileName) { fileName = s.fileName; break; }
             }
         }
 
-        // For blob URLs, check fileName first (stable identifier)
-        if (fileName && url && url.startsWith('blob:')) {
-            const fileNameFav = fileNameFavorites.get(fileName);
-            if (fileNameFav !== undefined) {
-                return fileNameFav;
-            }
+        // For server file URLs, extract fileId as stable fileName
+        if (!fileName && !url.startsWith('blob:')) {
+            var fileMatch = url.match(/\/api\/(?:files|hls)\/([^/?]+)/);
+            if (fileMatch) fileName = decodeURIComponent(fileMatch[1]);
         }
+
+        // Check fileName-based favorite (stable across blob→server URL changes)
+        if (fileName) {
+            const fileNameFav = fileNameFavorites.get(fileName);
+            if (fileNameFav !== undefined) return fileNameFav;
+        }
+
         // Fall back to URL-based favorite
         return favorites.get(url) || false;
     }

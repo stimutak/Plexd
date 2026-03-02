@@ -8132,11 +8132,19 @@ const PlexdApp = (function() {
                     saveCurrentStreams();
                 }
                 break;
+            case 'ß': // macOS Opt+S produces ß
+                e.preventDefault();
+                togglePanel('history-panel');
+                break;
             case 's':
             case 'S':
                 if (e.ctrlKey || e.metaKey) {
                     e.preventDefault();
                     saveStreamCombination();
+                } else if (e.altKey) {
+                    // Opt+S toggles history panel (Windows/Linux)
+                    e.preventDefault();
+                    togglePanel('history-panel');
                 } else {
                     // Plain S toggles streams panel
                     e.preventDefault();

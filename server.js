@@ -1380,6 +1380,76 @@ for (const [name, g] of Object.entries(AYLO_GROUPS)) {
 // Collection (sub-brand) cache — populated from /v1/collections API per site.
 let _collectionCache = null;
 
+// ── Reptyle (Paper Street Media) Auth ──────────────────────────────────────────
+// OAuth via auth.reptyle.com. refresh_token (~30 days) in Chrome cookies,
+// exchanged for access_token (~30 min) via POST /oauth/refresh.
+// API at api2.reptyle.com/api/v1.
+const REPTYLE_CONFIG = {
+    authHost: 'auth.reptyle.com',
+    apiHost: 'api2.reptyle.com',
+    origin: 'app.reptyle.com',
+    cookieHost: 'reptyle',
+};
+let _reptyleAccessToken = null; // Cached access token
+
+function getReptyleRefreshToken() {
+    const cookies = readChromeCookies('%reptyle%');
+    return cookies.refresh_token || null;
+}
+
+function refreshReptyleAuth() {
+    const refreshToken = getReptyleRefreshToken();
+    if (!refreshToken) return Promise.resolve(null);
+    if (isJwtExpired(refreshToken)) {
+        console.log('[Reptyle] Refresh token expired — log into app.reptyle.com in Chrome');
+        return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+        const body = JSON.stringify({ refresh_token: refreshToken });
+        const req = https.request({
+            hostname: REPTYLE_CONFIG.authHost,
+            path: '/oauth/refresh',
+            method: 'POST',
+            headers: {
+                'User-Agent': BROWSER_UA,
+                'Origin': 'https://' + REPTYLE_CONFIG.origin,
+                'Referer': 'https://' + REPTYLE_CONFIG.origin + '/',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'Accept': 'application/json'
+            }
+        }, res => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    if (res.statusCode === 200 && json.access_token) {
+                        _reptyleAccessToken = json.access_token;
+                        resolve(json.access_token);
+                    } else {
+                        console.log('[Reptyle] Refresh failed (' + res.statusCode + '):', data.slice(0, 200));
+                        resolve(null);
+                    }
+                } catch (e) { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.write(body);
+        req.end();
+    });
+}
+
+async function getReptyleAuth() {
+    // Return cached if still valid
+    if (_reptyleAccessToken && !isJwtExpired(_reptyleAccessToken)) {
+        return { accessToken: _reptyleAccessToken, _site: 'reptyle' };
+    }
+    const token = await refreshReptyleAuth();
+    if (token) return { accessToken: token, _site: 'reptyle' };
+    return { error: 'Reptyle login expired. Log into app.reptyle.com in Chrome.', _site: 'reptyle' };
+}
+
 // ── Stash Server Integration ───────────────────────────────────────────────────
 // Stash is a local media server with a GraphQL API. Scenes, tags, performers,
 // and studios are accessed directly — no auth needed on Tailscale.
@@ -2183,6 +2253,37 @@ try {
 } catch (e) { _playableGroups = {}; }
 setTimeout(backgroundCatalogRefresh, 10000);
 setInterval(backgroundCatalogRefresh, CATALOG_REFRESH_INTERVAL);
+
+// ── Auth Keepalive ─────────────────────────────────────────────────────────────
+// Proactively refresh Aylo tokens every 45 minutes (access_token expires ~1hr).
+// Without this, tokens go stale if no API calls happen for >1 hour.
+const AUTH_KEEPALIVE_INTERVAL = 45 * 60 * 1000; // 45 minutes
+
+async function authKeepalive() {
+    const seen = new Set();
+    let refreshed = 0, failed = 0;
+    for (const siteName of Object.keys(AYLO_SITES)) {
+        const host = AYLO_SITES[siteName].cookieHost;
+        if (seen.has(host)) continue;
+        seen.add(host);
+        try {
+            // Clear cached token for this host to force a fresh refresh
+            delete _refreshedTokens[host];
+            delete _cookieCache[host];
+            const auth = await getAyloAuth(siteName);
+            if (auth.accessToken) { refreshed++; } else { failed++; }
+        } catch (e) {
+            console.error('[Auth:keepalive] Error refreshing ' + siteName + ':', e.message);
+            failed++;
+        }
+    }
+    if (refreshed > 0 || failed > 0) {
+        console.log('[Auth:keepalive] Refreshed ' + refreshed + ' site(s)' + (failed > 0 ? ', ' + failed + ' failed' : ''));
+    }
+}
+// First keepalive at 5 minutes (let server fully start), then every 45 min
+setTimeout(authKeepalive, 5 * 60 * 1000);
+setInterval(authKeepalive, AUTH_KEEPALIVE_INTERVAL);
 
 // Build list of { auth, groupId, groupName } combos to query.
 // Groups marked `native: true` are queried WITHOUT groupId (native brand catalog).

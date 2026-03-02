@@ -30,6 +30,7 @@ const PlexdCast = (function() {
     var stateCallbacks = [];
     var castSession = null;       // Chrome Cast session
     var presentationConn = null;  // Presentation API connection
+    var castWindow = null;        // window.open() fallback
     var serverInfo = null;        // { ip, port } from /api/server-info
     var initialized = false;
 
@@ -115,6 +116,8 @@ const PlexdCast = (function() {
             availability.presentation = true;
         }
 
+        console.log('[PlexdCast] Availability:', JSON.stringify(availability),
+            '| receiverUrl:', castState.receiverUrl);
         notifyStateChange();
     }
 
@@ -162,7 +165,10 @@ const PlexdCast = (function() {
                     castSession = cast.framework.CastContext.getInstance().getCurrentSession();
                     loadMediaOnCast(streamId);
                 })
-                .catch(function(e) { console.warn('Cast session request failed:', e); });
+                .catch(function(e) {
+                    console.warn('[PlexdCast] Cast session failed, trying fallback:', e);
+                    castStreamFallback(streamId);
+                });
             return;
         }
         loadMediaOnCast(streamId);
@@ -288,6 +294,43 @@ const PlexdCast = (function() {
         }
     }
 
+    function castStreamViaWindow(streamId) {
+        var url = getStreamCastUrl(streamId);
+        if (!url) return;
+
+        var receiverPage = '/cast-receiver.html?url=' + encodeURIComponent(url);
+        castWindow = window.open(receiverPage, 'plexd-cast',
+            'width=1280,height=720,menubar=no,toolbar=no,location=no');
+
+        if (castWindow) {
+            castState.active = true;
+            castState.mode = 'window';
+            castState.streamId = streamId;
+            castState.targetName = 'External Window';
+            notifyStateChange();
+
+            // Detect when user closes the window
+            var pollClosed = setInterval(function() {
+                if (castWindow && castWindow.closed) {
+                    clearInterval(pollClosed);
+                    castWindow = null;
+                    castState.active = false;
+                    castState.mode = null;
+                    castState.streamId = null;
+                    castState.targetName = '';
+                    notifyStateChange();
+                }
+            }, 1000);
+        }
+    }
+
+    function stopCastingViaWindow() {
+        if (castWindow && !castWindow.closed) {
+            castWindow.close();
+        }
+        castWindow = null;
+    }
+
     function handleReceiverMessage(data) {
         switch (data.event) {
             case 'loaded':
@@ -313,7 +356,7 @@ const PlexdCast = (function() {
             mode: castState.mode,
             streamId: castState.streamId,
             targetName: castState.targetName,
-            available: availability.cast || availability.airplay || availability.presentation
+            available: true  // window.open fallback always works
         };
     }
 
@@ -338,22 +381,39 @@ const PlexdCast = (function() {
     }
 
     /**
+     * Check if Cast SDK has actual receivers on the network
+     */
+    function castHasDevices() {
+        if (!availability.cast) return false;
+        try {
+            var state = cast.framework.CastContext.getInstance().getCastState();
+            return state !== cast.framework.CastState.NO_DEVICES_AVAILABLE;
+        } catch (e) { return false; }
+    }
+
+    /**
      * Cast a stream — dispatches to the best available method
-     * Priority: Cast > AirPlay > Presentation
+     * Only uses Chrome Cast if devices are actually on the network;
+     * otherwise skips straight to AirPlay/Presentation (preserves user gesture)
      */
     function castStream(streamId) {
         if (castState.active) {
             console.warn('[PlexdCast] Already casting. Stop first.');
             return;
         }
-        if (availability.cast) {
+
+        // Chrome Cast — only if receivers actually on network
+        if (castHasDevices()) {
+            console.log('[PlexdCast] Cast devices found, using Cast SDK');
             castStreamViaCast(streamId);
         } else if (availability.airplay) {
+            console.log('[PlexdCast] Using AirPlay');
             castStreamViaAirPlay(streamId);
-        } else if (availability.presentation) {
-            castStreamViaPresentation(streamId);
         } else {
-            console.warn('[PlexdCast] No casting method available');
+            // Window fallback — opens receiver page in new window
+            // User drags to projector/second display. Works universally.
+            console.log('[PlexdCast] Opening cast window');
+            castStreamViaWindow(streamId);
         }
     }
 
@@ -366,16 +426,16 @@ const PlexdCast = (function() {
         var mode = castState.mode;
         switch (mode) {
             case 'cast':
-                // SESSION_ENDED event will reset state; just end the session
                 stopCastingViaCast();
-                return;
+                return; // SESSION_ENDED event resets state
             case 'presentation':
-                // close event will reset state via the close listener
                 stopCastingViaPresentation();
-                return;
+                return; // close event resets state
+            case 'window':
+                stopCastingViaWindow();
+                break; // fall through to manual state reset
             case 'airplay':
-                // AirPlay is controlled by the OS; reset state manually
-                break;
+                break; // AirPlay controlled by OS; manual reset
         }
 
         castState.active = false;
@@ -417,6 +477,11 @@ const PlexdCast = (function() {
         castState.streamId = streamId;
         if (castState.mode === 'cast') {
             loadMediaOnCast(streamId);
+        } else if (castState.mode === 'window') {
+            // Navigate the window to the new stream
+            if (castWindow && !castWindow.closed) {
+                castWindow.location.href = '/cast-receiver.html?url=' + encodeURIComponent(url);
+            }
         } else {
             sendCommand('load', { url: url });
         }

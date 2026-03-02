@@ -639,6 +639,44 @@ const PlexdApp = (function() {
     let smartLayoutMode = false;
     window._plexdSmartLayoutMode = smartLayoutMode;
 
+    // =========================================================================
+    // Unified Density System (parallel to old T/W/O/B modes)
+    // =========================================================================
+    let useDensitySystem = false;
+    window._plexdUseDensitySystem = useDensitySystem;
+
+    // Density level: -1=Fullscreen, 0=Focused, 1=Spotlight, 2=Grid, 3=Fill, 4=Strips, 5=Mosaic
+    let densityLevel = 2; // Default: Grid
+    window._plexdDensityLevel = densityLevel;
+
+    let styleVariant = 0; // 0-2 per level, Y key cycles
+    window._plexdStyleVariant = styleVariant;
+
+    let prevDensityLevel = 2; // For Enter/F toggle-back
+    window._plexdPrevDensityLevel = prevDensityLevel;
+
+    const DENSITY_NAMES = ['Fullscreen', 'Focused', 'Spotlight', 'Grid', 'Fill', 'Strips', 'Mosaic'];
+    const DENSITY_VARIANT_NAMES = {
+        '-1': [['Fullscreen']],
+        '0':  [['Focused']],
+        '1':  [['Hero + Side', 'Hero + Bottom']],
+        '2':  [['Even Grid', 'Z-Depth', 'Content Visible']],
+        '3':  [['Crop Tiles', 'Skyline', 'Masonry']],
+        '4':  [['Vertical Columns', 'Horizontal Rows']],
+        '5':  [['Mosaic', 'Bug Eye']]
+    };
+    // Max variant index per level (0-indexed)
+    const DENSITY_MAX_VARIANT = { '-1': 0, '0': 0, '1': 1, '2': 2, '3': 2, '4': 1, '5': 1 };
+
+    function setDensityLevel(val) { densityLevel = val; window._plexdDensityLevel = val; }
+    function setStyleVariant(val) { styleVariant = val; window._plexdStyleVariant = val; }
+    function setUseDensitySystem(val) { useDensitySystem = val; window._plexdUseDensitySystem = val; }
+
+    // Placeholder stubs — replaced in Task 9 with full implementations
+    function setDensity(level) { /* stub */ }
+    function cycleStyleVariant() { /* stub */ }
+    function toggleDensitySystem() { /* stub */ }
+
     // Header visibility (starts hidden)
     let headerVisible = false;
     window._plexdHeaderVisible = headerVisible;
@@ -5072,6 +5110,8 @@ const PlexdApp = (function() {
         });
         // Normal wall mode: stop old mirrors, init only the new selected cell
         if (!wallEditMode) {
+            // Save _initCell before stopWallMirrors nulls it — we need it to init the new cell
+            var initCellFn = wallMirrorState._initCell;
             stopWallMirrors();
             // Release extracted video from previous cell
             if (wallMirrorState._extractedMomId) {
@@ -5086,10 +5126,10 @@ const PlexdApp = (function() {
                 for (var k in sh) delete sh[k];
             }
             var selected = document.querySelector('.moment-wall-cell.selected');
-            if (selected) {
+            if (selected && initCellFn) {
                 // Reset init flag so it re-inits with fresh video mirror
                 selected._wallInitialized = false;
-                if (wallMirrorState._initCell) wallMirrorState._initCell(selected);
+                initCellFn(selected);
             }
         }
         if (wallEditMode) {
@@ -6506,7 +6546,8 @@ const PlexdApp = (function() {
                 var stream = PlexdStream.getStream(info.id);
                 if (!stream || !stream.video) return;
                 stream.suspended = false;
-                // reloadStream re-initializes HLS/src with proxied URL and restores position
+                // Seed currentTime so reloadStream restores position (src removal reset it to 0)
+                if (info.time > 0) stream.video.currentTime = info.time;
                 PlexdStream.reloadStream(info.id);
                 // If stream was paused before suspension, pause it after reload starts
                 if (info.wasPaused) {
@@ -9245,6 +9286,17 @@ const PlexdApp = (function() {
         localStorage.setItem('plexd_streams', JSON.stringify(urls));
     }
 
+    /** Collect stream ratings keyed by persistent URL (serverUrl preferred over blob) */
+    function collectStreamRatings(urlStreams) {
+        const ratings = {};
+        urlStreams.forEach(s => {
+            const url = s.serverUrl || s.url;
+            const rating = PlexdStream.getRating(s.url, s.fileName);
+            if (rating > 0) ratings[url] = rating;
+        });
+        return ratings;
+    }
+
     /**
      * Extract unique domains from stream URLs
      * Returns domains that might require login (excludes common CDN domains)
@@ -9400,12 +9452,7 @@ const PlexdApp = (function() {
         }
 
         // Collect stream ratings for ALL streams (URL-based, not just local files)
-        const streamRatings = {};
-        validUrlStreams.forEach(s => {
-            const url = s.serverUrl || s.url;
-            const rating = PlexdStream.getRating(s.url, s.fileName);
-            if (rating > 0) streamRatings[url] = rating;
-        });
+        const streamRatings = collectStreamRatings(validUrlStreams);
 
         // Collect favorites data (which streams are favorited)
         const favoriteUrls = [];
@@ -9628,12 +9675,7 @@ const PlexdApp = (function() {
         const loginDomains = extractLoginDomains(urls);
 
         // Collect stream ratings for all URL streams
-        const streamRatings = {};
-        validUrlStreams.forEach(s => {
-            const url = s.serverUrl || s.url;
-            const rating = PlexdStream.getRating(s.url, s.fileName);
-            if (rating > 0) streamRatings[url] = rating;
-        });
+        const streamRatings = collectStreamRatings(validUrlStreams);
 
         // Check if user wants to save local files to disc
         let savedToDisc = false;
@@ -12372,6 +12414,23 @@ const PlexdApp = (function() {
     }
 
     /**
+     * Build a descriptive download filename from stream metadata (title + performers).
+     * Returns null if no useful metadata available.
+     */
+    function getMetadataFileName(stream) {
+        if (!stream.title) return null;
+        var name = stream.title.trim();
+        if (stream.actors && stream.actors.length) {
+            name += ' - ' + stream.actors.join(', ');
+        }
+        // Sanitize: remove filesystem-unsafe chars, collapse whitespace
+        name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim();
+        // Cap length to avoid filesystem issues (255 byte limit, leave room for extension)
+        if (name.length > 200) name = name.substring(0, 200).trim();
+        return name ? name + '.mp4' : null;
+    }
+
+    /**
      * Select a stream and focus on it in the grid
      */
     function selectAndFocusStream(streamId) {
@@ -12541,9 +12600,10 @@ const PlexdApp = (function() {
 
         const url = stream.url;
         const fileId = extractServerFileId(url) || extractServerFileId(stream.serverUrl);
-        // For server files, fileId IS the original filename (e.g. "scene-1.1080p.mp4")
-        // For external HLS, use stream.fileName or derive from URL (skip generic "master"/"playlist")
-        const fileName = stream.fileName || (fileId ? fileId : getDownloadName(url));
+        // Priority: metadata name (title + performers) > stream.fileName > fileId > URL-derived
+        const metaName = getMetadataFileName(stream);
+        const fallbackName = stream.fileName || (fileId ? fileId : getDownloadName(url));
+        const fileName = metaName || fallbackName;
 
         try {
             // 1. Server-hosted file: download the original from server
@@ -13015,6 +13075,13 @@ const PlexdApp = (function() {
         toggleCleanMode,
         toggleGlobalFullscreen,
         toggleCast,
+        // Density system
+        toggleDensitySystem,
+        setDensity,
+        cycleStyleVariant,
+        getDensityLevel: function() { return densityLevel; },
+        getStyleVariant: function() { return styleVariant; },
+        isDensityActive: function() { return useDensitySystem; },
         randomSeekAll,
         randomSeekSelected,
         rewindSelected,

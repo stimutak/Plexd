@@ -4327,3 +4327,41 @@ body {
         filter: blur(0px) brightness(1);
     }
 }
+
+/* =========================================================================
+   Unified Density System
+   ========================================================================= */
+
+/* Toolbar button */
+.plexd-density-btn.active {
+    background: #3b82f6 !important;
+    color: white !important;
+}
+
+/* Density level classes on .plexd-app */
+.plexd-app.density-active .plexd-stream {
+    transition: none; /* No layout transitions — instant snap */
+}
+
+/* Mosaic: CSS grid at density level 5, variant 0 */
+.plexd-app.density-level-5.density-variant-0 .plexd-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 2px;
+}
+.plexd-app.density-level-5.density-variant-0 .plexd-stream {
+    position: static !important;
+    width: auto !important;
+    height: auto !important;
+    aspect-ratio: 16/9;
+    transform: none !important;
+}
+.plexd-app.density-level-5.density-variant-0 .plexd-stream .plexd-video {
+    object-fit: cover;
+}
+
+/* Density indicator badge */
+.badge-density {
+    background: #3b82f6;
+    color: white;
+}

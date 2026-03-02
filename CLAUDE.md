@@ -564,6 +564,28 @@ cd ~/Projects/nsfw_ai_model_server
 - `POST /api/moments/analyze-batch` — Batch all untagged
 - `GET /api/moments/analyze-progress` — Poll batch progress
 
+### Casting (AirPlay / Chromecast / Presentation API)
+
+**Architecture:** `PlexdCast` IIFE module (`web/js/cast.js`) abstracts three protocols behind a unified API. Auto-detects available path: Chrome Cast SDK → Safari AirPlay → Presentation API fallback.
+
+**Key binding:** `Shift+P` — toggle cast for selected stream. `P` alone remains PiP.
+
+**Three protocol paths:**
+- **Chrome Cast** — Google Cast SDK loaded async, `CastSession.loadMedia()` sends URL to Chromecast, `CastSession.sendMessage('urn:x-cast:plexd', ...)` for control commands
+- **Safari AirPlay** — `video.webkitShowPlaybackTargetPicker()` for native video routing, no control channel (playback syncs via video element)
+- **Presentation API** — W3C standard, opens `/cast-receiver.html` on second screen, bidirectional via `PresentationConnection.send()`
+
+**Cast receiver:** `web/cast-receiver.html` — lightweight self-contained page with HLS.js. Runs on Cast device or second screen. JSON message protocol: `{cmd: "load"|"play"|"pause"|"seek"|"volume"}` inbound, `{event: "loaded"|"timeupdate"|"state"|"error"}` outbound.
+
+**LAN IP discovery:** `GET /api/server-info` returns `{ip, port}`. Sender rewrites `localhost` URLs to LAN IP before sending to Cast receiver (Chromecast can't reach localhost).
+
+**UI:** Toolbar button (`#cast-btn`), blue status bar at top of `.plexd-app` when active, cast badge on stream wrapper.
+
+**Grid casting:** Not in-app — use macOS Screen Mirroring (Control Center). Can run simultaneously with single-stream Cast (AirPlay mirror + Chromecast are independent protocols).
+
+**Key endpoints:**
+- `GET /api/server-info` — LAN IP and port for URL rewriting
+
 ### HLS Transcoding System
 
 **Architecture:**

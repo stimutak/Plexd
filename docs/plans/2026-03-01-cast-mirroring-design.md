@@ -84,8 +84,8 @@ Receiver → Sender:
 **Toolbar button:** Cast icon, grayed when unavailable, highlighted when active.
 
 **Keyboard:**
-- `P` — Cast/disconnect toggle for selected stream
-- `Shift+P` — Switch cast to currently selected stream
+- `Shift+P` — Cast/disconnect toggle for selected stream (`P` alone = PiP)
+- Switch stream: disconnect + select new stream + Shift+P
 
 **Cast status bar:** Thin bar at top of `.plexd-app`:
 ```

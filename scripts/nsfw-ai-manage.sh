@@ -1,0 +1,1 @@
+/Users/oliver/Projects/nsfw_ai_model_server/nsfw-ai-manage.sh

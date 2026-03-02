@@ -1552,15 +1552,30 @@ function getExternalIp() {
 }
 
 // Scrape random Brazzers scenes (requires valid accessToken for full scenes)
-async function scrapeBrazzersScenes(count, auth) {
+// sort: 'top' (top rated last 3 months), 'popular' (most viewed last 3 months), 'new' (newest)
+async function scrapeBrazzersScenes(count, auth, sort) {
     // Get external IP for X-Forwarded-For header
     auth.externalIp = await getExternalIp();
 
     const offset = Math.floor(Math.random() * 200);
     const limit = Math.ceil(count * 1.5);
-    const apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-dateReleased`;
 
-    console.log('[Demo] Fetching Brazzers scenes (offset=' + offset + ')...');
+    // Build date filter for last 3 months (ensures high quality + relevant results)
+    const threeMonthsAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const dateFilter = `>${threeMonthsAgo}`;
+
+    let orderBy, useDateFilter;
+    switch (sort) {
+        case 'popular': orderBy = '-stats.views'; useDateFilter = true; break;
+        case 'new':     orderBy = '-dateReleased'; useDateFilter = false; break;
+        case 'top':
+        default:        orderBy = '-stats.rating'; useDateFilter = true; break;
+    }
+
+    let apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=${orderBy}`;
+    if (useDateFilter) apiPath += `&dateReleased=${encodeURIComponent(dateFilter)}`;
+
+    console.log('[Demo] Fetching Brazzers scenes (sort=' + (sort || 'top') + ', offset=' + offset + ')...');
     const resp = await fetchBrazzersApi(apiPath, auth);
 
     if (resp.status !== 200 || !resp.data.result) {
@@ -1678,6 +1693,22 @@ const server = http.createServer(async (req, res) => {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
+
+    // --- Cast / Server Info ---
+    if (pathname === '/api/server-info' && req.method === 'GET') {
+        const nets = os.networkInterfaces();
+        let ip = '127.0.0.1';
+        for (const name of Object.keys(nets)) {
+            for (const net of nets[name]) {
+                if (net.family === 'IPv4' && !net.internal) {
+                    ip = net.address;
+                    break;
+                }
+            }
+            if (ip !== '127.0.0.1') break;
+        }
+        return jsonOk(res, { ip, port: parseInt(PORT) });
+    }
 
     // Remote control API endpoints
     if (pathname === '/api/remote/state') {
@@ -3285,9 +3316,11 @@ const server = http.createServer(async (req, res) => {
 
     // GET /api/demo/streams - Scrape random streams for xfill demo
     // ?source=xhamster|brazzers (default: brazzers if auth available, else xhamster)
+    // ?sort=top|popular|new (default: top = top rated last 3 months)
     // ?count=16
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
         const count = parseInt(url.searchParams.get('count')) || 16;
+        const sort = url.searchParams.get('sort') || 'top';
         let source = url.searchParams.get('source') || 'auto';
 
         // Auto-detect: prefer Brazzers if logged in, fall back to xHamster
@@ -3314,8 +3347,8 @@ const server = http.createServer(async (req, res) => {
                     return;
                 }
 
-                const streams = await scrapeBrazzersScenes(count, auth);
-                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes');
+                const streams = await scrapeBrazzersScenes(count, auth, sort);
+                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes (sort=' + sort + ')');
 
                 jsonOk(res, {
                     streams: streams.slice(0, count),

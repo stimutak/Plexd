@@ -399,6 +399,7 @@ const PlexdRemote = (function() {
         if (!url) return false;
         const lower = url.toLowerCase();
         if (lower.includes('.m3u8')) return true;
+        if (lower.includes('/api/proxy/hls')) return true;
         return [/\/live$/i, /\/live\?/i, /\/playlist$/i, /\/master$/i, /\/hls\//i]
             .some(p => p.test(url));
     }
@@ -457,6 +458,13 @@ const PlexdRemote = (function() {
         videoEl.addEventListener('error', onError);
         videoEl._onError = onError;
 
+        // Prefer native HLS (Safari/iPhone) — more reliable, hardware-accelerated
+        if (hls_url && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            videoEl.src = url;
+            videoEl.play().catch(() => {});
+            return null;
+        }
+        // HLS.js fallback (Chrome, Firefox)
         if (hls_url && typeof Hls !== 'undefined' && Hls.isSupported()) {
             const hls = new Hls({
                 enableWorker: true,
@@ -476,11 +484,9 @@ const PlexdRemote = (function() {
                 }
             });
             return hls;
-        } else if (hls_url && videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-            videoEl.src = url;
-            videoEl.play().catch(() => {});
-            return null;
-        } else {
+        }
+        // Direct (MP4, etc)
+        {
             videoEl.src = url;
             videoEl.play().catch(() => {});
             return null;

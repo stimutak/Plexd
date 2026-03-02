@@ -943,6 +943,22 @@ const PlexdApp = (function() {
             }
         }, 3000);
 
+        // Cast state listener
+        if (typeof PlexdCast !== 'undefined') {
+            PlexdCast.onStateChange(function(state) {
+                var castBtn = document.getElementById('cast-btn');
+                if (castBtn) {
+                    var hasStreams = PlexdStream.getAllStreams().length > 0;
+                    castBtn.classList.toggle('active', state.active);
+                    castBtn.disabled = !state.available || !hasStreams;
+                    castBtn.title = state.active
+                        ? 'Casting to ' + state.targetName + ' [Shift+P to disconnect]'
+                        : 'Cast selected stream [Shift+P]';
+                }
+                updateCastStatusBar(state);
+            });
+        }
+
         console.log('Plexd initialized');
     }
 
@@ -1502,7 +1518,7 @@ const PlexdApp = (function() {
         const existing = findDuplicateStream(url);
         if (existing) {
             PlexdStream.selectStream(existing.id);
-            return;
+            return existing;
         }
 
         var deferred = opts && opts.deferred;
@@ -1511,10 +1527,11 @@ const PlexdApp = (function() {
             muted: true,
             deferred: deferred
         });
-        if (!stream || !containerEl) return;
+        if (!stream || !containerEl) return null;
         containerEl.appendChild(stream.wrapper);
         updateStreamCount();
         // NOTE: updateLayout() is NOT called here — callers must batch it.
+        return stream;
     }
 
     /**
@@ -1523,6 +1540,132 @@ const PlexdApp = (function() {
      * This avoids Chrome's 6-connection HTTP/1.1 limit by letting each batch finish
      * buffering before starting the next one.
      */
+    // ── Tag Browser ──────────────────────────────────────
+    var _tagCache = null;
+    var _selectedTagIds = new Set(
+        JSON.parse(localStorage.getItem('plexd_selectedTags') || '[]')
+    );
+
+    async function fetchTags() {
+        if (_tagCache) return _tagCache;
+        var resp = await fetch('/api/demo/tags');
+        var data = await resp.json();
+        if (data.error) {
+            showMessage(data.error, 'error');
+            return null;
+        }
+        _tagCache = data.tags;
+        return _tagCache;
+    }
+
+    function renderTagsPanel(tags) {
+        var container = document.getElementById('tags-list');
+        if (!container) return;
+        if (!tags || Object.keys(tags).length === 0) {
+            container.textContent = '';
+            var empty = document.createElement('div');
+            empty.className = 'plexd-panel-empty';
+            empty.textContent = 'No tags available';
+            container.appendChild(empty);
+            return;
+        }
+        container.textContent = '';
+        var categories = Object.keys(tags).sort();
+        for (var i = 0; i < categories.length; i++) {
+            var cat = categories[i];
+            var chips = tags[cat];
+            var catDiv = document.createElement('div');
+            catDiv.className = 'plexd-tag-category';
+            var label = document.createElement('div');
+            label.className = 'plexd-tag-category-label';
+            label.textContent = cat;
+            catDiv.appendChild(label);
+            var chipsDiv = document.createElement('div');
+            chipsDiv.className = 'plexd-tag-chips';
+            for (var j = 0; j < chips.length; j++) {
+                var t = chips[j];
+                var chip = document.createElement('span');
+                chip.className = 'plexd-tag-chip' + (_selectedTagIds.has(t.id) ? ' selected' : '');
+                chip.setAttribute('data-tag-id', t.id);
+                chip.textContent = t.name;
+                chip.onclick = (function(id) { return function() { toggleTag(id); }; })(t.id);
+                chipsDiv.appendChild(chip);
+            }
+            catDiv.appendChild(chipsDiv);
+            container.appendChild(catDiv);
+        }
+        updateTagCountBadge();
+    }
+
+    function toggleTag(tagId) {
+        if (_selectedTagIds.has(tagId)) {
+            _selectedTagIds.delete(tagId);
+        } else {
+            _selectedTagIds.add(tagId);
+        }
+        var chips = document.querySelectorAll('.plexd-tag-chip[data-tag-id="' + tagId + '"]');
+        for (var i = 0; i < chips.length; i++) {
+            chips[i].classList.toggle('selected', _selectedTagIds.has(tagId));
+        }
+        updateTagCountBadge();
+        localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
+    }
+
+    function clearTagSelection() {
+        _selectedTagIds.clear();
+        var chips = document.querySelectorAll('.plexd-tag-chip.selected');
+        for (var i = 0; i < chips.length; i++) chips[i].classList.remove('selected');
+        updateTagCountBadge();
+        localStorage.setItem('plexd_selectedTags', '[]');
+    }
+
+    function updateTagCountBadge() {
+        var badge = document.getElementById('tags-selected-count');
+        if (badge) badge.textContent = _selectedTagIds.size > 0 ? _selectedTagIds.size : '';
+    }
+
+    async function loadTaggedStreams(count) {
+        count = count || 6;
+        var tagIds = Array.from(_selectedTagIds);
+        var queryStr = '?count=' + count + '&source=brazzers';
+        if (tagIds.length > 0) queryStr += '&tagIds=' + tagIds.join(',');
+        var panel = document.getElementById('tags-panel');
+        if (panel) panel.classList.remove('plexd-panel-open');
+        var btn = document.getElementById('tags-btn');
+        if (btn) btn.textContent = 'Loading...';
+        try {
+            var resp = await fetch('/api/demo/streams' + queryStr);
+            var data = await resp.json();
+            if (!data.streams || data.streams.length === 0) {
+                showMessage(data.error || 'No streams found for selected tags', 'error');
+                return;
+            }
+            var IMMEDIATE = 6;
+            for (var i = 0; i < data.streams.length; i++) {
+                var s = data.streams[i];
+                var stream = addStreamSilent(s.url, i >= IMMEDIATE ? { deferred: true } : undefined);
+                if (stream && (s.tags || s.actors || s.category)) {
+                    stream.aiTags = s.tags || [];
+                    stream.actors = s.actors || [];
+                    stream.category = s.category || '';
+                    stream.title = s.title || '';
+                    updateStreamInfoOverlay(stream);
+                }
+            }
+            updateLayout();
+            var deferred = PlexdStream.getAllStreams().filter(function(s) { return s.deferred; });
+            if (deferred.length > 0) staggerActivate(deferred);
+            var msg = 'Added ' + data.streams.length + ' streams';
+            if (tagIds.length > 0) msg += ' (filtered by ' + tagIds.length + ' tag' + (tagIds.length > 1 ? 's' : '') + ')';
+            showMessage(msg, 'success');
+        } catch (err) {
+            console.error('[Tags] Error:', err);
+            showMessage('Failed to load streams: ' + err.message, 'error');
+        } finally {
+            if (btn) btn.textContent = 'Tags';
+        }
+    }
+
     /**
      * xfill - Load random demo streams from server scraper
      * @param {string} source - 'auto', 'brazzers', or 'xhamster'
@@ -1535,7 +1678,7 @@ const PlexdApp = (function() {
         if (typeof source === 'number') { count = source; source = 'auto'; }
         _xfillLoading = true;
         source = source || 'auto';
-        count = count || 16;
+        count = count || 6;
 
         var btn = document.getElementById('xfill-btn');
         if (btn) btn.textContent = 'Loading...';
@@ -1554,10 +1697,19 @@ const PlexdApp = (function() {
 
             var IMMEDIATE = 6;
             for (var i = 0; i < data.streams.length; i++) {
-                addStreamSilent(
-                    data.streams[i].url,
+                var s = data.streams[i];
+                var stream = addStreamSilent(
+                    s.url,
                     i >= IMMEDIATE ? { deferred: true } : undefined
                 );
+                // Store Brazzers metadata on stream for AI tags display
+                if (stream && (s.tags || s.actors || s.category)) {
+                    stream.aiTags = s.tags || [];
+                    stream.actors = s.actors || [];
+                    stream.category = s.category || '';
+                    stream.title = s.title || '';
+                    updateStreamInfoOverlay(stream);
+                }
             }
             updateLayout();
 
@@ -1582,6 +1734,29 @@ const PlexdApp = (function() {
         } finally {
             _xfillLoading = false;
             if (btn) btn.textContent = 'xfill';
+        }
+    }
+
+    // Update stream info overlay with Brazzers metadata (title, actors, category, tags)
+    function updateStreamInfoOverlay(stream) {
+        if (!stream || !stream.infoOverlay) return;
+        var urlEl = stream.infoOverlay.querySelector('.plexd-info-url');
+        if (!urlEl) return;
+        var parts = [];
+        if (stream.title) parts.push(stream.title);
+        if (stream.actors && stream.actors.length) parts.push(stream.actors.join(', '));
+        if (stream.category) parts.push(stream.category);
+        if (parts.length) urlEl.textContent = parts.join(' · ');
+        // Add tags row below stats
+        var tagsEl = stream.infoOverlay.querySelector('.plexd-info-tags');
+        if (stream.aiTags && stream.aiTags.length) {
+            if (!tagsEl) {
+                tagsEl = document.createElement('div');
+                tagsEl.className = 'plexd-info-tags';
+                tagsEl.style.cssText = 'font-size:10px;opacity:0.7;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+                stream.infoOverlay.appendChild(tagsEl);
+            }
+            tagsEl.textContent = stream.aiTags.join(' · ');
         }
     }
 
@@ -7251,7 +7426,10 @@ const PlexdApp = (function() {
                 break;
             case 'p':
             case 'P':
-                if (selected) {
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    toggleCast();
+                } else if (selected) {
                     PlexdStream.togglePiP(selected.id);
                 }
                 break;
@@ -7394,6 +7572,12 @@ const PlexdApp = (function() {
                 // D toggles saved sets panel
                 e.preventDefault();
                 togglePanel('saved-panel');
+                break;
+            case 'u':
+            case 'U':
+                // U toggles tags browser panel
+                e.preventDefault();
+                togglePanel('tags-panel');
                 break;
             case '=':
                 // = removes duplicate streams (make them equal/unique)
@@ -10851,7 +11035,7 @@ const PlexdApp = (function() {
             if (willOpen) {
                 // Panels are mutually exclusive for a clean UX.
                 // When one opens, close the others.
-                ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel'].forEach(id => {
+                ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel', 'tags-panel'].forEach(id => {
                     if (id !== panelId) {
                         const other = document.getElementById(id);
                         if (other) other.classList.remove('plexd-panel-open');
@@ -10865,6 +11049,8 @@ const PlexdApp = (function() {
                     updateStreamsPanelUI();
                 } else if (panelId === 'history-panel') {
                     updateHistoryUI();
+                } else if (panelId === 'tags-panel') {
+                    fetchTags().then(function(tags) { if (tags) renderTagsPanel(tags); });
                 }
             } else {
                 selectedSetIndex = -1; // Reset when closing
@@ -11584,6 +11770,73 @@ const PlexdApp = (function() {
         showMessage('Rewound ' + count + ' stream' + (count !== 1 ? 's' : '') + ' to start', 'success');
     }
 
+    // ========================================
+    // Cast UI
+    // ========================================
+
+    function toggleCast() {
+        if (typeof PlexdCast === 'undefined') {
+            showMessage('Cast not available');
+            return;
+        }
+        var cState = PlexdCast.getState();
+        if (cState.active) {
+            PlexdCast.stopCasting();
+            showMessage('Cast disconnected');
+        } else if (cState.available) {
+            if (PlexdStream.getAllStreams().length === 0) {
+                showMessage('Add streams first, then cast');
+                return;
+            }
+            var target = PlexdStream.getSelectedStream() || PlexdStream.getFullscreenStream();
+            if (target) {
+                PlexdCast.castStream(target.id);
+            } else {
+                showMessage('Select a stream to cast');
+            }
+        } else {
+            showMessage('No cast devices. Use macOS Screen Mirroring.');
+        }
+    }
+
+    function updateCastStatusBar(state) {
+        var bar = document.getElementById('cast-status-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.id = 'cast-status-bar';
+            bar.className = 'plexd-cast-status';
+            bar.addEventListener('click', function() { PlexdCast.stopCasting(); });
+            var app = document.querySelector('.plexd-app');
+            if (app) app.appendChild(bar);
+        }
+
+        if (state.active) {
+            var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === state.streamId; });
+            var title = stream ? (stream.url.split('/').pop() || 'Stream') : 'Stream';
+            bar.textContent = '📺 Casting "' + title + '" to ' + state.targetName + ' — click to disconnect';
+            bar.classList.add('visible');
+        } else {
+            bar.classList.remove('visible');
+        }
+
+        updateCastBadge(state);
+    }
+
+    function updateCastBadge(state) {
+        var old = document.querySelector('.plexd-cast-badge');
+        if (old) old.remove();
+
+        if (state.active && state.streamId) {
+            var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === state.streamId; });
+            if (stream && stream.wrapper) {
+                var badge = document.createElement('div');
+                badge.className = 'plexd-cast-badge';
+                badge.textContent = '📺';
+                stream.wrapper.appendChild(badge);
+            }
+        }
+    }
+
     // Public API
     return {
         init,
@@ -11647,6 +11900,7 @@ const PlexdApp = (function() {
         toggleAudioFocus,
         toggleCleanMode,
         toggleGlobalFullscreen,
+        toggleCast,
         randomSeekAll,
         randomSeekSelected,
         rewindSelected,
@@ -11659,7 +11913,11 @@ const PlexdApp = (function() {
         showShortcutsModal,
         jumpToRandomMoment,
         // Demo
-        xfill
+        xfill,
+        // Tags
+        toggleTag,
+        clearTagSelection,
+        loadTaggedStreams
     };
 })();
 

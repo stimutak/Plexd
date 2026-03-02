@@ -2280,7 +2280,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDsS=`÷+\-\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsS=`÷+\-\[\]{}]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -2683,6 +2683,17 @@ const PlexdStream = (function() {
         // Clean up transcode polling if active (PlexdApp tracks this)
         if (typeof PlexdApp !== 'undefined' && PlexdApp.stopTranscodePollForStream) {
             PlexdApp.stopTranscodePollForStream(stream);
+        }
+
+        // Stop casting if this stream is being cast
+        if (typeof PlexdCast !== 'undefined') {
+            var cState = PlexdCast.getState();
+            if (cState.active && cState.streamId === streamId) {
+                PlexdCast.stopCasting();
+                if (typeof PlexdApp !== 'undefined' && PlexdApp.showMessage) {
+                    PlexdApp.showMessage('Cast stopped — stream was removed');
+                }
+            }
         }
 
         // Clean up document-level event listeners (panning)

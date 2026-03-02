@@ -3846,6 +3846,48 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // GET /api/stash/scene-info?url=... - Get metadata for a Stash scene URL
+    // Extracts scene ID from URL pattern /scene/{id}/stream, queries GraphQL
+    if (pathname === '/api/stash/scene-info' && req.method === 'GET') {
+        const sceneUrl = url.searchParams.get('url') || '';
+        const match = sceneUrl.match(/\/scene\/(\d+)/);
+        if (!match) {
+            jsonError(res, 400, 'Not a Stash scene URL');
+            return;
+        }
+        const sceneId = match[1];
+        try {
+            const data = await fetchStashGraphQL(`query ($id: ID!) {
+                findScene(id: $id) {
+                    id title rating100
+                    paths { stream screenshot }
+                    performers { id name }
+                    tags { id name }
+                    studio { id name }
+                    files { width height duration }
+                }
+            }`, { id: sceneId });
+            const scene = data.findScene;
+            if (!scene) {
+                jsonError(res, 404, 'Scene not found in Stash');
+                return;
+            }
+            jsonOk(res, {
+                url: scene.paths?.stream || sceneUrl,
+                title: scene.title || 'Stash Scene',
+                tags: (scene.tags || []).map(t => t.name),
+                actors: (scene.performers || []).map(p => p.name),
+                category: scene.studio?.name || '',
+                site: 'Stash',
+                rating: scene.rating100 != null ? scene.rating100 : null,
+                thumbnail: scene.paths?.screenshot || null,
+            });
+        } catch (err) {
+            jsonError(res, 500, 'Stash query failed: ' + err.message);
+        }
+        return;
+    }
+
     // GET /api/demo/auth-status - Check Aylo + Stash status
     if (pathname === '/api/demo/auth-status' && req.method === 'GET') {
         const aylo = {};

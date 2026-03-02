@@ -948,7 +948,9 @@ const PlexdApp = (function() {
             PlexdCast.onStateChange(function(state) {
                 var castBtn = document.getElementById('cast-btn');
                 if (castBtn) {
+                    var hasStreams = PlexdStream.getAllStreams().length > 0;
                     castBtn.classList.toggle('active', state.active);
+                    castBtn.disabled = !state.available || !hasStreams;
                     castBtn.title = state.active
                         ? 'Casting to ' + state.targetName + ' [Shift+P to disconnect]'
                         : 'Cast selected stream [Shift+P]';
@@ -11795,6 +11797,10 @@ const PlexdApp = (function() {
             PlexdCast.stopCasting();
             showMessage('Cast disconnected');
         } else if (cState.available) {
+            if (PlexdStream.getAllStreams().length === 0) {
+                showMessage('Add streams first, then cast');
+                return;
+            }
             var target = PlexdStream.getSelectedStream() || PlexdStream.getFullscreenStream();
             if (target) {
                 PlexdCast.castStream(target.id);

@@ -25,6 +25,8 @@ const PlexdCast = (function() {
         presentation: false
     };
 
+    var CAST_APP_ID = 'CC1AD845';  // Default Cast media receiver
+
     var stateCallbacks = [];
     var castSession = null;       // Chrome Cast session
     var presentationConn = null;  // Presentation API connection
@@ -116,11 +118,76 @@ const PlexdCast = (function() {
     // --- Protocol Stubs (filled in by Tasks 4-6) ---
 
     function initChromeCast() {
-        // Task 4: Chrome Cast SDK initialization
+        var context = cast.framework.CastContext.getInstance();
+        context.setOptions({
+            receiverApplicationId: CAST_APP_ID,
+            autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED
+        });
+
+        context.addEventListener(
+            cast.framework.CastContextEventType.SESSION_STATE_CHANGED,
+            function(event) {
+                switch (event.sessionState) {
+                    case cast.framework.SessionState.SESSION_STARTED:
+                    case cast.framework.SessionState.SESSION_RESUMED:
+                        castSession = context.getCurrentSession();
+                        castState.active = true;
+                        castState.mode = 'cast';
+                        castState.targetName = castSession.getCastDevice().friendlyName;
+                        castSession.addMessageListener('urn:x-cast:plexd', function(ns, msg) {
+                            handleReceiverMessage(JSON.parse(msg));
+                        });
+                        notifyStateChange();
+                        break;
+                    case cast.framework.SessionState.SESSION_ENDED:
+                        castSession = null;
+                        castState.active = false;
+                        castState.mode = null;
+                        castState.streamId = null;
+                        castState.targetName = '';
+                        notifyStateChange();
+                        break;
+                }
+            }
+        );
     }
 
     function castStreamViaCast(streamId) {
-        // Task 4: Start casting via Chrome Cast
+        if (!castSession) {
+            cast.framework.CastContext.getInstance().requestSession()
+                .then(function() {
+                    castSession = cast.framework.CastContext.getInstance().getCurrentSession();
+                    loadMediaOnCast(streamId);
+                })
+                .catch(function(e) { console.warn('Cast session request failed:', e); });
+            return;
+        }
+        loadMediaOnCast(streamId);
+    }
+
+    /**
+     * Load media onto the active Cast session
+     */
+    function loadMediaOnCast(streamId) {
+        var url = getStreamCastUrl(streamId);
+        if (!url) return;
+
+        var mediaInfo = new chrome.cast.media.MediaInfo(url, 'application/x-mpegURL');
+        mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
+
+        var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === streamId; });
+        if (stream) {
+            mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
+            mediaInfo.metadata.title = stream.url.split('/').pop() || 'Plexd Stream';
+        }
+
+        var request = new chrome.cast.media.LoadRequest(mediaInfo);
+        castSession.loadMedia(request)
+            .then(function() {
+                castState.streamId = streamId;
+                notifyStateChange();
+            })
+            .catch(function(e) { console.error('Cast loadMedia failed:', e); });
     }
 
     function castStreamViaAirPlay(streamId) {
@@ -132,7 +199,9 @@ const PlexdCast = (function() {
     }
 
     function sendCommandViaCast(cmd, data) {
-        // Task 4: Send command to Cast receiver
+        if (!castSession) return;
+        var msg = JSON.stringify(Object.assign({ cmd: cmd }, data || {}));
+        castSession.sendMessage('urn:x-cast:plexd', msg);
     }
 
     function sendCommandViaPresentation(cmd, data) {
@@ -140,7 +209,9 @@ const PlexdCast = (function() {
     }
 
     function stopCastingViaCast() {
-        // Task 4: Stop Chrome Cast session
+        if (castSession) {
+            castSession.endSession(true);
+        }
     }
 
     function stopCastingViaPresentation() {

@@ -672,10 +672,229 @@ const PlexdApp = (function() {
     function setStyleVariant(val) { styleVariant = val; window._plexdStyleVariant = val; }
     function setUseDensitySystem(val) { useDensitySystem = val; window._plexdUseDensitySystem = val; }
 
-    // Placeholder stubs — replaced in Task 9 with full implementations
-    function setDensity(level) { /* stub */ }
-    function cycleStyleVariant() { /* stub */ }
-    function toggleDensitySystem() { /* stub */ }
+    // --- Density System: Core Functions ---
+
+    function setDensity(level) {
+        level = Math.max(-1, Math.min(5, level));
+        if (level === densityLevel) return;
+
+        // Cleanup outgoing level
+        if (densityLevel === 5 && styleVariant === 1) {
+            toggleBugEyeMode(true); // Force off Bug Eye overlay
+        }
+
+        prevDensityLevel = densityLevel;
+        window._plexdPrevDensityLevel = prevDensityLevel;
+        setDensityLevel(level);
+        setStyleVariant(0); // Reset variant on level change
+
+        // Handle true fullscreen transitions
+        if (level === -1) {
+            PlexdStream.enterGridFullscreen();
+        } else if (prevDensityLevel === -1) {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            }
+        }
+
+        // Handle focused mode transitions
+        if (level === 0) {
+            var selected = PlexdStream.getSelectedStream();
+            if (selected) PlexdStream.enterFocusedMode(selected.id);
+        } else if (prevDensityLevel === 0) {
+            var fsMode = PlexdStream.getFullscreenMode();
+            if (fsMode === 'browser-fill') PlexdStream.exitFocusedMode();
+        }
+
+        updateDensityClasses();
+        updateModeIndicator();
+        updateLayout();
+
+        var label = getDensityLabel();
+        showMessage(label, 'info');
+    }
+
+    function cycleStyleVariant() {
+        var max = DENSITY_MAX_VARIANT[String(densityLevel)] || 0;
+        if (max === 0) {
+            showMessage('No variants at this level', 'info');
+            return;
+        }
+
+        // Cleanup outgoing variant
+        if (densityLevel === 5 && styleVariant === 1) {
+            toggleBugEyeMode(true);
+        }
+
+        setStyleVariant((styleVariant + 1) % (max + 1));
+
+        updateDensityClasses();
+        updateModeIndicator();
+        updateLayout();
+
+        var label = getDensityLabel();
+        showMessage(label, 'info');
+    }
+
+    function toggleDensitySystem() {
+        setUseDensitySystem(!useDensitySystem);
+
+        var btn = document.getElementById('density-btn');
+        if (btn) btn.classList.toggle('active', useDensitySystem);
+
+        if (useDensitySystem) {
+            mapOldModeToDensity();
+            updateDensityClasses();
+        } else {
+            mapDensityToOldMode();
+            removeDensityClasses();
+        }
+
+        updateModeIndicator();
+        updateLayout();
+        showMessage(useDensitySystem ? 'Density System ON' : 'Density System OFF', 'info');
+    }
+
+    // --- Density System: Helpers ---
+
+    function getDensityLabel() {
+        var levelName = DENSITY_NAMES[densityLevel + 1] || 'Unknown';
+        var variants = DENSITY_VARIANT_NAMES[String(densityLevel)];
+        if (variants && variants[0] && variants[0][styleVariant] && styleVariant > 0) {
+            return levelName + ' > ' + variants[0][styleVariant];
+        }
+        return levelName;
+    }
+
+    function updateDensityClasses() {
+        var app = document.querySelector('.plexd-app');
+        if (!app) return;
+        for (var i = -1; i <= 5; i++) app.classList.remove('density-level-' + i);
+        for (var v = 0; v <= 2; v++) app.classList.remove('density-variant-' + v);
+        if (useDensitySystem) {
+            app.classList.add('density-active');
+            app.classList.add('density-level-' + densityLevel);
+            app.classList.add('density-variant-' + styleVariant);
+        }
+    }
+
+    function removeDensityClasses() {
+        var app = document.querySelector('.plexd-app');
+        if (!app) return;
+        app.classList.remove('density-active');
+        for (var i = -1; i <= 5; i++) app.classList.remove('density-level-' + i);
+        for (var v = 0; v <= 2; v++) app.classList.remove('density-variant-' + v);
+    }
+
+    function mapOldModeToDensity() {
+        var fsMode = PlexdStream.getFullscreenMode();
+        if (fsMode === 'true-focused' || document.fullscreenElement) {
+            setDensityLevel(-1); setStyleVariant(0);
+        } else if (fsMode === 'browser-fill') {
+            setDensityLevel(0); setStyleVariant(0);
+        } else if (bugEyeMode) {
+            setDensityLevel(5); setStyleVariant(1);
+        } else if (mosaicMode) {
+            setDensityLevel(5); setStyleVariant(0);
+        } else if (wallMode === 1) {
+            setDensityLevel(4); setStyleVariant(0);
+        } else if (wallMode === 3) {
+            setDensityLevel(1); setStyleVariant(0);
+        } else if (wallMode === 2) {
+            setDensityLevel(3); setStyleVariant(0);
+        } else if (tetrisMode === 1) {
+            setDensityLevel(4); setStyleVariant(1);
+        } else if (tetrisMode === 2) {
+            setDensityLevel(4); setStyleVariant(0);
+        } else if (tetrisMode === 3) {
+            setDensityLevel(3); setStyleVariant(1);
+        } else if (tetrisMode === 4) {
+            setDensityLevel(2); setStyleVariant(2);
+        } else if (coverflowMode) {
+            setDensityLevel(2); setStyleVariant(1);
+        } else {
+            setDensityLevel(2); setStyleVariant(0);
+        }
+        prevDensityLevel = 2;
+        window._plexdPrevDensityLevel = 2;
+    }
+
+    function mapDensityToOldMode() {
+        setTetrisMode(0);
+        setWallMode(0);
+        coverflowMode = false;
+        window._plexdCoverflowMode = false;
+        switch (densityLevel) {
+            case 1: setWallMode(3); break;
+            case 2:
+                if (styleVariant === 2) setTetrisMode(4);
+                break;
+            case 3:
+                if (styleVariant === 0) setWallMode(2);
+                else if (styleVariant === 1) setTetrisMode(3);
+                else setTetrisMode(1);
+                break;
+            case 4:
+                if (styleVariant === 0) setWallMode(1);
+                else setTetrisMode(1);
+                break;
+        }
+        updateWallModeClasses();
+        updateTetrisModeClasses();
+        var coverflowBtn = document.getElementById('coverflow-btn');
+        if (coverflowBtn) coverflowBtn.classList.remove('active');
+    }
+
+    // --- Density System: Key Handler ---
+
+    function handleDensityKeys(e) {
+        if (!useDensitySystem) return false;
+        switch (e.key) {
+            case '-':
+            case '_':
+                if (!e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    setDensity(densityLevel - 1);
+                    return true;
+                }
+                return false;
+            case '=':
+            case '+':
+                if (!e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    setDensity(densityLevel + 1);
+                    return true;
+                }
+                return false;
+            case 'y':
+            case 'Y':
+                if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    cycleStyleVariant();
+                    return true;
+                }
+                return false;
+            // Intercept old mode keys in density mode
+            case 't':
+            case 'T':
+                if (!e.shiftKey && !e.metaKey) return true;
+                return false;
+            case 'o':
+            case 'O':
+                if (!e.metaKey) return true;
+                return false;
+            case 'w':
+            case 'W':
+                if (!momentBrowserState.open) return true;
+                return false;
+            case 'b':
+            case 'B':
+                if (!e.metaKey) return true;
+                return false;
+            default:
+                return false;
+        }
+    }
 
     // Header visibility (starts hidden)
     let headerVisible = false;
@@ -2441,6 +2660,17 @@ const PlexdApp = (function() {
                     return; // Let handleSetsPanelKeyboard handle it
                 }
 
+                // Density system: F toggles fullscreen level (-1)
+                if (useDensitySystem && !e.metaKey) {
+                    e.preventDefault();
+                    if (densityLevel === -1) {
+                        setDensity(prevDensityLevel !== -1 ? prevDensityLevel : 2);
+                    } else {
+                        setDensity(-1);
+                    }
+                    return;
+                }
+
                 e.preventDefault();
                 const mode = PlexdStream.getFullscreenMode();
                 console.log(`[Plexd] F key pressed, current mode=${mode}`);
@@ -2698,7 +2928,33 @@ const PlexdApp = (function() {
         };
 
         let layout;
-        if (wallMode === 1) {
+        if (useDensitySystem) {
+            var selected = PlexdStream.getSelectedStream();
+            var selectedIdx = selected ? streamsToShow.findIndex(function(s) { return s.id === selected.id; }) : -1;
+            var result = PlexdGrid.calculateDensityLayout(densityLevel, styleVariant, container, streamsToShow, selectedIdx);
+
+            if (result.type === 'overlay') {
+                if (result.mode === 'bugeye' && !bugEyeMode) {
+                    toggleBugEyeMode();
+                }
+                return;
+            } else if (result.type === 'mosaic-grid') {
+                streamsToShow.forEach(function(s) {
+                    if (s.wrapper) {
+                        s.wrapper.style.position = '';
+                        s.wrapper.style.left = '';
+                        s.wrapper.style.top = '';
+                        s.wrapper.style.width = '';
+                        s.wrapper.style.height = '';
+                        s.wrapper.style.display = '';
+                    }
+                });
+                PlexdStream.setGridCols(Math.ceil(Math.sqrt(streamsToShow.length)));
+                return;
+            } else {
+                layout = result;
+            }
+        } else if (wallMode === 1) {
             // Wall: Strips — vertical columns, center-cropped
             layout = PlexdGrid.calculateStripsLayout(container, streamsToShow);
         } else if (wallMode === 3) {
@@ -8011,6 +8267,9 @@ const PlexdApp = (function() {
         // Moment Browser consumes all keys when open
         if (handleMomentBrowserKeyboard(e)) return;
 
+        // Density system keys — intercept before old mode keys
+        if (handleDensityKeys(e)) return;
+
         const selected = PlexdStream.getSelectedStream();
         const fullscreenStream = PlexdStream.getFullscreenStream();
 
@@ -8289,6 +8548,15 @@ const PlexdApp = (function() {
                 // fall through to Z handler
             case 'z':
             case 'Z':
+                if (useDensitySystem) {
+                    e.preventDefault();
+                    if (densityLevel === 0) {
+                        setDensity(prevDensityLevel !== 0 ? prevDensityLevel : 2);
+                    } else {
+                        setDensity(0);
+                    }
+                    break;
+                }
                 e.preventDefault();
                 // Enter or Z: toggle between grid and focused view (browser-fill)
                 // In coverflow mode: enter focused mode on the center-selected stream

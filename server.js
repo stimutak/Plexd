@@ -1694,6 +1694,22 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
 
+    // --- Cast / Server Info ---
+    if (pathname === '/api/server-info' && req.method === 'GET') {
+        const nets = os.networkInterfaces();
+        let ip = '127.0.0.1';
+        for (const name of Object.keys(nets)) {
+            for (const net of nets[name]) {
+                if (net.family === 'IPv4' && !net.internal) {
+                    ip = net.address;
+                    break;
+                }
+            }
+            if (ip !== '127.0.0.1') break;
+        }
+        return jsonOk(res, { ip, port: parseInt(PORT) });
+    }
+
     // Remote control API endpoints
     if (pathname === '/api/remote/state') {
         if (req.method === 'GET') {

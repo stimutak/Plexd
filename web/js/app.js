@@ -1571,6 +1571,30 @@ const PlexdApp = (function() {
         return _tagCache;
     }
 
+    // Determine which tag categories to show based on selected Network tags.
+    // Stash network IDs: <= -1000. Aylo network IDs: > -1000 and < 0.
+    // Stash categories: 'Stash', 'Stash Studios'. Everything else is Aylo.
+    function _getVisibleCategories(tags) {
+        var allCats = Object.keys(tags);
+        var selectedNetworks = [];
+        var networkChips = tags['Network'] || [];
+        for (var i = 0; i < networkChips.length; i++) {
+            if (_selectedTagIds.has(networkChips[i].id)) selectedNetworks.push(networkChips[i].id);
+        }
+        if (selectedNetworks.length === 0) return allCats; // No filter — show all
+
+        var hasStash = selectedNetworks.some(function(id) { return id <= -1000; });
+        var hasAylo = selectedNetworks.some(function(id) { return id > -1000; });
+        var stashCats = { 'Stash': true, 'Stash Studios': true };
+
+        return allCats.filter(function(cat) {
+            if (cat === 'Network') return true; // Always show Network
+            if (hasStash && !hasAylo) return !!stashCats[cat]; // Stash only
+            if (hasAylo && !hasStash) return !stashCats[cat];  // Aylo only
+            return true; // Both selected — show all
+        });
+    }
+
     function renderTagsPanel(tags) {
         var container = document.getElementById('tags-list');
         if (!container) return;
@@ -1583,8 +1607,9 @@ const PlexdApp = (function() {
             return;
         }
         container.textContent = '';
-        // Sort categories alphabetically but pin Network to the top
-        var categories = Object.keys(tags).sort();
+        // Filter categories based on selected network, then sort with Network pinned to top
+        var visible = _getVisibleCategories(tags);
+        var categories = visible.sort();
         var networkIdx = categories.indexOf('Network');
         if (networkIdx > 0) { categories.splice(networkIdx, 1); categories.unshift('Network'); }
         for (var i = 0; i < categories.length; i++) {
@@ -1787,11 +1812,13 @@ const PlexdApp = (function() {
             netDiv.appendChild(netChips);
             container.appendChild(netDiv);
         }
-        // Performers section
+        // Performers section (wrapped in .plexd-tag-category for search filter hide/show)
+        var perfDiv = document.createElement('div');
+        perfDiv.className = 'plexd-tag-category';
         var perfLabel = document.createElement('div');
         perfLabel.className = 'plexd-tag-category-label';
         perfLabel.textContent = 'Performers';
-        container.appendChild(perfLabel);
+        perfDiv.appendChild(perfLabel);
         var chipsDiv = document.createElement('div');
         chipsDiv.className = 'plexd-tag-chips';
         for (var i = 0; i < actors.length; i++) {
@@ -1803,7 +1830,8 @@ const PlexdApp = (function() {
             chip.onclick = (function(id) { return function() { togglePerformer(id); }; })(a.id);
             chipsDiv.appendChild(chip);
         }
-        container.appendChild(chipsDiv);
+        perfDiv.appendChild(chipsDiv);
+        container.appendChild(perfDiv);
         updatePerformerCountBadge();
         // Wire up search filter
         _setupPanelSearch('performers-search', container);
@@ -1877,6 +1905,9 @@ const PlexdApp = (function() {
             if (e.key === 'Escape') {
                 e.preventDefault();
                 newInput.blur();
+                // Close the panel entirely (not just blur)
+                var openPanel = container.closest('.plexd-panel-open');
+                if (openPanel) togglePanel(openPanel.id);
                 return;
             }
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -8522,7 +8553,7 @@ const PlexdApp = (function() {
             return;
         }
 
-        // Spotlight mode: Left/Right rotates hero (same as Theater Stage)
+        // Spotlight mode: Left/Right rotates hero, Up/Down navigates ensemble
         if (wallMode === 3) {
             const streams = getFilteredStreams();
             if (streams.length === 0) return;
@@ -8539,6 +8570,9 @@ const PlexdApp = (function() {
                 updateLayout();
                 return;
             }
+            // Up/Down: navigate within ensemble thumbnails
+            PlexdStream.selectNextStream(direction);
+            return;
         }
 
         const mode = PlexdStream.getFullscreenMode();

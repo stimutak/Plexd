@@ -38,6 +38,7 @@ body {
     --text-ghost: rgba(237, 232, 224, 0.15);
     --accent: #c9566d;
     --accent-up: #d4667a;
+    --accent-light: #e8839a;
     --accent-glow: rgba(201, 86, 109, 0.35);
     --accent-soft: rgba(201, 86, 109, 0.12);
     --gold: #c9a355;

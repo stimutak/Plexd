@@ -340,6 +340,9 @@
             // Start the receiver
             var options = new cast.framework.CastReceiverOptions();
             options.disableIdleTimeout = true;
+            // Declare custom namespace so CAF initializes it before start
+            options.customNamespaces = {};
+            options.customNamespaces[CAST_NAMESPACE] = cast.framework.system.MessageType.JSON;
             castContext.start(options);
 
             console.log('[Plexd Cast] Cast receiver initialized');

@@ -1733,6 +1733,8 @@ const PlexdApp = (function() {
                     stream.title = s.title || '';
                     stream.site = s.site || '';
                     updateStreamInfoOverlay(stream);
+                    // Enrich history with scene title
+                    if (s.title) addToHistory(s.url, s.title);
                 }
             }
             updateLayout();
@@ -1908,6 +1910,16 @@ const PlexdApp = (function() {
         });
         // Arrow keys + Space while search is focused
         newInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                newInput.blur();
+                // If search is empty, close the panel entirely (no reason to stay)
+                if (!newInput.value.trim()) {
+                    var openPanel = container.closest('.plexd-panel-open');
+                    if (openPanel) openPanel.classList.remove('plexd-panel-open');
+                }
+                return;
+            }
             if (e.key === 'Escape') {
                 e.preventDefault();
                 newInput.blur();
@@ -2096,6 +2108,8 @@ const PlexdApp = (function() {
                     stream.title = s.title || '';
                     stream.site = s.site || '';
                     updateStreamInfoOverlay(stream);
+                    // Enrich history with scene title
+                    if (s.title) addToHistory(s.url, s.title);
                 }
             }
             updateLayout();
@@ -2458,6 +2472,7 @@ const PlexdApp = (function() {
                 current.title = info.title || '';
                 current.site = info.site || '';
                 updateStreamInfoOverlay(current);
+                if (info.title) updateHistoryTitle(current.url, info.title);
             })
             .catch(function() { /* Stash unreachable — no metadata, no problem */ });
     }
@@ -4282,6 +4297,10 @@ const PlexdApp = (function() {
             wallMirrorState.rafId = null;
         }
         wallMirrorState._initCell = null;
+        if (wallMirrorState._observer) {
+            wallMirrorState._observer.disconnect();
+            wallMirrorState._observer = null;
+        }
         // Remove timeupdate loop handlers from source videos
         wallMirrorState.handlers.forEach(function(h) {
             if (h.video && h.handler) h.video.removeEventListener('timeupdate', h.handler);
@@ -4815,8 +4834,8 @@ const PlexdApp = (function() {
         // Expose initWallCell for edit mode (updateWallSelection / toggleWallEditMode)
         wallMirrorState._initCell = initWallCell;
 
-        // Only init video for the selected cell in edit mode — all others stay as thumbnails
         if (wallEditMode) {
+            // Edit mode: only init video for the selected cell
             var selectedCell = grid.querySelector('.moment-wall-cell.selected');
             if (selectedCell) {
                 initWallCell(selectedCell);
@@ -4824,6 +4843,20 @@ const PlexdApp = (function() {
                 var selMom = selectedCell._moment;
                 if (selMom && selMom.extracted) upgradeEditCellToSource(selMom);
             }
+        } else {
+            // Normal Wall mode: lazy-init visible cells via IntersectionObserver
+            var wallObserver = new IntersectionObserver(function(entries) {
+                entries.forEach(function(entry) {
+                    if (entry.isIntersecting) {
+                        initWallCell(entry.target);
+                        wallObserver.unobserve(entry.target);
+                    }
+                });
+            }, { root: viewport, rootMargin: '100px' });
+            grid.querySelectorAll('.moment-wall-cell').forEach(function(cell) {
+                wallObserver.observe(cell);
+            });
+            wallMirrorState._observer = wallObserver;
         }
 
         // rAF mirror loop — draws only initialized canvasRefs (visible cells)
@@ -7750,6 +7783,25 @@ const PlexdApp = (function() {
         // Ignore only when typing into text-entry controls (not sliders/buttons).
         if (isTypingTarget(e.target)) return;
 
+        // Tab toggles panel search: first Tab = focus search, second Tab = close panel
+        if (e.key === 'Tab') {
+            var searchMap = { 'tags-panel': 'tags-search', 'performers-panel': 'performers-search', 'streams-panel': 'streams-search', 'history-panel': 'history-search', 'saved-panel': 'sets-search' };
+            var openPanel = document.querySelector('.plexd-panel-open');
+            if (openPanel && searchMap[openPanel.id]) {
+                e.preventDefault();
+                var si = document.getElementById(searchMap[openPanel.id]);
+                if (si && document.activeElement !== si) {
+                    // First Tab: focus search
+                    si.focus();
+                    si.select();
+                } else {
+                    // Second Tab: close panel
+                    openPanel.classList.remove('plexd-panel-open');
+                }
+                return;
+            }
+        }
+
         // Let browser handle Cmd/Ctrl shortcuts (refresh, new tab, etc.)
         // Exception: Ctrl/Cmd+S is intentionally overridden for save
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() !== 's') return;
@@ -8115,10 +8167,10 @@ const PlexdApp = (function() {
                 removeDuplicateStreams();
                 break;
             case 'Escape':
-                // Escape closes filter panels first
+                // Escape closes any open panel first
                 {
                     var panelClosed = false;
-                    ['tags-panel', 'performers-panel'].forEach(function(id) {
+                    ['tags-panel', 'performers-panel', 'streams-panel', 'history-panel', 'saved-panel', 'queue-panel'].forEach(function(id) {
                         var p = document.getElementById(id);
                         if (p && p.classList.contains('plexd-panel-open')) {
                             p.classList.remove('plexd-panel-open');
@@ -9284,6 +9336,55 @@ const PlexdApp = (function() {
      */
     function addStreamCombination(name) {
         loadStreamCombination(name, true);
+    }
+
+    /**
+     * Merge currently-open streams INTO an existing saved set (add new, skip duplicates)
+     */
+    function mergeIntoSet(name) {
+        var combinations = getSavedCombinations();
+        var combo = combinations[name];
+        if (!combo) { showMessage('Set not found: ' + name, 'error'); return; }
+
+        var streams = PlexdStream.getAllStreams();
+        if (streams.length === 0) { showMessage('No streams to merge', 'error'); return; }
+
+        var existingKeys = new Set((combo.urls || []).map(function(u) { return urlEqualityKey(u); }));
+        var existingFiles = new Set((combo.localFiles || []).map(function(f) { return f.toLowerCase(); }));
+
+        var newUrls = [];
+        var newFiles = [];
+        streams.forEach(function(s) {
+            if (!shouldSaveStream(s) && !isBlobUrl(s.url)) return;
+            var url = s.serverUrl || s.url;
+            if (isBlobUrl(url) && s.fileName && !s.serverUrl) {
+                if (!existingFiles.has(s.fileName.toLowerCase())) {
+                    newFiles.push(s.fileName);
+                }
+            } else {
+                var key = urlEqualityKey(url);
+                if (!existingKeys.has(key)) {
+                    newUrls.push(url);
+                }
+            }
+        });
+
+        if (newUrls.length === 0 && newFiles.length === 0) {
+            showMessage('No new streams to add to "' + name + '"', 'info');
+            return;
+        }
+
+        combo.urls = (combo.urls || []).concat(newUrls);
+        combo.localFiles = (combo.localFiles || []).concat(newFiles);
+        combo.savedAt = Date.now();
+        combinations[name] = combo;
+        localStorage.setItem('plexd_combinations', JSON.stringify(combinations));
+        updateCombinationsList();
+
+        var parts = [];
+        if (newUrls.length > 0) parts.push(newUrls.length + ' URL' + (newUrls.length > 1 ? 's' : ''));
+        if (newFiles.length > 0) parts.push(newFiles.length + ' file' + (newFiles.length > 1 ? 's' : ''));
+        showMessage('Added ' + parts.join(' + ') + ' to "' + name + '"', 'success');
     }
 
     /**
@@ -11211,56 +11312,89 @@ const PlexdApp = (function() {
      * Update combinations list in UI (if present)
      */
     async function updateCombinationsList() {
-        const listEl = document.getElementById('combinations-list');
-        if (!listEl) return;
+        var container = document.getElementById('combinations-list');
+        if (!container) return;
 
-        const combinations = getSavedCombinations();
-        const names = Object.keys(combinations);
+        var combinations = getSavedCombinations();
+        var names = Object.keys(combinations);
 
         if (names.length === 0) {
-            listEl.innerHTML = '<div class="plexd-combo-empty">No saved combinations</div>';
+            container.textContent = '';
+            var empty = document.createElement('div');
+            empty.className = 'plexd-panel-empty';
+            empty.textContent = 'No saved sets';
+            container.appendChild(empty);
             return;
         }
 
-        // Build HTML for each set, fetching file sizes for those with local storage
-        const items = await Promise.all(names.map(async name => {
-            const combo = combinations[name];
-            if (!combo) return '';
+        container.textContent = '';
+        var chipsDiv = document.createElement('div');
+        chipsDiv.className = 'plexd-tag-chips plexd-set-chips';
 
-            const urlCount = (combo.urls || []).length;
-            const localCount = (combo.localFiles || []).length;
-            const totalCount = urlCount + localCount;
-            const loginCount = (combo.loginDomains || []).length;
-            const loginHint = loginCount > 0 ? ` · ${loginCount} login` : '';
+        for (var i = 0; i < names.length; i++) {
+            var name = names[i];
+            var combo = combinations[name];
+            if (!combo) continue;
 
-            // Get saved file sizes if stored locally
-            let storageInfo = '';
-            let deleteLocalBtn = '';
-            if (combo.localFilesSavedToDisc) {
-                const files = await getSavedLocalFiles(name);
-                const totalSize = files.reduce((sum, f) => sum + (f.size || 0), 0);
-                if (totalSize > 0) {
-                    storageInfo = ` · ${formatBytes(totalSize)}`;
-                    deleteLocalBtn = `<button class="plexd-combo-del-local" onclick="PlexdApp.deleteLocalFiles('${escapeAttr(name)}')" title="Delete stored files (${formatBytes(totalSize)})">🗑</button>`;
-                }
-            }
+            var urlCount = (combo.urls || []).length;
+            var localCount = (combo.localFiles || []).length;
+            var totalCount = urlCount + localCount;
 
-            return `
-                <div class="plexd-combo-item" data-name="${escapeAttr(name)}">
-                    <span class="plexd-combo-name">${escapeHtml(name)}</span>
-                    <span class="plexd-combo-count">${totalCount} stream${totalCount !== 1 ? 's' : ''}${loginHint}${storageInfo}</span>
-                    <div class="plexd-combo-buttons">
-                        <button class="plexd-combo-load" onclick="PlexdApp.loadCombination('${escapeAttr(name)}')" title="Load (replace current)">Load</button>
-                        <button class="plexd-combo-add" onclick="PlexdApp.addCombination('${escapeAttr(name)}')" title="Add to current streams">+Add</button>
-                        <button class="plexd-combo-update" onclick="PlexdApp.updateCombination('${escapeAttr(name)}')" title="Update with current streams">Upd</button>
-                        ${deleteLocalBtn}
-                        <button class="plexd-combo-delete" onclick="PlexdApp.deleteCombination('${escapeAttr(name)}')" title="Delete this set">×</button>
-                    </div>
-                </div>
-            `;
-        }));
+            var chip = document.createElement('div');
+            chip.className = 'plexd-tag-chip plexd-set-chip';
+            chip.setAttribute('data-name', name);
 
-        listEl.innerHTML = items.join('');
+            var nameSpan = document.createElement('span');
+            nameSpan.className = 'plexd-set-name';
+            nameSpan.textContent = name;
+            chip.appendChild(nameSpan);
+
+            var countSpan = document.createElement('span');
+            countSpan.className = 'plexd-set-count';
+            countSpan.textContent = totalCount + '';
+            chip.appendChild(countSpan);
+
+            // Action buttons
+            var btns = document.createElement('span');
+            btns.className = 'plexd-set-actions';
+
+            var loadBtn = document.createElement('span');
+            loadBtn.className = 'plexd-set-btn load';
+            loadBtn.textContent = 'Load';
+            loadBtn.title = 'Load (replace current)';
+            loadBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.loadCombination(n); }; })(name);
+            btns.appendChild(loadBtn);
+
+            var addBtn = document.createElement('span');
+            addBtn.className = 'plexd-set-btn add';
+            addBtn.textContent = '+';
+            addBtn.title = 'Add to current streams';
+            addBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.addCombination(n); }; })(name);
+            btns.appendChild(addBtn);
+
+            var updateBtn = document.createElement('span');
+            updateBtn.className = 'plexd-set-btn update';
+            updateBtn.textContent = '\u2191';
+            updateBtn.title = 'Update: add open streams not in this set';
+            updateBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.mergeIntoSet(n); }; })(name);
+            btns.appendChild(updateBtn);
+
+            var delBtn = document.createElement('span');
+            delBtn.className = 'plexd-chip-close';
+            delBtn.textContent = '\u00d7';
+            delBtn.title = 'Delete set';
+            delBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.deleteCombination(n); }; })(name);
+            btns.appendChild(delBtn);
+
+            chip.appendChild(btns);
+
+            // Click chip to load
+            chip.onclick = (function(n) { return function() { PlexdApp.loadCombination(n); }; })(name);
+            chipsDiv.appendChild(chip);
+        }
+
+        container.appendChild(chipsDiv);
+        _setupPanelSearch('sets-search', container);
     }
 
     /**
@@ -11423,19 +11557,22 @@ const PlexdApp = (function() {
     /**
      * Add to history
      */
-    function addToHistory(url) {
+    function addToHistory(url, title) {
         if (!url) return;
 
         // Remove if already exists (move to top)
         const existingIndex = streamHistory.findIndex(h => h.url === url);
         if (existingIndex >= 0) {
+            // Preserve existing title if new one not provided
+            if (!title && streamHistory[existingIndex].title) title = streamHistory[existingIndex].title;
             streamHistory.splice(existingIndex, 1);
         }
 
         // Add to beginning
         streamHistory.unshift({
             url,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            title: title || ''
         });
 
         // Keep only last 50
@@ -11445,6 +11582,16 @@ const PlexdApp = (function() {
 
         saveHistory();
         updateHistoryUI();
+    }
+
+    // Update a history entry's title after async enrichment
+    function updateHistoryTitle(url, title) {
+        if (!url || !title) return;
+        var item = streamHistory.find(function(h) { return h.url === url; });
+        if (item && !item.title) {
+            item.title = title;
+            saveHistory();
+        }
     }
 
     /**
@@ -11486,36 +11633,92 @@ const PlexdApp = (function() {
      * Update history UI
      */
     function updateHistoryUI() {
-        const historyList = document.getElementById('history-list');
+        var container = document.getElementById('history-list');
+        if (!container) return;
 
-        if (historyList) {
-            if (streamHistory.length === 0) {
-                historyList.innerHTML = '<div class="plexd-panel-empty">No history yet</div>';
-            } else {
-                historyList.innerHTML = streamHistory.slice(0, 30).map((item, idx) => {
-                    const ago = formatTimeAgo(item.timestamp);
-                    const name = getHistoryDisplayName(item.url);
-                    let domain = '';
-                    try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
-                    const isActive = PlexdStream.getAllStreams().some(s => s.url === item.url || s.sourceUrl === item.url);
-                    return `
-                        <div class="plexd-history-item${isActive ? ' plexd-history-active' : ''}" onclick="PlexdApp.addStream('${escapeAttr(item.url)}')">
-                            <div class="plexd-history-info">
-                                <span class="plexd-history-name">${escapeHtml(name)}</span>
-                                <span class="plexd-history-meta">${escapeHtml(domain)}${domain ? ' · ' : ''}${ago}</span>
-                            </div>
-                            <button class="plexd-history-delete" onclick="event.stopPropagation(); PlexdApp.removeHistoryItem(${idx})" title="Remove">✕</button>
-                        </div>
-                    `;
-                }).join('');
-            }
+        if (streamHistory.length === 0) {
+            container.textContent = '';
+            var empty = document.createElement('div');
+            empty.className = 'plexd-panel-empty';
+            empty.textContent = 'No history yet';
+            container.appendChild(empty);
+            return;
         }
+
+        // Group history by time period
+        var now = Date.now();
+        var DAY = 86400000;
+        var groups = { 'Today': [], 'Yesterday': [], 'This Week': [], 'Older': [] };
+        var items = streamHistory.slice(0, 50);
+        var activeUrls = {};
+        PlexdStream.getAllStreams().forEach(function(s) { activeUrls[s.url] = true; if (s.sourceUrl) activeUrls[s.sourceUrl] = true; });
+
+        for (var i = 0; i < items.length; i++) {
+            var age = now - items[i].timestamp;
+            if (age < DAY) groups['Today'].push(items[i]);
+            else if (age < DAY * 2) groups['Yesterday'].push(items[i]);
+            else if (age < DAY * 7) groups['This Week'].push(items[i]);
+            else groups['Older'].push(items[i]);
+        }
+
+        container.textContent = '';
+        var groupOrder = ['Today', 'Yesterday', 'This Week', 'Older'];
+        for (var g = 0; g < groupOrder.length; g++) {
+            var groupName = groupOrder[g];
+            var groupItems = groups[groupName];
+            if (groupItems.length === 0) continue;
+
+            var catDiv = document.createElement('div');
+            catDiv.className = 'plexd-tag-category';
+            var label = document.createElement('div');
+            label.className = 'plexd-tag-category-label';
+            label.textContent = groupName + ' (' + groupItems.length + ')';
+            catDiv.appendChild(label);
+            var chipsDiv = document.createElement('div');
+            chipsDiv.className = 'plexd-tag-chips';
+
+            for (var j = 0; j < groupItems.length; j++) {
+                var item = groupItems[j];
+                var isActive = !!activeUrls[item.url];
+                var name = item.title || getHistoryDisplayName(item.url);
+                var chip = document.createElement('span');
+                chip.className = 'plexd-tag-chip' + (isActive ? ' selected' : '');
+                chip.textContent = name;
+                chip.title = item.url;
+                chip.onclick = (function(url) { return function(e) {
+                    if (e.target.classList.contains('plexd-chip-close')) return;
+                    PlexdApp.addStream(url);
+                }; })(item.url);
+                // Delete button
+                var idx = streamHistory.indexOf(item);
+                var closeBtn = document.createElement('span');
+                closeBtn.className = 'plexd-chip-close';
+                closeBtn.textContent = '\u00d7';
+                closeBtn.title = 'Remove from history';
+                closeBtn.onclick = (function(index) { return function(e) {
+                    e.stopPropagation();
+                    PlexdApp.removeHistoryItem(index);
+                }; })(idx);
+                chip.appendChild(closeBtn);
+                chipsDiv.appendChild(chip);
+            }
+            catDiv.appendChild(chipsDiv);
+            container.appendChild(catDiv);
+        }
+        _setupPanelSearch('history-search', container);
     }
 
     function getHistoryDisplayName(url) {
         if (!url) return 'Unknown';
         if (url.startsWith('blob:')) return 'Local File';
         if (url.startsWith('data:')) return 'Embedded Video';
+        // Unwrap proxy URLs to get the original URL for naming
+        if (url.includes('/api/proxy/')) {
+            var proxyMatch = url.match(/\/api\/proxy\/(?:hls|video)\?url=(.+)/);
+            if (proxyMatch) {
+                try { url = decodeURIComponent(proxyMatch[1]); } catch(e) {}
+            }
+        }
         try {
             const urlObj = new URL(url, window.location.origin);
             // For server files, fileId is the original filename
@@ -11599,14 +11802,15 @@ const PlexdApp = (function() {
             }
             // Reset filter panel state
             _panelHighlightIdx = -1;
-            var searchId = panelId === 'tags-panel' ? 'tags-search' : panelId === 'performers-panel' ? 'performers-search' : null;
+            var searchMap = { 'tags-panel': 'tags-search', 'performers-panel': 'performers-search', 'streams-panel': 'streams-search', 'history-panel': 'history-search', 'saved-panel': 'sets-search' };
+            var searchId = searchMap[panelId] || null;
             if (searchId) {
                 var searchInput = document.getElementById(searchId);
                 if (searchInput) searchInput.value = '';
             }
             panel.classList.toggle('plexd-panel-open');
-            // Auto-focus search input when opening filter panels
-            if (willOpen && searchId) {
+            // Auto-focus search input when opening panels (skip in fullscreen — Escape exits fullscreen before JS can handle it, trapping the cursor)
+            if (willOpen && searchId && !document.fullscreenElement) {
                 var si = document.getElementById(searchId);
                 if (si) setTimeout(function() { si.focus(); }, 50);
             }
@@ -11635,7 +11839,7 @@ const PlexdApp = (function() {
             return true;
         }
 
-        const items = panel.querySelectorAll('.plexd-combo-item');
+        const items = panel.querySelectorAll('.plexd-set-chip');
         if (items.length === 0) return false;
 
         if (e.key === 'ArrowDown') {
@@ -11666,10 +11870,10 @@ const PlexdApp = (function() {
     function updateSetSelection(items) {
         items.forEach((item, i) => {
             if (i === selectedSetIndex) {
-                item.classList.add('plexd-combo-selected');
+                item.classList.add('selected');
                 item.scrollIntoView({ block: 'nearest' });
             } else {
-                item.classList.remove('plexd-combo-selected');
+                item.classList.remove('selected');
             }
         });
     }
@@ -11703,75 +11907,134 @@ const PlexdApp = (function() {
      * Update streams panel UI with list of all active streams
      */
     function updateStreamsPanelUI() {
-        const streamsList = document.getElementById('streams-list');
-        if (!streamsList) return;
+        var container = document.getElementById('streams-list');
+        if (!container) return;
 
-        // Skip expensive rebuild when panel is not visible (saves massive DOM churn with 30+ streams)
-        var panel = document.getElementById('streams-panel');
-        if (panel && !panel.classList.contains('active')) return;
-
-        const allStreams = PlexdStream.getAllStreams();
-        const selectedStream = PlexdStream.getSelectedStream();
+        var allStreams = PlexdStream.getAllStreams();
+        var selectedStream = PlexdStream.getSelectedStream();
 
         if (allStreams.length === 0) {
-            streamsList.innerHTML = '<div class="plexd-panel-empty">No active streams</div>';
+            container.textContent = '';
+            var empty = document.createElement('div');
+            empty.className = 'plexd-panel-empty';
+            empty.textContent = 'No active streams';
+            container.appendChild(empty);
             return;
         }
 
-        streamsList.innerHTML = allStreams.map((stream, index) => {
-            const isLocal = stream.url.startsWith('blob:');
-            const isSelected = selectedStream && selectedStream.id === stream.id;
-            const isVisible = !stream.hidden;
-            const rating = PlexdStream.getRating(stream.url);
-            const displayName = stream.fileName || getStreamDisplayName(stream.url);
-            const displayUrl = isLocal ? 'Local file' : truncateUrl(stream.url, 30);
-            const stateClass = stream.state === 'playing' ? 'playing' :
-                              stream.state === 'error' ? 'error' :
-                              stream.state === 'idle' ? 'idle' :
-                              stream.state === 'buffering' || stream.state === 'loading' ? 'buffering' : '';
-            const stateIcon = stream.state === 'playing' ? '▶' :
-                             stream.state === 'paused' ? '⏸' :
-                             stream.state === 'error' ? '⚠' :
-                             stream.state === 'idle' ? '◻' :
-                             stream.state === 'buffering' || stream.state === 'loading' ? '⏳' : '●';
-            const ratingDisplay = rating > 0 ? `<span class="plexd-stream-rating rated-${rating}">★${rating}</span>` : '';
-            const visibilityIcon = isVisible ? '👁' : '👁‍🗨';
-            const visibilityTitle = isVisible ? 'Hide from grid' : 'Show in grid';
-            const hiddenClass = stream.hidden ? 'hidden-stream' : '';
+        // Group streams by site/source
+        var groups = {};
+        for (var i = 0; i < allStreams.length; i++) {
+            var s = allStreams[i];
+            var group = s.site || (s.url.startsWith('blob:') ? 'Local Files' : 'Other');
+            if (!groups[group]) groups[group] = [];
+            groups[group].push(s);
+        }
 
-            return `
-                <div class="plexd-stream-item ${isSelected ? 'selected' : ''} ${isLocal ? 'local-file' : ''} ${hiddenClass}"
-                     data-stream-id="${stream.id}"
-                     onclick="PlexdApp.selectAndFocusStream('${stream.id}')">
-                    <span class="plexd-stream-visibility ${isVisible ? 'visible' : 'hidden'}"
-                          onclick="event.stopPropagation(); PlexdApp.toggleStreamVisibility('${stream.id}')"
-                          title="${visibilityTitle}">${visibilityIcon}</span>
-                    <span class="plexd-stream-type ${isLocal ? 'local' : 'stream'}">${isLocal ? 'FILE' : 'URL'}</span>
-                    <div class="plexd-stream-info">
-                        <div class="plexd-stream-name">${escapeHtml(displayName)}${ratingDisplay}</div>
-                        <div class="plexd-stream-url">${escapeHtml(displayUrl)}</div>
-                        <div class="plexd-stream-status ${stateClass}">${stateIcon} ${stream.state}${stream.hidden ? ' (hidden)' : ''}</div>
-                    </div>
-                    <div class="plexd-stream-actions">
-                        <button class="plexd-stream-btn download"
-                                onclick="event.stopPropagation(); PlexdApp.downloadStream('${stream.id}')"
-                                title="Download stream">⬇</button>
-                        <button class="plexd-stream-btn reload"
-                                onclick="event.stopPropagation(); PlexdApp.reloadStreamFromPanel('${stream.id}')"
-                                title="Reload stream">↻</button>
-                        <button class="plexd-stream-btn close"
-                                onclick="event.stopPropagation(); PlexdApp.closeStreamFromPanel('${stream.id}')"
-                                title="Close stream">✕</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+        // Sort group names: known sites first, Local/Other last
+        var groupNames = Object.keys(groups).sort(function(a, b) {
+            if (a === 'Other' || a === 'Local Files') return 1;
+            if (b === 'Other' || b === 'Local Files') return -1;
+            return a.localeCompare(b);
+        });
+
+        container.textContent = '';
+        for (var g = 0; g < groupNames.length; g++) {
+            var groupName = groupNames[g];
+            var streams = groups[groupName];
+            var catDiv = document.createElement('div');
+            catDiv.className = 'plexd-tag-category';
+            var label = document.createElement('div');
+            label.className = 'plexd-tag-category-label';
+            label.textContent = groupName + ' (' + streams.length + ')';
+            catDiv.appendChild(label);
+            var chipsDiv = document.createElement('div');
+            chipsDiv.className = 'plexd-tag-chips';
+            for (var j = 0; j < streams.length; j++) {
+                var stream = streams[j];
+                var isSelected = selectedStream && selectedStream.id === stream.id;
+                var rating = PlexdStream.getRating(stream.url);
+                var title = stream.title || stream.fileName || getStreamDisplayName(stream.url);
+                var chip = document.createElement('span');
+                chip.className = 'plexd-tag-chip plexd-stream-chip' + (isSelected ? ' selected' : '') + (stream.hidden ? ' hidden-chip' : '');
+                chip.setAttribute('data-stream-id', stream.id);
+                var chipText = title;
+                if (rating > 0) chipText += ' \u2605' + rating;
+                chip.textContent = chipText;
+                chip.onclick = (function(sid) { return function(e) {
+                    if (e.target.closest('.plexd-stream-panel-actions') || e.target.classList.contains('plexd-chip-close')) return;
+                    PlexdApp.selectAndFocusStream(sid);
+                    updateStreamsPanelUI();
+                }; })(stream.id);
+
+                // Per-stream action buttons
+                var actions = document.createElement('span');
+                actions.className = 'plexd-stream-panel-actions';
+
+                var hideBtn = document.createElement('span');
+                hideBtn.className = 'plexd-stream-panel-action' + (stream.hidden ? ' active' : '');
+                hideBtn.textContent = stream.hidden ? '\u25AB' : '\u25AA';
+                hideBtn.title = stream.hidden ? 'Show stream' : 'Hide stream';
+                hideBtn.onclick = (function(sid) { return function(e) {
+                    e.stopPropagation();
+                    PlexdStream.toggleStreamVisibility(sid);
+                    updateStreamsPanelUI();
+                    updateLayout();
+                }; })(stream.id);
+                actions.appendChild(hideBtn);
+
+                var isMuted = stream.video && stream.video.muted;
+                var muteBtn = document.createElement('span');
+                muteBtn.className = 'plexd-stream-panel-action' + (isMuted ? '' : ' active');
+                muteBtn.textContent = isMuted ? '\u{1F507}' : '\u{1F50A}';
+                muteBtn.title = isMuted ? 'Unmute' : 'Mute';
+                muteBtn.onclick = (function(sid) { return function(e) {
+                    e.stopPropagation();
+                    PlexdStream.toggleMute(sid);
+                    updateStreamsPanelUI();
+                }; })(stream.id);
+                actions.appendChild(muteBtn);
+
+                var reloadBtn = document.createElement('span');
+                reloadBtn.className = 'plexd-stream-panel-action';
+                reloadBtn.textContent = '\u21BB';
+                reloadBtn.title = 'Reload stream';
+                reloadBtn.onclick = (function(sid) { return function(e) {
+                    e.stopPropagation();
+                    PlexdStream.reloadStream(sid);
+                }; })(stream.id);
+                actions.appendChild(reloadBtn);
+
+                chip.appendChild(actions);
+
+                var closeBtn = document.createElement('span');
+                closeBtn.className = 'plexd-chip-close';
+                closeBtn.textContent = '\u00d7';
+                closeBtn.title = 'Close stream';
+                closeBtn.onclick = (function(sid) { return function(e) {
+                    e.stopPropagation();
+                    PlexdApp.closeStreamFromPanel(sid);
+                }; })(stream.id);
+                chip.appendChild(closeBtn);
+                chipsDiv.appendChild(chip);
+            }
+            catDiv.appendChild(chipsDiv);
+            container.appendChild(catDiv);
+        }
+        _setupPanelSearch('streams-search', container);
     }
 
     /**
      * Get display name from URL (extracts filename or domain)
      */
     function getStreamDisplayName(url) {
+        // Unwrap proxy URLs to get the original URL for naming
+        if (url && url.includes('/api/proxy/')) {
+            var proxyMatch = url.match(/\/api\/proxy\/(?:hls|video)\?url=(.+)/);
+            if (proxyMatch) {
+                try { url = decodeURIComponent(proxyMatch[1]); } catch(e) {}
+            }
+        }
         try {
             const urlObj = new URL(url);
             // Try to get filename from path
@@ -12405,6 +12668,7 @@ const PlexdApp = (function() {
         updateCombination: updateStreamCombination,
         addCombination: addStreamCombination,
         deleteCombination: deleteStreamCombination,
+        mergeIntoSet,
         deleteLocalFiles: deleteLocalFilesOnly,
         getSavedCombinations,
         exportCombinations,

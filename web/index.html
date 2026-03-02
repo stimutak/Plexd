@@ -138,7 +138,7 @@
         </aside>
 
         <!-- History Panel -->
-        <aside id="history-panel" class="plexd-panel">
+        <aside id="history-panel" class="plexd-panel plexd-tags-panel">
             <div class="plexd-panel-header">
                 <h3>History</h3>
                 <div class="plexd-panel-actions">
@@ -146,13 +146,14 @@
                     <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
+            <input type="text" id="history-search" class="plexd-panel-search" placeholder="Search history..." autocomplete="off" spellcheck="false">
             <div id="history-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No history yet</div>
             </div>
         </aside>
 
         <!-- Saved Combinations Panel -->
-        <aside id="saved-panel" class="plexd-panel">
+        <aside id="saved-panel" class="plexd-panel plexd-tags-panel">
             <div class="plexd-panel-header">
                 <h3>Sets</h3>
                 <div class="plexd-panel-actions">
@@ -165,14 +166,14 @@
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
-            <div class="plexd-panel-hint">Sets are saved in your browser. Use Export to backup or share via AirDrop.</div>
+            <input type="text" id="sets-search" class="plexd-panel-search" placeholder="Search sets..." autocomplete="off" spellcheck="false">
             <div id="combinations-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No saved combinations</div>
             </div>
         </aside>
 
         <!-- Streams Panel (slide-out list of all active streams) -->
-        <aside id="streams-panel" class="plexd-panel plexd-streams-panel">
+        <aside id="streams-panel" class="plexd-panel plexd-tags-panel plexd-streams-panel">
             <div class="plexd-panel-header">
                 <h3>Streams</h3>
                 <div class="plexd-panel-actions">
@@ -183,7 +184,7 @@
                     <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>
-            <div class="plexd-panel-hint">Click 👁 to show/hide streams in the grid</div>
+            <input type="text" id="streams-search" class="plexd-panel-search" placeholder="Search streams..." autocomplete="off" spellcheck="false">
             <div id="streams-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">No active streams</div>
             </div>

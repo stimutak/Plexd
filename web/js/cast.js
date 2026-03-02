@@ -31,6 +31,7 @@ const PlexdCast = (function() {
     var castSession = null;       // Chrome Cast session
     var presentationConn = null;  // Presentation API connection
     var serverInfo = null;        // { ip, port } from /api/server-info
+    var initialized = false;
 
     // Expose state for debugging
     window._plexdCastState = castState;
@@ -59,7 +60,7 @@ const PlexdCast = (function() {
 
         var url = stream.sourceUrl || stream.url;
         if (serverInfo && (url.includes('localhost') || url.includes('127.0.0.1'))) {
-            url = url.replace(/localhost|127\.0\.0\.1/, serverInfo.ip);
+            url = url.replace(/^(https?:\/\/)(localhost|127\.0\.0\.1)/, '$1' + serverInfo.ip);
         }
         return url;
     }
@@ -78,6 +79,8 @@ const PlexdCast = (function() {
      * Initialize the cast module: fetch server info, detect available cast methods
      */
     function init() {
+        if (initialized) return;
+        initialized = true;
         fetch('/api/server-info')
             .then(function(r) { return r.json(); })
             .then(function(info) {
@@ -172,7 +175,11 @@ const PlexdCast = (function() {
         var url = getStreamCastUrl(streamId);
         if (!url) return;
 
-        var mediaInfo = new chrome.cast.media.MediaInfo(url, 'application/x-mpegURL');
+        var contentType = url.indexOf('.m3u8') !== -1 ? 'application/x-mpegURL'
+            : url.indexOf('.mp4') !== -1 ? 'video/mp4'
+            : url.indexOf('.webm') !== -1 ? 'video/webm'
+            : 'video/mp4';
+        var mediaInfo = new chrome.cast.media.MediaInfo(url, contentType);
         mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
 
         var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === streamId; });
@@ -194,25 +201,30 @@ const PlexdCast = (function() {
         var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === streamId; });
         if (!stream || !stream.video) return;
 
-        stream.video.addEventListener('webkitplaybacktargetavailabilitychanged', function(e) {
-            availability.airplay = e.availability === 'available';
-            notifyStateChange();
-        });
+        // Only attach listeners once per video element to prevent leak
+        if (!stream.video._plexdAirplayBound) {
+            stream.video._plexdAirplayBound = true;
 
-        stream.video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', function() {
-            if (stream.video.webkitCurrentPlaybackTargetIsWireless) {
-                castState.active = true;
-                castState.mode = 'airplay';
-                castState.streamId = streamId;
-                castState.targetName = 'AirPlay';
-            } else {
-                castState.active = false;
-                castState.mode = null;
-                castState.streamId = null;
-                castState.targetName = '';
-            }
-            notifyStateChange();
-        });
+            stream.video.addEventListener('webkitplaybacktargetavailabilitychanged', function(e) {
+                availability.airplay = e.availability === 'available';
+                notifyStateChange();
+            });
+
+            stream.video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', function() {
+                if (stream.video.webkitCurrentPlaybackTargetIsWireless) {
+                    castState.active = true;
+                    castState.mode = 'airplay';
+                    castState.streamId = streamId;
+                    castState.targetName = 'AirPlay';
+                } else {
+                    castState.active = false;
+                    castState.mode = null;
+                    castState.streamId = null;
+                    castState.targetName = '';
+                }
+                notifyStateChange();
+            });
+        }
 
         stream.video.webkitShowPlaybackTargetPicker();
     }
@@ -351,15 +363,18 @@ const PlexdCast = (function() {
     function stopCasting() {
         if (!castState.active) return;
 
-        switch (castState.mode) {
+        var mode = castState.mode;
+        switch (mode) {
             case 'cast':
+                // SESSION_ENDED event will reset state; just end the session
                 stopCastingViaCast();
-                break;
+                return;
             case 'presentation':
+                // close event will reset state via the close listener
                 stopCastingViaPresentation();
-                break;
+                return;
             case 'airplay':
-                // AirPlay is controlled by the OS; no programmatic stop
+                // AirPlay is controlled by the OS; reset state manually
                 break;
         }
 
@@ -400,7 +415,11 @@ const PlexdCast = (function() {
         }
 
         castState.streamId = streamId;
-        sendCommand('load', { url: url });
+        if (castState.mode === 'cast') {
+            loadMediaOnCast(streamId);
+        } else {
+            sendCommand('load', { url: url });
+        }
         notifyStateChange();
     }
 

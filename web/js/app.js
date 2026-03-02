@@ -7428,20 +7428,7 @@ const PlexdApp = (function() {
             case 'P':
                 if (e.shiftKey) {
                     e.preventDefault();
-                    var castState = PlexdCast.getState();
-                    if (castState.active) {
-                        PlexdCast.stopCasting();
-                        showMessage('Cast disconnected');
-                    } else if (castState.available) {
-                        var castTarget = PlexdStream.getSelectedStream() || PlexdStream.getFullscreenStream();
-                        if (castTarget) {
-                            PlexdCast.castStream(castTarget.id);
-                        } else {
-                            showMessage('Select a stream to cast');
-                        }
-                    } else {
-                        showMessage('No cast devices found. Use macOS Screen Mirroring (Control Center → Screen Mirroring)');
-                    }
+                    toggleCast();
                 } else if (selected) {
                     PlexdStream.togglePiP(selected.id);
                 }

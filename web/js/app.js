@@ -1663,12 +1663,18 @@ const PlexdApp = (function() {
         } else {
             _selectedTagIds.add(tagId);
         }
+        localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
+        // Network tag toggled — re-render panel to show/hide source-specific categories
+        var isNetworkTag = _tagCache && (_tagCache['Network'] || []).some(function(t) { return t.id === tagId; });
+        if (isNetworkTag && _tagCache) {
+            renderTagsPanel(_tagCache);
+            return;
+        }
         var chips = document.querySelectorAll('.plexd-tag-chip[data-tag-id="' + tagId + '"]');
         for (var i = 0; i < chips.length; i++) {
             chips[i].classList.toggle('selected', _selectedTagIds.has(tagId));
         }
         updateTagCountBadge();
-        localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
     }
 
     function clearTagSelection() {

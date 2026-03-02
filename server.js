@@ -1610,6 +1610,45 @@ function fetchAyloApi(apiPath, auth, method) {
 }
 
 // Try to refresh access_token using refresh_token via auth service
+// Re-authenticate with Aylo using instance token only (no refresh token needed).
+// Returns { access_token, refresh_token } or null.
+function reauthAyloWithInstance(instanceToken, origin) {
+    const siteOrigin = origin || 'site-ma.brazzers.com';
+    return new Promise((resolve) => {
+        const body = JSON.stringify({});
+        const req = https.request({
+            hostname: 'auth-service.project1service.com',
+            path: '/v1/authenticate',
+            method: 'POST',
+            headers: {
+                'User-Agent': BROWSER_UA,
+                'Origin': 'https://' + siteOrigin,
+                'Referer': 'https://' + siteOrigin + '/',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'Instance': instanceToken
+            }
+        }, res => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    if (res.statusCode === 200 && json.access_token) {
+                        resolve({ access_token: json.access_token, refresh_token: json.refresh_token || null });
+                    } else {
+                        console.log('[Aylo] Reauth failed (' + res.statusCode + '):', data.slice(0, 200));
+                        resolve(null);
+                    }
+                } catch (e) { resolve(null); }
+            });
+        });
+        req.on('error', () => resolve(null));
+        req.write(body);
+        req.end();
+    });
+}
+
 function refreshAyloAccessToken(instanceToken, refreshToken, origin) {
     const siteOrigin = origin || 'site-ma.brazzers.com';
     return new Promise((resolve, reject) => {
@@ -1679,15 +1718,26 @@ async function getAyloAuth(siteName) {
         return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
     }
 
-    // Try refresh (once per cookieHost)
+    // Try refresh with refresh_token (once per cookieHost)
     const refreshToken = cookies.refresh_token_ma;
     if (refreshToken && !isJwtExpired(refreshToken)) {
         console.log('[Aylo:' + siteName + '] Access token expired, attempting refresh...');
         accessToken = await refreshAyloAccessToken(instanceToken, refreshToken, site.origin);
         if (accessToken) {
-            console.log('[Aylo:' + siteName + '] Token refreshed successfully');
+            console.log('[Aylo:' + siteName + '] Token refreshed via refresh_token');
             _refreshedTokens[site.cookieHost] = accessToken;
             return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
+        }
+    }
+
+    // Fallback: re-authenticate using instance_token alone (no refresh_token needed)
+    if (instanceToken && !isJwtExpired(instanceToken)) {
+        console.log('[Aylo:' + siteName + '] Refresh token missing/expired, trying instance reauth...');
+        const result = await reauthAyloWithInstance(instanceToken, site.origin);
+        if (result) {
+            console.log('[Aylo:' + siteName + '] Reauth via instance token succeeded');
+            _refreshedTokens[site.cookieHost] = result.access_token;
+            return { accessToken: result.access_token, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
     }
 
@@ -4007,6 +4057,29 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
             jsonError(res, 500, 'Stash query failed: ' + err.message);
         }
+        return;
+    }
+
+    // POST /api/demo/refresh-auth - Force re-authenticate all Aylo sites using instance tokens
+    if (pathname === '/api/demo/refresh-auth' && req.method === 'POST') {
+        _refreshedTokens = {}; // Clear cached tokens to force re-auth
+        _cookieCache = {};     // Clear cookie cache to re-read from Chrome
+        const results = {};
+        const seen = new Set();
+        for (const siteName of Object.keys(AYLO_SITES)) {
+            const host = AYLO_SITES[siteName].cookieHost;
+            if (seen.has(host)) continue;
+            seen.add(host);
+            const auth = await getAyloAuth(siteName);
+            results[siteName] = {
+                loggedIn: !!auth.accessToken,
+                hasSession: !!auth.instanceToken,
+                error: auth.error || null
+            };
+        }
+        const loggedIn = Object.values(results).filter(r => r.loggedIn).length;
+        console.log('[Auth] Refresh complete: ' + loggedIn + '/' + Object.keys(results).length + ' sites authenticated');
+        jsonOk(res, { results, loggedIn, total: Object.keys(results).length });
         return;
     }
 

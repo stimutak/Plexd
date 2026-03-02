@@ -4062,9 +4062,8 @@ const server = http.createServer(async (req, res) => {
                 return;
             }
         }
-        // Inject "Network" category: Aylo groups + Stash umbrella + Stash studios
-        const withNetwork = Object.assign({}, tags);
-        // Build network tags from discovered playable groups
+        // Build response with Network first, then tag categories, then Stash Studios last
+        // Network = only our configured Aylo sites + Stash umbrella (not individual studios)
         const networkTags = [];
         const seen = new Set();
         for (const groups of Object.values(_playableGroups)) {
@@ -4080,17 +4079,23 @@ const server = http.createServer(async (req, res) => {
                 networkTags.push({ id: -g.groupId, name });
             }
         }
-        // Add Stash umbrella + individual studios
         networkTags.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
+        networkTags.sort((a, b) => a.name.localeCompare(b.name));
+
+        // Stash studios as a separate category at the end
+        let stashStudios = [];
         try {
             const studios = JSON.parse(fs.readFileSync(STASH_STUDIOS_CACHE, 'utf8'));
-            for (const s of studios) {
-                networkTags.push({ id: STASH_STUDIO_OFFSET - s.id, name: s.name });
-            }
+            stashStudios = studios.map(s => ({ id: STASH_STUDIO_OFFSET - s.id, name: s.name }));
+            stashStudios.sort((a, b) => a.name.localeCompare(b.name));
         } catch (e) { /* no studios cache yet */ }
-        networkTags.sort((a, b) => a.name.localeCompare(b.name));
-        withNetwork['Network'] = networkTags;
-        jsonOk(res, { tags: withNetwork });
+
+        // Ordered: Network first, then tag categories alphabetically, Stash Studios last
+        const ordered = { Network: networkTags };
+        const catKeys = Object.keys(tags).sort((a, b) => a.localeCompare(b));
+        for (const cat of catKeys) ordered[cat] = tags[cat];
+        if (stashStudios.length > 0) ordered['Stash Studios'] = stashStudios;
+        jsonOk(res, { tags: ordered });
         return;
     }
 

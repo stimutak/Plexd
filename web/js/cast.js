@@ -218,7 +218,38 @@ const PlexdCast = (function() {
     }
 
     function castStreamViaPresentation(streamId) {
-        // Task 6: Start casting via Presentation API
+        var receiverUrl = getReceiverUrl();
+        if (!receiverUrl) return;
+
+        var request = new PresentationRequest([receiverUrl]);
+        request.start()
+            .then(function(connection) {
+                presentationConn = connection;
+                castState.active = true;
+                castState.mode = 'presentation';
+                castState.streamId = streamId;
+                castState.targetName = 'External Display';
+                notifyStateChange();
+
+                connection.addEventListener('message', function(e) {
+                    handleReceiverMessage(JSON.parse(e.data));
+                });
+
+                connection.addEventListener('close', function() {
+                    presentationConn = null;
+                    castState.active = false;
+                    castState.mode = null;
+                    castState.streamId = null;
+                    castState.targetName = '';
+                    notifyStateChange();
+                });
+
+                var url = getStreamCastUrl(streamId);
+                if (url) {
+                    connection.send(JSON.stringify({ cmd: 'load', url: url }));
+                }
+            })
+            .catch(function(e) { console.warn('Presentation request failed:', e); });
     }
 
     function sendCommandViaCast(cmd, data) {
@@ -228,7 +259,9 @@ const PlexdCast = (function() {
     }
 
     function sendCommandViaPresentation(cmd, data) {
-        // Task 6: Send command to Presentation receiver
+        if (presentationConn && presentationConn.state === 'connected') {
+            presentationConn.send(JSON.stringify(Object.assign({ cmd: cmd }, data || {})));
+        }
     }
 
     function stopCastingViaCast() {
@@ -238,11 +271,23 @@ const PlexdCast = (function() {
     }
 
     function stopCastingViaPresentation() {
-        // Task 6: Stop Presentation API connection
+        if (presentationConn) {
+            presentationConn.close();
+        }
     }
 
     function handleReceiverMessage(data) {
-        // Tasks 4/6: Handle incoming message from receiver
+        switch (data.event) {
+            case 'loaded':
+                break;
+            case 'timeupdate':
+                break;
+            case 'state':
+                break;
+            case 'error':
+                console.warn('Cast receiver error:', data.message);
+                break;
+        }
     }
 
     // --- Public API Dispatch ---

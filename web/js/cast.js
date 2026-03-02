@@ -191,7 +191,30 @@ const PlexdCast = (function() {
     }
 
     function castStreamViaAirPlay(streamId) {
-        // Task 5: Start casting via AirPlay
+        var stream = PlexdStream.getAllStreams().find(function(s) { return s.id === streamId; });
+        if (!stream || !stream.video) return;
+
+        stream.video.addEventListener('webkitplaybacktargetavailabilitychanged', function(e) {
+            availability.airplay = e.availability === 'available';
+            notifyStateChange();
+        });
+
+        stream.video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', function() {
+            if (stream.video.webkitCurrentPlaybackTargetIsWireless) {
+                castState.active = true;
+                castState.mode = 'airplay';
+                castState.streamId = streamId;
+                castState.targetName = 'AirPlay';
+            } else {
+                castState.active = false;
+                castState.mode = null;
+                castState.streamId = null;
+                castState.targetName = '';
+            }
+            notifyStateChange();
+        });
+
+        stream.video.webkitShowPlaybackTargetPicker();
     }
 
     function castStreamViaPresentation(streamId) {

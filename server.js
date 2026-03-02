@@ -1331,8 +1331,25 @@ async function scrapeXhamsterVideo(pageUrl) {
     return null;
 }
 
-// ── Brazzers/Aylo Integration ──────────────────────────────────────────────
-// Chrome cookie decryption (macOS) + Brazzers API helpers
+// ── Aylo Network Integration ──────────────────────────────────────────────
+// Multi-site support: Brazzers, Mofos, and any other Aylo (MindGeek) network login.
+// All sites share the same API (site-api.project1service.com) with identical cookie names
+// (access_token_ma, refresh_token_ma, instance_token, app_session_id).
+// Only the cookie host domain and Origin/Referer headers differ per site.
+// Sub-brands (Digital Playground, Reality Kings, Babes, etc.) are accessible through
+// the parent network's auth token — no separate login needed.
+
+const AYLO_SITES = {
+    brazzers: { origin: 'site-ma.brazzers.com', cookieHost: 'brazzers', tagId: -1, label: 'Brazzers' },
+    mofos:    { origin: 'site-ma.mofos.com',    cookieHost: 'mofos',    tagId: -2, label: 'Mofos' },
+    // Add more network logins here as discovered (e.g. realitykings, babes)
+    // Use sequential negative tagIds: -3, -4, etc.
+};
+// Reverse lookup: tagId → siteName
+const AYLO_SITE_BY_TAG_ID = {};
+for (const [name, site] of Object.entries(AYLO_SITES)) AYLO_SITE_BY_TAG_ID[site.tagId] = name;
+
+// Chrome cookie decryption (macOS) + Aylo API helpers
 // Auth tokens: access_token_ma (~1hr), refresh_token_ma (~30min), instance_token (~2 days)
 // All stored as encrypted cookies in Chrome profile
 
@@ -1350,7 +1367,7 @@ function getChromeCookieKey() {
         _chromeCookieKey = crypto.pbkdf2Sync(chromePass, 'saltysalt', 1003, 16, 'sha1');
         return _chromeCookieKey;
     } catch (e) {
-        console.error('[Brazzers] Failed to get Chrome cookie key:', e.message);
+        console.error('[Aylo] Failed to get Chrome cookie key:', e.message);
         return null;
     }
 }
@@ -1401,7 +1418,7 @@ function readChromeCookies(hostPattern) {
         }
         return cookies;
     } catch (e) {
-        console.error('[Brazzers] Failed to read Chrome cookies:', e.message);
+        console.error('[Aylo] Failed to read Chrome cookies:', e.message);
         return {};
     }
 }
@@ -1415,15 +1432,16 @@ function isJwtExpired(token) {
     }
 }
 
-// Fetch JSON from Brazzers API with proper auth headers
+// Fetch JSON from Aylo API with proper auth headers
 // CRITICAL: Aylo API requires raw JWT — NO "Bearer" prefix on Authorization header
-function fetchBrazzersApi(apiPath, auth, method) {
+function fetchAyloApi(apiPath, auth, method) {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(apiPath, 'https://site-api.project1service.com');
+        const origin = auth._origin || 'site-ma.brazzers.com';
         const headers = {
             'User-Agent': BROWSER_UA,
-            'Origin': 'https://site-ma.brazzers.com',
-            'Referer': 'https://site-ma.brazzers.com/',
+            'Origin': 'https://' + origin,
+            'Referer': 'https://' + origin + '/',
             'Accept': 'application/json',
             'Instance': auth.instanceToken
         };
@@ -1450,7 +1468,8 @@ function fetchBrazzersApi(apiPath, auth, method) {
 }
 
 // Try to refresh access_token using refresh_token via auth service
-function refreshBrazzersAccessToken(instanceToken, refreshToken) {
+function refreshAyloAccessToken(instanceToken, refreshToken, origin) {
+    const siteOrigin = origin || 'site-ma.brazzers.com';
     return new Promise((resolve, reject) => {
         const body = JSON.stringify({ refreshToken: refreshToken });
         const req = https.request({
@@ -1459,8 +1478,8 @@ function refreshBrazzersAccessToken(instanceToken, refreshToken) {
             method: 'POST',
             headers: {
                 'User-Agent': BROWSER_UA,
-                'Origin': 'https://site-ma.brazzers.com',
-                'Referer': 'https://site-ma.brazzers.com/',
+                'Origin': 'https://' + siteOrigin,
+                'Referer': 'https://' + siteOrigin + '/',
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(body),
                 'Instance': instanceToken
@@ -1485,38 +1504,62 @@ function refreshBrazzersAccessToken(instanceToken, refreshToken) {
     });
 }
 
-// Get valid Brazzers auth tokens from Chrome cookies, refreshing if needed
-async function getBrazzersAuth() {
-    const cookies = readChromeCookies('%brazzers%');
+// Get valid auth tokens for a specific Aylo site from Chrome cookies
+async function getAyloAuth(siteName) {
+    const site = AYLO_SITES[siteName];
+    if (!site) return { error: 'Unknown Aylo site: ' + siteName };
+
+    const cookies = readChromeCookies('%' + site.cookieHost + '%');
     const instanceToken = cookies.instance_token;
     const appSessionId = cookies.app_session_id || '';
     if (!instanceToken || isJwtExpired(instanceToken)) {
-        return { error: 'No valid Brazzers session. Open Chrome and log into site-ma.brazzers.com' };
+        return { error: 'No valid ' + siteName + ' session. Log into ' + site.origin + ' in Chrome.', _origin: site.origin, _site: siteName };
     }
 
     let accessToken = cookies.access_token_ma;
     if (accessToken && !isJwtExpired(accessToken)) {
-        return { accessToken, instanceToken, appSessionId };
+        return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
     }
 
     // Try refresh
     const refreshToken = cookies.refresh_token_ma;
     if (refreshToken && !isJwtExpired(refreshToken)) {
-        console.log('[Brazzers] Access token expired, attempting refresh...');
-        accessToken = await refreshBrazzersAccessToken(instanceToken, refreshToken);
+        console.log('[Aylo:' + siteName + '] Access token expired, attempting refresh...');
+        accessToken = await refreshAyloAccessToken(instanceToken, refreshToken, site.origin);
         if (accessToken) {
-            console.log('[Brazzers] Token refreshed successfully');
-            return { accessToken, instanceToken, appSessionId };
+            console.log('[Aylo:' + siteName + '] Token refreshed successfully');
+            return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
     }
 
-    // No usable auth — full scenes require login
     return {
         instanceToken,
         accessToken: null,
         appSessionId,
-        error: 'Brazzers login expired (tokens last ~1hr). Log into site-ma.brazzers.com in Chrome, then try again.'
+        _origin: site.origin,
+        _site: siteName,
+        error: siteName + ' login expired. Log into ' + site.origin + ' in Chrome, then try again.'
     };
+}
+
+// Get all valid auths across all Aylo sites (for multi-site scraping)
+async function getAllAyloAuths() {
+    const auths = [];
+    for (const name of Object.keys(AYLO_SITES)) {
+        const auth = await getAyloAuth(name);
+        if (auth.accessToken) auths.push(auth);
+    }
+    return auths;
+}
+
+// Convenience: get first available Aylo auth (for single-auth endpoints like performer search)
+async function getAnyAyloAuth() {
+    for (const name of Object.keys(AYLO_SITES)) {
+        const auth = await getAyloAuth(name);
+        if (auth.accessToken) return auth;
+    }
+    // No valid auth — return first site's error for messaging
+    return getAyloAuth(Object.keys(AYLO_SITES)[0]);
 }
 
 // Extract best video URL from Aylo videos.full.files array
@@ -1551,37 +1594,131 @@ function getExternalIp() {
     });
 }
 
-// Tag cache for Aylo API
-let _tagCache = null;
-let _tagCacheTime = 0;
-const TAG_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+// ── Disk-cached Tags & Performers (Multi-Site) ────────────────────────────────────
+// Per-site cache files: {site}-tags.json, {site}-performers.json
+// Merged when serving /api/demo/tags and /api/demo/actors — deduplicated by ID.
+// Background-refreshed for each site with valid auth.
+const CACHE_DIR = path.join(__dirname, 'uploads', 'cache');
+const CATALOG_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
-async function fetchAyloTags(auth) {
-    if (_tagCache && (Date.now() - _tagCacheTime) < TAG_CACHE_TTL) return _tagCache;
+let _tagCache = null;   // Merged tag cache (byCategory format)
+let _actorCache = null;  // Merged actor cache (sorted array)
+
+function siteTagsCacheFile(siteName) { return path.join(CACHE_DIR, siteName + '-tags.json'); }
+function siteActorsCacheFile(siteName) { return path.join(CACHE_DIR, siteName + '-performers.json'); }
+
+function loadCacheFromDisk() {
+    try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (e) { /* exists */ }
+
+    // Load per-site caches and merge
+    const allTags = {};  // byCategory merged
+    const allActors = {}; // by id
+    let tagSites = 0, actorSites = 0;
+
+    for (const siteName of Object.keys(AYLO_SITES)) {
+        try {
+            const siteTags = JSON.parse(fs.readFileSync(siteTagsCacheFile(siteName), 'utf8'));
+            for (const cat of Object.keys(siteTags)) {
+                if (!allTags[cat]) allTags[cat] = {};
+                for (const t of siteTags[cat]) allTags[cat][t.id] = t;
+            }
+            tagSites++;
+        } catch (e) { /* no cache for this site */ }
+        try {
+            const siteActors = JSON.parse(fs.readFileSync(siteActorsCacheFile(siteName), 'utf8'));
+            for (const a of siteActors) allActors[a.id] = a;
+            actorSites++;
+        } catch (e) { /* no cache for this site */ }
+    }
+
+    // Fallback: load old single-file caches if no per-site caches exist
+    if (tagSites === 0) {
+        try {
+            _tagCache = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'tags.json'), 'utf8'));
+            console.log('[Cache] Loaded legacy tags.json: ' + Object.keys(_tagCache).length + ' categories');
+        } catch (e) { _tagCache = null; }
+    } else {
+        // Convert merged map to sorted arrays
+        _tagCache = {};
+        for (const cat of Object.keys(allTags)) {
+            _tagCache[cat] = Object.values(allTags[cat]).sort((a, b) => a.name.localeCompare(b.name));
+        }
+        console.log('[Cache] Loaded tags from ' + tagSites + ' sites: ' + Object.keys(_tagCache).length + ' categories');
+    }
+
+    if (actorSites === 0) {
+        try {
+            _actorCache = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'performers.json'), 'utf8'));
+            console.log('[Cache] Loaded legacy performers.json: ' + _actorCache.length + ' performers');
+        } catch (e) { _actorCache = null; }
+    } else {
+        _actorCache = Object.values(allActors).sort((a, b) => a.name.localeCompare(b.name));
+        console.log('[Cache] Loaded performers from ' + actorSites + ' sites: ' + _actorCache.length + ' performers');
+    }
+}
+
+function saveCacheToDisk(file, data) {
+    try {
+        fs.mkdirSync(CACHE_DIR, { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(data));
+    } catch (e) {
+        console.error('[Cache] Failed to write ' + file + ':', e.message);
+    }
+}
+
+// Rebuild merged caches from all per-site files on disk
+function rebuildMergedCaches() {
+    const allTags = {};
+    const allActors = {};
+    for (const siteName of Object.keys(AYLO_SITES)) {
+        try {
+            const siteTags = JSON.parse(fs.readFileSync(siteTagsCacheFile(siteName), 'utf8'));
+            for (const cat of Object.keys(siteTags)) {
+                if (!allTags[cat]) allTags[cat] = {};
+                for (const t of siteTags[cat]) allTags[cat][t.id] = t;
+            }
+        } catch (e) { /* skip */ }
+        try {
+            const siteActors = JSON.parse(fs.readFileSync(siteActorsCacheFile(siteName), 'utf8'));
+            for (const a of siteActors) allActors[a.id] = a;
+        } catch (e) { /* skip */ }
+    }
+    if (Object.keys(allTags).length > 0) {
+        _tagCache = {};
+        for (const cat of Object.keys(allTags)) {
+            _tagCache[cat] = Object.values(allTags[cat]).sort((a, b) => a.name.localeCompare(b.name));
+        }
+    }
+    if (Object.keys(allActors).length > 0) {
+        _actorCache = Object.values(allActors).sort((a, b) => a.name.localeCompare(b.name));
+    }
+}
+
+async function refreshTagsFromApi(auth) {
     auth.externalIp = await getExternalIp();
-
+    const siteName = auth._site || 'brazzers';
     let tags;
     try {
-        const resp = await fetchBrazzersApi('/v2/tags?limit=500&orderBy=name', auth);
+        const resp = await fetchAyloApi('/v2/tags?limit=500&orderBy=name', auth);
         if (resp.status === 200 && resp.data.result) {
             tags = resp.data.result.filter(t => t.isVisible !== false)
                 .map(t => ({ id: t.id, name: t.name, category: t.category || 'Other' }));
         }
-    } catch (e) { /* fall through to scene-based extraction */ }
+    } catch (e) { /* fall through */ }
 
     if (!tags) {
-        // Fallback: extract tags from 100 recent scenes
-        const resp = await fetchBrazzersApi('/v2/releases?limit=100&type=scene&orderBy=-dateReleased', auth);
-        const tagMap = {};
-        for (const scene of (resp.data.result || [])) {
-            for (const t of (scene.tags || [])) {
-                if (!tagMap[t.id]) tagMap[t.id] = { id: t.id, name: t.name, category: t.category || 'Other' };
+        try {
+            const resp = await fetchAyloApi('/v2/releases?limit=100&type=scene&orderBy=-dateReleased', auth);
+            const tagMap = {};
+            for (const scene of (resp.data.result || [])) {
+                for (const t of (scene.tags || [])) {
+                    if (!tagMap[t.id]) tagMap[t.id] = { id: t.id, name: t.name, category: t.category || 'Other' };
+                }
             }
-        }
-        tags = Object.values(tagMap);
+            tags = Object.values(tagMap);
+        } catch (e) { return _tagCache; }
     }
 
-    // Group by category, sort alphabetically within each
     const byCategory = {};
     for (const t of tags) {
         (byCategory[t.category] ||= []).push({ id: t.id, name: t.name });
@@ -1590,48 +1727,191 @@ async function fetchAyloTags(auth) {
         byCategory[cat].sort((a, b) => a.name.localeCompare(b.name));
     }
 
-    _tagCache = byCategory;
-    _tagCacheTime = Date.now();
+    if (Object.keys(byCategory).length > 0) {
+        saveCacheToDisk(siteTagsCacheFile(siteName), byCategory);
+        console.log('[Cache] Refreshed ' + siteName + ' tags: ' + Object.keys(byCategory).length + ' categories');
+        rebuildMergedCaches();
+    }
     return _tagCache;
 }
 
-// Scrape top-rated Brazzers scenes from the last 6 months
-async function scrapeBrazzersScenes(count, auth, tagIds) {
-    // Get external IP for X-Forwarded-For header
+async function refreshActorsFromApi(auth) {
     auth.externalIp = await getExternalIp();
+    const siteName = auth._site || 'brazzers';
 
-    const offset = Math.floor(Math.random() * 100);
-    const limit = Math.ceil(count * 3); // Fetch extra to filter by rating
-
-    const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const dateFilter = `>${sixMonthsAgo}`;
-
-    let apiPath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating&dateReleased=${encodeURIComponent(dateFilter)}`;
-    if (tagIds && tagIds.length > 0) {
-        apiPath += `&tagId=${tagIds.join(',')}`;
+    // Extract female actors from top-rated (4+ star) scenes of all time
+    const pages = Array.from({ length: 10 }, (_, i) => i * 50);
+    const pageResults = await Promise.allSettled(
+        pages.map(offset => fetchAyloApi(
+            `/v2/releases?limit=50&offset=${offset}&type=scene&orderBy=-stats.rating`, auth
+        ))
+    );
+    const actorMap = {};
+    for (const r of pageResults) {
+        if (r.status !== 'fulfilled' || r.value.status !== 200) continue;
+        for (const scene of (r.value.data.result || [])) {
+            const rating = scene.stats && scene.stats.rating;
+            if (rating !== undefined && rating < 80) continue;
+            for (const a of (scene.actors || [])) {
+                if (a.id && a.name && !actorMap[a.id] && a.gender !== 'male') {
+                    actorMap[a.id] = { id: a.id, name: a.name };
+                }
+            }
+        }
     }
 
-    console.log('[Demo] Fetching Brazzers scenes (5-star, offset=' + offset + (tagIds && tagIds.length ? ', tags=' + tagIds.join(',') : '') + ')...');
-    const resp = await fetchBrazzersApi(apiPath, auth);
+    const actors = Object.values(actorMap).sort((a, b) => a.name.localeCompare(b.name));
+    if (actors.length > 0) {
+        saveCacheToDisk(siteActorsCacheFile(siteName), actors);
+        console.log('[Cache] Refreshed ' + siteName + ' performers: ' + actors.length + ' female from 4+ star scenes');
+        rebuildMergedCaches();
+    }
+    return _actorCache;
+}
 
-    if (resp.status !== 200 || !resp.data.result) {
-        throw new Error('Brazzers API error: ' + (resp.data.message || resp.status));
+// Background refresh — runs every 6 hours for each site with valid auth
+async function backgroundCatalogRefresh() {
+    try {
+        const auths = await getAllAyloAuths();
+        if (auths.length === 0) return;
+        const refreshes = [];
+        for (const auth of auths) {
+            refreshes.push(refreshTagsFromApi(auth), refreshActorsFromApi(auth));
+        }
+        await Promise.allSettled(refreshes);
+        console.log('[Cache] Background refresh complete for ' + auths.length + ' sites');
+    } catch (e) {
+        console.log('[Cache] Background refresh failed:', e.message);
+    }
+}
+
+// Load from disk immediately, schedule background refreshes
+loadCacheFromDisk();
+setTimeout(backgroundCatalogRefresh, 10000); // Try refresh 10s after startup
+setInterval(backgroundCatalogRefresh, CATALOG_REFRESH_INTERVAL);
+
+// Scrape top-rated scenes from ALL logged-in Aylo sites.
+// Multi-site: fetches from each site in parallel, merges + dedupes by scene ID.
+// Supports relaxed matching: when tagIds/actorIds provided, makes parallel per-filter
+// API calls across all sites, scores scenes by how many filters match (best first).
+// Site filter: negative tagIds (e.g. -1=brazzers, -2=mofos) restrict to specific sites.
+async function scrapeAyloScenes(count, tagIds, actorIds) {
+    // Separate site filter IDs (negative) from real Aylo tag IDs (positive)
+    const siteFilterNames = [];
+    const realTagIds = [];
+    for (const id of (tagIds || [])) {
+        if (AYLO_SITE_BY_TAG_ID[id]) siteFilterNames.push(AYLO_SITE_BY_TAG_ID[id]);
+        else realTagIds.push(id);
     }
 
+    // Get auths — filtered by site if site tags were selected
+    let auths;
+    if (siteFilterNames.length > 0) {
+        auths = [];
+        for (const name of siteFilterNames) {
+            const auth = await getAyloAuth(name);
+            if (auth.accessToken) auths.push(auth);
+        }
+        if (auths.length === 0) throw new Error('No valid login for selected sites: ' + siteFilterNames.join(', '));
+    } else {
+        auths = await getAllAyloAuths();
+        if (auths.length === 0) throw new Error('No valid Aylo login. Log into any site in Chrome.');
+    }
+
+    const externalIp = await getExternalIp();
+    for (const auth of auths) auth.externalIp = externalIp;
+
+    const limit = Math.ceil(count * 3);
+    const hasFilters = (realTagIds.length > 0) || (actorIds && actorIds.length > 0);
+
+    const sceneMap = {}; // id → { scene, score, site }
+
+    if (hasFilters) {
+        // Relaxed matching: one API call per filter per site, merge and score
+        // Random offset into the result set for variety across requests
+        const tagIdSet = new Set(realTagIds);
+        const actorIdSet = new Set(actorIds || []);
+        const offset = Math.floor(Math.random() * 50);
+        const basePath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating`;
+
+        const queries = [];
+        for (const auth of auths) {
+            for (const id of tagIdSet) queries.push(fetchAyloApi(basePath + '&tagId=' + id, auth).then(r => ({ r, site: auth._site })));
+            for (const id of actorIdSet) queries.push(fetchAyloApi(basePath + '&actorId=' + id, auth).then(r => ({ r, site: auth._site })));
+        }
+
+        const results = await Promise.allSettled(queries);
+
+        for (const res of results) {
+            if (res.status !== 'fulfilled') continue;
+            const { r, site } = res.value;
+            if (r.status !== 200) continue;
+            for (const scene of (r.data.result || [])) {
+                if (sceneMap[scene.id]) continue;
+                let score = 0;
+                for (const t of (scene.tags || [])) if (tagIdSet.has(t.id)) score++;
+                for (const a of (scene.actors || [])) if (actorIdSet.has(a.id)) score++;
+                sceneMap[scene.id] = { scene, score, site };
+            }
+        }
+
+        console.log('[Demo] Relaxed match: ' + Object.keys(sceneMap).length + ' unique scenes from ' + queries.length + ' queries across ' + auths.length + ' sites');
+    } else {
+        // No filters — fetch from each site in parallel, merge
+        const perSite = Math.ceil(limit / auths.length);
+        const siteQueries = auths.map(auth => {
+            const offset = Math.floor(Math.random() * 100);
+            return fetchAyloApi(
+                `/v2/releases?limit=${perSite}&offset=${offset}&type=scene&orderBy=-stats.rating`,
+                auth
+            ).then(resp => ({ resp, site: auth._site }));
+        });
+
+        const results = await Promise.allSettled(siteQueries);
+        for (const r of results) {
+            if (r.status !== 'fulfilled') continue;
+            const { resp, site } = r.value;
+            if (resp.status !== 200 || !resp.data.result) {
+                console.log('[Demo] Aylo:' + site + ' API error: ' + (resp.data?.message || resp.status));
+                continue;
+            }
+            for (const scene of resp.data.result) {
+                if (!sceneMap[scene.id]) sceneMap[scene.id] = { scene, score: 0, site };
+            }
+        }
+
+        if (Object.keys(sceneMap).length === 0) {
+            throw new Error('Aylo API returned no scenes from any site');
+        }
+        console.log('[Demo] Multi-site: ' + Object.keys(sceneMap).length + ' unique scenes from ' + auths.length + ' sites');
+    }
+
+    // Shuffle first, then stable-sort by score — equal scores get random order
+    let sorted = Object.values(sceneMap);
+    for (let i = sorted.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [sorted[i], sorted[j]] = [sorted[j], sorted[i]];
+    }
+    if (hasFilters) {
+        sorted.sort((a, b) => b.score - a.score);
+    }
+
+    // Extract streams — add site tag to each stream
     const streams = [];
-    for (const scene of resp.data.result) {
-        // Only keep 5-star scenes (90%+ like ratio)
+    for (const entry of sorted) {
+        const scene = entry.scene;
         const rating = scene.stats && scene.stats.rating;
-        if (rating !== undefined && rating < 90) continue;
+        if (!hasFilters && rating !== undefined && rating < 90) continue;
 
-        const videos = scene.videos || {};
-        const url = (videos.full && extractBestVideoUrl(videos.full.files)) || null;
+        const url = (scene.videos?.full && extractBestVideoUrl(scene.videos.full.files)) || null;
         if (url) {
-            // Extract tag names, actor names, and collection (category)
             const tags = (scene.tags || []).map(t => t.name);
             const actors = (scene.actors || []).map(a => a.name);
             const category = (scene.collections || []).map(c => c.name).join(', ');
-            streams.push({ url, title: scene.title || 'Brazzers Scene', tags, actors, category });
+            // Add site network name as a tag
+            const siteLabel = AYLO_SITES[entry.site]?.label || entry.site;
+            if (siteLabel && !tags.includes(siteLabel)) tags.unshift(siteLabel);
+            streams.push({ url, title: scene.title || category || 'Scene', tags, actors, category, site: siteLabel });
         }
         if (streams.length >= count) break;
     }
@@ -3344,57 +3624,83 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // GET /api/demo/auth-status - Check Brazzers login status
+    // GET /api/demo/auth-status - Check Aylo login status (all sites)
     if (pathname === '/api/demo/auth-status' && req.method === 'GET') {
-        const auth = await getBrazzersAuth();
-        jsonOk(res, {
-            brazzers: {
+        const aylo = {};
+        for (const siteName of Object.keys(AYLO_SITES)) {
+            const auth = await getAyloAuth(siteName);
+            aylo[siteName] = {
                 loggedIn: !!auth.accessToken,
                 hasSession: !!auth.instanceToken,
                 warning: auth.warning || auth.error || null
-            }
-        });
+            };
+        }
+        // Backward compat: keep top-level 'brazzers' key pointing to brazzers status
+        jsonOk(res, { aylo, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
         return;
     }
 
-    // GET /api/demo/tags - Fetch available tags from Aylo API
-    if (pathname === '/api/demo/tags' && req.method === 'GET') {
-        const auth = await getBrazzersAuth();
-        if (!auth.accessToken) { jsonOk(res, { tags: {}, error: 'Login required' }); return; }
-        try {
-            jsonOk(res, { tags: await fetchAyloTags(auth) });
-        } catch (err) {
-            jsonError(res, 500, 'Failed to fetch tags: ' + err.message);
+    // GET /api/demo/actors - Serve performers (disk-cached, background-refreshed from all sites)
+    if (pathname === '/api/demo/actors' && req.method === 'GET') {
+        if (_actorCache && _actorCache.length > 0) {
+            jsonOk(res, { actors: _actorCache });
+        } else {
+            // No cache — try live fetch from any available site
+            const auth = await getAnyAyloAuth();
+            if (!auth.accessToken) { jsonOk(res, { actors: [], error: 'No cached data and login required' }); return; }
+            try { jsonOk(res, { actors: await refreshActorsFromApi(auth) || [] }); }
+            catch (err) { jsonError(res, 500, 'Failed to fetch actors: ' + err.message); }
         }
         return;
     }
 
-    // GET /api/demo/performers/search?q=name - Search performers by name
+    // GET /api/demo/tags - Serve tags (disk-cached, background-refreshed from all sites)
+    // Includes synthetic "Network" category with site tags (negative IDs)
+    if (pathname === '/api/demo/tags' && req.method === 'GET') {
+        let tags = _tagCache;
+        if (!tags || Object.keys(tags).length === 0) {
+            const auth = await getAnyAyloAuth();
+            if (!auth.accessToken) { jsonOk(res, { tags: {}, error: 'No cached data and login required' }); return; }
+            try { tags = await refreshTagsFromApi(auth); }
+            catch (err) { jsonError(res, 500, 'Failed to fetch tags: ' + err.message); return; }
+        }
+        // Inject "Network" category with site tags so users can filter by site
+        const withNetwork = Object.assign({}, tags);
+        withNetwork['Network'] = Object.values(AYLO_SITES).map(s => ({ id: s.tagId, name: s.label }));
+        jsonOk(res, { tags: withNetwork });
+        return;
+    }
+
+    // GET /api/demo/performers/search?q=name - Search performers by name (all Aylo sites)
     if (pathname === '/api/demo/performers/search' && req.method === 'GET') {
         const query = url.searchParams.get('q') || '';
         const limit = parseInt(url.searchParams.get('limit')) || 20;
         if (!query) { jsonOk(res, { performers: [] }); return; }
-        const auth = await getBrazzersAuth();
-        if (!auth.accessToken) { jsonOk(res, { performers: [], error: 'Login required' }); return; }
+        const auths = await getAllAyloAuths();
+        if (auths.length === 0) { jsonOk(res, { performers: [], error: 'Login required' }); return; }
         try {
-            auth.externalIp = await getExternalIp();
-            const resp = await fetchBrazzersApi(`/v1/actors?limit=${limit}&search=${encodeURIComponent(query)}`, auth);
-            console.log('[Demo] Performer search status:', resp.status, 'keys:', Object.keys(resp.data));
-            if (resp.status !== 200 || !resp.data.result) {
-                jsonOk(res, { performers: [], debug: { status: resp.status, keys: Object.keys(resp.data), meta: resp.data.meta } });
-                return;
-            }
-            const performers = resp.data.result.map(a => {
-                // Scene count: scenesPerBrand is [{name, sceneCount}, ...]
-                let scenes = 0;
-                if (Array.isArray(a.scenesPerBrand)) {
-                    for (const b of a.scenesPerBrand) scenes += (b.sceneCount || 0);
-                }
-                // Thumbnail: profile image, try multiple size variants
-                const profile = a.images?.profile?.['0'] || a.images?.profile?.[0];
-                const thumb = profile?.xs?.url || profile?.sm?.url || profile?.md?.url || null;
-                return { id: a.id, name: a.name, thumbnail: thumb, scenes };
+            const externalIp = await getExternalIp();
+            // Search all sites in parallel, merge by performer ID
+            const queries = auths.map(auth => {
+                auth.externalIp = externalIp;
+                return fetchAyloApi(`/v1/actors?limit=${limit}&search=${encodeURIComponent(query)}`, auth);
             });
+            const results = await Promise.allSettled(queries);
+            const perfMap = {};
+            for (const r of results) {
+                if (r.status !== 'fulfilled' || r.value.status !== 200 || !r.value.data.result) continue;
+                for (const a of r.value.data.result) {
+                    if (perfMap[a.id]) continue;
+                    let scenes = 0;
+                    if (Array.isArray(a.scenesPerBrand)) {
+                        for (const b of a.scenesPerBrand) scenes += (b.sceneCount || 0);
+                    }
+                    const profile = a.images?.profile?.['0'] || a.images?.profile?.[0];
+                    const thumb = profile?.xs?.url || profile?.sm?.url || profile?.md?.url || null;
+                    perfMap[a.id] = { id: a.id, name: a.name, thumbnail: thumb, scenes };
+                }
+            }
+            const performers = Object.values(perfMap).sort((a, b) => b.scenes - a.scenes).slice(0, limit);
             jsonOk(res, { performers });
         } catch (err) {
             jsonError(res, 500, 'Performer search failed: ' + err.message);
@@ -3402,29 +3708,40 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // GET /api/demo/performers/:id/scenes - Get scenes by performer
+    // GET /api/demo/performers/:id/scenes - Get scenes by performer (all Aylo sites)
     if (pathname.startsWith('/api/demo/performers/') && pathname.endsWith('/scenes') && req.method === 'GET') {
         const actorId = pathname.split('/')[4];
-        const count = parseInt(url.searchParams.get('count')) || 6;
-        const auth = await getBrazzersAuth();
-        if (!auth.accessToken) { jsonOk(res, { streams: [], error: 'Login required' }); return; }
+        const count = parseInt(url.searchParams.get('count')) || 9;
+        const auths = await getAllAyloAuths();
+        if (auths.length === 0) { jsonOk(res, { streams: [], error: 'Login required' }); return; }
         try {
-            auth.externalIp = await getExternalIp();
-            const resp = await fetchBrazzersApi(`/v2/releases?limit=${count}&type=scene&actorsIds=${actorId}&orderBy=-dateReleased`, auth);
-            if (resp.status !== 200 || !resp.data.result) {
-                jsonOk(res, { streams: [], error: 'No scenes found' });
-                return;
+            const externalIp = await getExternalIp();
+            // Query all sites in parallel, merge scenes by ID, track source site
+            const queries = auths.map(auth => {
+                auth.externalIp = externalIp;
+                return fetchAyloApi(`/v2/releases?limit=${count}&type=scene&actorsIds=${actorId}&orderBy=-dateReleased`, auth)
+                    .then(r => ({ r, site: auth._site }));
+            });
+            const results = await Promise.allSettled(queries);
+            const sceneMap = {};
+            for (const res of results) {
+                if (res.status !== 'fulfilled') continue;
+                const { r, site } = res.value;
+                if (r.status !== 200 || !r.data.result) continue;
+                for (const scene of r.data.result) {
+                    if (sceneMap[scene.id]) continue;
+                    const videoUrl = extractBestVideoUrl(scene.videos?.full?.files || scene.videos?.mediabook?.files || []);
+                    if (!videoUrl) continue;
+                    const tags = (scene.tags || []).map(t => t.name);
+                    const actors = (scene.actors || []).map(a => a.name);
+                    const siteLabel = AYLO_SITES[site]?.label || site;
+                    if (siteLabel && !tags.includes(siteLabel)) tags.unshift(siteLabel);
+                    sceneMap[scene.id] = { url: videoUrl, title: scene.title || 'Scene', tags, actors, category: scene.collections?.[0]?.name || '', site: siteLabel };
+                }
             }
-            const streams = [];
-            for (const scene of resp.data.result) {
-                const videoUrl = extractBestVideoUrl(scene.videos?.full?.files || scene.videos?.mediabook?.files || []);
-                if (!videoUrl) continue;
-                const tags = (scene.tags || []).map(t => t.name);
-                const actors = (scene.actors || []).map(a => a.name);
-                streams.push({ url: videoUrl, title: scene.title || 'Scene', tags, actors, category: scene.collections?.[0]?.name || '' });
-            }
-            console.log('[Demo] Performer ' + actorId + ': ' + streams.length + ' scenes with video');
-            jsonOk(res, { streams, source: 'brazzers', fetched: streams.length });
+            const streams = Object.values(sceneMap).slice(0, count);
+            console.log('[Demo] Performer ' + actorId + ': ' + streams.length + ' scenes from ' + auths.length + ' sites');
+            jsonOk(res, { streams, source: 'aylo', fetched: streams.length });
         } catch (err) {
             jsonError(res, 500, 'Performer scenes failed: ' + err.message);
         }
@@ -3432,51 +3749,40 @@ const server = http.createServer(async (req, res) => {
     }
 
     // GET /api/demo/streams - Scrape random streams for xfill demo
-    // ?source=xhamster|brazzers (default: brazzers if auth available, else xhamster)
-    // ?count=6
+    // ?source=xhamster|brazzers|aylo (default: aylo if any login available, else xhamster)
+    // ?count=9 — source=brazzers treated as aylo (backward compat)
     if (pathname === '/api/demo/streams' && req.method === 'GET') {
-        const count = parseInt(url.searchParams.get('count')) || 6;
+        const count = parseInt(url.searchParams.get('count')) || 9;
         let source = url.searchParams.get('source') || 'auto';
         const tagIdsParam = url.searchParams.get('tagIds');
         const tagIdList = tagIdsParam ? tagIdsParam.split(',').map(Number).filter(Boolean) : [];
+        const actorIdsParam = url.searchParams.get('actorIds');
+        const actorIdList = actorIdsParam ? actorIdsParam.split(',').map(Number).filter(Boolean) : [];
 
-        // Auto-detect: prefer Brazzers if logged in, fall back to xHamster
+        // Treat 'brazzers' as 'aylo' for backward compat
+        if (source === 'brazzers') source = 'aylo';
+
+        // Auto-detect: prefer Aylo if any site logged in, fall back to xHamster
         if (source === 'auto') {
-            const auth = await getBrazzersAuth();
-            source = auth.accessToken ? 'brazzers' : 'xhamster';
-            if (!auth.accessToken && auth.instanceToken) {
-                // Has session but no auth — offer brazzers trailers or xhamster
-                source = 'xhamster'; // Full xHamster > Brazzers trailers
-            }
+            const auths = await getAllAyloAuths();
+            source = auths.length > 0 ? 'aylo' : 'xhamster';
         }
 
-        if (source === 'brazzers') {
+        if (source === 'aylo') {
             try {
-                const auth = await getBrazzersAuth();
-                if (!auth.accessToken) {
-                    jsonOk(res, {
-                        streams: [],
-                        source: 'brazzers',
-                        fetched: 0,
-                        failed: 0,
-                        error: auth.error || 'Brazzers login required'
-                    });
-                    return;
-                }
-
-                const streams = await scrapeBrazzersScenes(count, auth, tagIdList);
-                console.log('[Demo] Brazzers: ' + streams.length + ' full scenes' + (tagIdList.length ? ' (tags: ' + tagIdList.join(',') + ')' : ''));
+                const streams = await scrapeAyloScenes(count, tagIdList, actorIdList);
+                console.log('[Demo] Aylo: ' + streams.length + ' scenes' + (tagIdList.length ? ' (tags: ' + tagIdList.join(',') + ')' : '') + (actorIdList.length ? ' (actors: ' + actorIdList.join(',') + ')' : ''));
 
                 jsonOk(res, {
                     streams: streams.slice(0, count),
-                    source: 'brazzers',
+                    source: 'aylo',
                     fetched: streams.length,
                     failed: 0,
                     authenticated: true
                 });
             } catch (err) {
-                console.error('[Demo] Brazzers error:', err.message);
-                jsonError(res, 500, 'Failed to fetch Brazzers streams: ' + err.message);
+                console.error('[Demo] Aylo error:', err.message);
+                jsonError(res, 500, 'Failed to fetch Aylo streams: ' + err.message);
             }
             return;
         }

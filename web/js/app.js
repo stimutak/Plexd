@@ -784,17 +784,24 @@ const PlexdApp = (function() {
         var peakT = stream.video.currentTime;
         var srcUrl = stream.serverUrl || stream.url;
         var dur = stream.video.duration || 0;
+        // Build tags from stream metadata (site, performers, content tags)
+        var momentTags = [];
+        if (stream.site) momentTags.push(stream.site);
+        if (stream.actors && stream.actors.length) momentTags = momentTags.concat(stream.actors);
+        if (stream.category) momentTags.push(stream.category);
         return PlexdMoments.createMoment({
             sourceUrl: srcUrl,
             sourceFileId: extractServerFileId(srcUrl),
-            sourceTitle: stream.fileName || stream.url,
+            sourceTitle: stream.title || stream.fileName || stream.url,
             streamId: stream.id,
             start: Math.max(0, peakT - 60),
             end: dur ? Math.min(dur, peakT + 60) : peakT + 60,
             peak: peakT,
             rating: PlexdStream.getRating(stream.url, stream.fileName) || 0,
             loved: PlexdStream.isFavorite(stream.id),
-            thumbnailDataUrl: PlexdStream.captureStreamFrame(stream.id)
+            thumbnailDataUrl: PlexdStream.captureStreamFrame(stream.id),
+            tags: momentTags,
+            aiTags: stream.aiTags || []
         });
     }
 
@@ -915,17 +922,23 @@ const PlexdApp = (function() {
                 if (!s.video || !s.video.duration) return;
                 var peakT = s.video.currentTime || (s.video.duration * 0.3);
                 var dur = s.video.duration;
+                var momTags = [];
+                if (s.site) momTags.push(s.site);
+                if (s.actors && s.actors.length) momTags = momTags.concat(s.actors);
+                if (s.category) momTags.push(s.category);
                 var newMom = PlexdMoments.createMoment({
                     sourceUrl: srcUrl,
                     sourceFileId: extractServerFileId(srcUrl),
-                    sourceTitle: s.fileName || s.url,
+                    sourceTitle: s.title || s.fileName || s.url,
                     streamId: s.id,
                     start: Math.max(0, peakT - 60),
                     end: Math.min(dur, peakT + 60),
                     peak: peakT,
                     rating: PlexdStream.getRating(s.url, s.fileName) || 0,
                     loved: PlexdStream.isFavorite(s.id),
-                    thumbnailDataUrl: PlexdStream.captureStreamFrame(s.id)
+                    thumbnailDataUrl: PlexdStream.captureStreamFrame(s.id),
+                    tags: momTags,
+                    aiTags: s.aiTags || []
                 });
                 queueMomentExtraction(newMom, s);
                 count++;
@@ -1624,20 +1637,36 @@ const PlexdApp = (function() {
         if (badge) badge.textContent = _selectedTagIds.size > 0 ? _selectedTagIds.size : '';
     }
 
-    async function loadTaggedStreams(count) {
-        count = count || 6;
+    // ── Performer Browser (state) ───────────────────────
+    var _performerCache = null;
+    var _selectedPerformerIds = new Set(
+        JSON.parse(localStorage.getItem('plexd_selectedPerformers') || '[]')
+    );
+
+    // ── Shared Filtered Loading (tags + performers) ────
+    async function _loadFilteredStreams(count) {
+        count = count || 9;
         var tagIds = Array.from(_selectedTagIds);
+        var actorIds = Array.from(_selectedPerformerIds);
         var queryStr = '?count=' + count + '&source=brazzers';
         if (tagIds.length > 0) queryStr += '&tagIds=' + tagIds.join(',');
-        var panel = document.getElementById('tags-panel');
-        if (panel) panel.classList.remove('plexd-panel-open');
+        if (actorIds.length > 0) queryStr += '&actorIds=' + actorIds.join(',');
+
+        // Close any open filter panel
+        ['tags-panel', 'performers-panel'].forEach(function(id) {
+            var p = document.getElementById(id);
+            if (p) p.classList.remove('plexd-panel-open');
+        });
+
         var btn = document.getElementById('tags-btn');
+        var perfBtn = document.getElementById('performers-btn');
         if (btn) btn.textContent = 'Loading...';
+        if (perfBtn) perfBtn.textContent = 'Loading...';
         try {
             var resp = await fetch('/api/demo/streams' + queryStr);
             var data = await resp.json();
             if (!data.streams || data.streams.length === 0) {
-                showMessage(data.error || 'No streams found for selected tags', 'error');
+                showMessage(data.error || 'No streams found for selected filters', 'error');
                 return;
             }
             var IMMEDIATE = 6;
@@ -1649,21 +1678,96 @@ const PlexdApp = (function() {
                     stream.actors = s.actors || [];
                     stream.category = s.category || '';
                     stream.title = s.title || '';
+                    stream.site = s.site || '';
                     updateStreamInfoOverlay(stream);
                 }
             }
             updateLayout();
             var deferred = PlexdStream.getAllStreams().filter(function(s) { return s.deferred; });
             if (deferred.length > 0) staggerActivate(deferred);
+            var parts = [];
+            if (tagIds.length > 0) parts.push(tagIds.length + ' tag' + (tagIds.length > 1 ? 's' : ''));
+            if (actorIds.length > 0) parts.push(actorIds.length + ' performer' + (actorIds.length > 1 ? 's' : ''));
             var msg = 'Added ' + data.streams.length + ' streams';
-            if (tagIds.length > 0) msg += ' (filtered by ' + tagIds.length + ' tag' + (tagIds.length > 1 ? 's' : '') + ')';
+            if (parts.length > 0) msg += ' (filtered by ' + parts.join(' + ') + ')';
             showMessage(msg, 'success');
         } catch (err) {
-            console.error('[Tags] Error:', err);
+            console.error('[Filter] Error:', err);
             showMessage('Failed to load streams: ' + err.message, 'error');
         } finally {
             if (btn) btn.textContent = 'Tags';
+            if (perfBtn) perfBtn.textContent = 'Perf';
         }
+    }
+
+    function loadTaggedStreams(count) { _loadFilteredStreams(count); }
+    function loadFilteredStreams(count) { _loadFilteredStreams(count); }
+
+    // ── Performer Browser (functions) ───────────────────
+    async function fetchPerformers() {
+        if (_performerCache) return _performerCache;
+        var resp = await fetch('/api/demo/actors');
+        var data = await resp.json();
+        if (data.error) {
+            showMessage(data.error, 'error');
+            return null;
+        }
+        _performerCache = data.actors;
+        return _performerCache;
+    }
+
+    function renderPerformersPanel(actors) {
+        var container = document.getElementById('performers-list');
+        if (!container) return;
+        if (!actors || actors.length === 0) {
+            container.textContent = '';
+            var empty = document.createElement('div');
+            empty.className = 'plexd-panel-empty';
+            empty.textContent = 'No performers available';
+            container.appendChild(empty);
+            return;
+        }
+        container.textContent = '';
+        var chipsDiv = document.createElement('div');
+        chipsDiv.className = 'plexd-tag-chips';
+        for (var i = 0; i < actors.length; i++) {
+            var a = actors[i];
+            var chip = document.createElement('span');
+            chip.className = 'plexd-tag-chip' + (_selectedPerformerIds.has(a.id) ? ' selected' : '');
+            chip.setAttribute('data-performer-id', a.id);
+            chip.textContent = a.name;
+            chip.onclick = (function(id) { return function() { togglePerformer(id); }; })(a.id);
+            chipsDiv.appendChild(chip);
+        }
+        container.appendChild(chipsDiv);
+        updatePerformerCountBadge();
+    }
+
+    function togglePerformer(actorId) {
+        if (_selectedPerformerIds.has(actorId)) {
+            _selectedPerformerIds.delete(actorId);
+        } else {
+            _selectedPerformerIds.add(actorId);
+        }
+        var chips = document.querySelectorAll('.plexd-tag-chip[data-performer-id="' + actorId + '"]');
+        for (var i = 0; i < chips.length; i++) {
+            chips[i].classList.toggle('selected', _selectedPerformerIds.has(actorId));
+        }
+        updatePerformerCountBadge();
+        localStorage.setItem('plexd_selectedPerformers', JSON.stringify(Array.from(_selectedPerformerIds)));
+    }
+
+    function clearPerformerSelection() {
+        _selectedPerformerIds.clear();
+        var chips = document.querySelectorAll('.plexd-tag-chip[data-performer-id].selected');
+        for (var i = 0; i < chips.length; i++) chips[i].classList.remove('selected');
+        updatePerformerCountBadge();
+        localStorage.setItem('plexd_selectedPerformers', '[]');
+    }
+
+    function updatePerformerCountBadge() {
+        var badge = document.getElementById('performers-selected-count');
+        if (badge) badge.textContent = _selectedPerformerIds.size > 0 ? _selectedPerformerIds.size : '';
     }
 
     /**
@@ -1678,7 +1782,7 @@ const PlexdApp = (function() {
         if (typeof source === 'number') { count = source; source = 'auto'; }
         _xfillLoading = true;
         source = source || 'auto';
-        count = count || 6;
+        count = count || 9;
 
         var btn = document.getElementById('xfill-btn');
         if (btn) btn.textContent = 'Loading...';
@@ -1702,12 +1806,13 @@ const PlexdApp = (function() {
                     s.url,
                     i >= IMMEDIATE ? { deferred: true } : undefined
                 );
-                // Store Brazzers metadata on stream for AI tags display
+                // Store Aylo metadata on stream for AI tags display
                 if (stream && (s.tags || s.actors || s.category)) {
                     stream.aiTags = s.tags || [];
                     stream.actors = s.actors || [];
                     stream.category = s.category || '';
                     stream.title = s.title || '';
+                    stream.site = s.site || '';
                     updateStreamInfoOverlay(stream);
                 }
             }
@@ -7498,6 +7603,19 @@ const PlexdApp = (function() {
                 }
                 break;
             case 'Enter':
+                // If a filter panel is open, Enter = Load
+                {
+                    var filterOpen = ['tags-panel', 'performers-panel'].some(function(id) {
+                        var p = document.getElementById(id);
+                        return p && p.classList.contains('plexd-panel-open');
+                    });
+                    if (filterOpen) {
+                        e.preventDefault();
+                        _loadFilteredStreams();
+                        break;
+                    }
+                }
+                // fall through to Z handler
             case 'z':
             case 'Z':
                 e.preventDefault();
@@ -7579,14 +7697,32 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 togglePanel('tags-panel');
                 break;
+            case 'y':
+            case 'Y':
+                // Y toggles performers browser panel
+                e.preventDefault();
+                togglePanel('performers-panel');
+                break;
             case '=':
                 // = removes duplicate streams (make them equal/unique)
                 e.preventDefault();
                 removeDuplicateStreams();
                 break;
             case 'Escape':
-                // Escape priority: Bug Eye > Mosaic > Wall > Fullscreen modes
-                // Note: capture-phase handler should catch these first
+                // Escape closes filter panels first
+                {
+                    var panelClosed = false;
+                    ['tags-panel', 'performers-panel'].forEach(function(id) {
+                        var p = document.getElementById(id);
+                        if (p && p.classList.contains('plexd-panel-open')) {
+                            p.classList.remove('plexd-panel-open');
+                            panelClosed = true;
+                        }
+                    });
+                    if (panelClosed) break;
+                }
+                // Escape priority: Bug Eye > Mosaic > Focused/Fullscreen > Wall > Normal
+                // Focused mode exits before wall mode — "innermost mode first"
                 if (bugEyeMode) {
                     toggleBugEyeMode(true);
                     break;
@@ -7594,6 +7730,32 @@ const PlexdApp = (function() {
                 if (mosaicMode) {
                     toggleMosaicMode(true);
                     break;
+                }
+                // Focused/fullscreen modes exit before wall modes
+                {
+                    const mode = PlexdStream.getFullscreenMode();
+                    if (mode === 'true-focused') {
+                        // Return to grid view in true fullscreen
+                        PlexdStream.exitFocusedMode();
+                        if (inputEl) inputEl.blur();
+                        break;
+                    } else if (mode === 'true-grid') {
+                        // Exit true fullscreen completely
+                        PlexdStream.exitTrueFullscreen();
+                        if (inputEl) inputEl.blur();
+                        break;
+                    } else if (mode === 'browser-fill') {
+                        // Exit browser-fill mode back to grid/spotlight/whatever layout was active
+                        PlexdStream.exitFocusedMode();
+                        // If we were in Climax Single Focus, fall back to Tight Wall (submode 0)
+                        if (theaterMode && theaterScene === 'climax' && climaxSubMode === 3) {
+                            climaxSubMode = 0;
+                            applyClimaxSubMode();
+                            updateLayout();
+                        }
+                        if (inputEl) inputEl.blur();
+                        break;
+                    }
                 }
                 if (wallMode > 0) {
                     // Reset wall mode to off
@@ -7606,36 +7768,13 @@ const PlexdApp = (function() {
                     showMessage('Wall: OFF', 'info');
                     break;
                 }
-                // Escape handles all fullscreen modes:
-                // - true-focused: return to true-grid (stay in true fullscreen)
-                // - true-grid: exit true fullscreen completely
-                // - browser-fill: exit to grid view
-                // - none: deselect, or reset fullscreen state if something looks stuck
+                // Normal mode - deselect or Theater scene regression
                 {
-                    const mode = PlexdStream.getFullscreenMode();
-                    if (mode === 'true-focused') {
-                        // Return to grid view in true fullscreen
-                        PlexdStream.exitFocusedMode();
-                    } else if (mode === 'true-grid') {
-                        // Exit true fullscreen completely
-                        PlexdStream.exitTrueFullscreen();
-                    } else if (mode === 'browser-fill') {
-                        // Exit browser-fill mode back to grid
-                        PlexdStream.exitFocusedMode();
-                        // If we were in Climax Single Focus, fall back to Tight Wall (submode 0)
-                        if (theaterMode && theaterScene === 'climax' && climaxSubMode === 3) {
-                            climaxSubMode = 0;
-                            applyClimaxSubMode();
-                            updateLayout();
-                        }
+                    if (theaterMode && theaterScene !== 'casting') {
+                        prevScene();
                     } else {
-                        // Normal mode - deselect or Theater scene regression
-                        if (theaterMode && theaterScene !== 'casting') {
-                            prevScene();
-                        } else {
-                            PlexdStream.selectStream(null);
-                            PlexdStream.resetFullscreenState();
-                        }
+                        PlexdStream.selectStream(null);
+                        PlexdStream.resetFullscreenState();
                     }
                     if (inputEl) inputEl.blur();
                 }
@@ -7982,6 +8121,14 @@ const PlexdApp = (function() {
      * In normal mode, just select next stream
      */
     function handleArrowNav(direction, fullscreenStream, selected) {
+        // Focused mode takes priority over ALL layout modes.
+        // When focused, arrows always navigate between focused streams.
+        // (Matches rotateStreams() which also checks focused first.)
+        if (fullscreenStream) {
+            switchFullscreenStream(direction);
+            return;
+        }
+
         // Theater Stage: Left/Right rotates hero, Up/Down navigates ensemble
         if (theaterMode && theaterScene === 'stage') {
             const streams = getFilteredStreams();
@@ -8027,13 +8174,7 @@ const PlexdApp = (function() {
 
         const mode = PlexdStream.getFullscreenMode();
 
-        console.log(`[Plexd] handleArrowNav: direction=${direction}, mode=${mode}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}, selected=${selected ? selected.id : 'null'}`);
-
-        if (fullscreenStream) {
-            // In focused mode - switch to next focused stream
-            console.log('[Plexd] handleArrowNav: calling switchFullscreenStream');
-            switchFullscreenStream(direction);
-        } else if (mode === 'true-grid') {
+        if (mode === 'true-grid') {
             // In true-grid mode - just select the next stream (stay in grid view)
             PlexdStream.selectNextStream(direction);
         } else if (coverflowMode) {
@@ -8047,7 +8188,6 @@ const PlexdApp = (function() {
             }
         } else {
             // Normal grid mode - just select next stream
-            console.log('[Plexd] handleArrowNav: fallback to selectNextStream (not fullscreen, not true-grid, not coverflow)');
             PlexdStream.selectNextStream(direction);
         }
     }
@@ -8061,21 +8201,12 @@ const PlexdApp = (function() {
      */
     function switchFullscreenStream(direction) {
         const fullscreenStream = PlexdStream.getFullscreenStream();
-        console.log(`[Plexd] switchFullscreenStream: direction=${direction}, fullscreenStream=${fullscreenStream ? fullscreenStream.id : 'null'}`);
-        if (!fullscreenStream) {
-            console.log('[Plexd] switchFullscreenStream: no fullscreen stream, returning');
-            return;
-        }
+        if (!fullscreenStream) return;
 
         const nextId = PlexdStream.getSpatialNeighborStreamId(fullscreenStream.id, direction);
-        console.log(`[Plexd] switchFullscreenStream: nextId=${nextId}`);
-        if (!nextId || nextId === fullscreenStream.id) {
-            console.log('[Plexd] switchFullscreenStream: no next stream or same stream, returning');
-            return;
-        }
+        if (!nextId || nextId === fullscreenStream.id) return;
 
         const mode = PlexdStream.getFullscreenMode();
-        console.log(`[Plexd] switchFullscreenStream: calling enterFocusedMode(${nextId}), mode=${mode}`);
         PlexdStream.enterFocusedMode(nextId);
 
         // If was in true-focused mode, ensure wrapper gets focus for keyboard events
@@ -11035,7 +11166,7 @@ const PlexdApp = (function() {
             if (willOpen) {
                 // Panels are mutually exclusive for a clean UX.
                 // When one opens, close the others.
-                ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel', 'tags-panel'].forEach(id => {
+                ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel', 'tags-panel', 'performers-panel'].forEach(id => {
                     if (id !== panelId) {
                         const other = document.getElementById(id);
                         if (other) other.classList.remove('plexd-panel-open');
@@ -11051,6 +11182,8 @@ const PlexdApp = (function() {
                     updateHistoryUI();
                 } else if (panelId === 'tags-panel') {
                     fetchTags().then(function(tags) { if (tags) renderTagsPanel(tags); });
+                } else if (panelId === 'performers-panel') {
+                    fetchPerformers().then(function(actors) { if (actors) renderPerformersPanel(actors); });
                 }
             } else {
                 selectedSetIndex = -1; // Reset when closing
@@ -11126,7 +11259,7 @@ const PlexdApp = (function() {
     function openPanel(panelId) {
         const panel = document.getElementById(panelId);
         if (!panel) return;
-        ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel'].forEach(id => {
+        ['streams-panel', 'saved-panel', 'history-panel', 'queue-panel', 'tags-panel', 'performers-panel'].forEach(id => {
             if (id !== panelId) {
                 const other = document.getElementById(id);
                 if (other) other.classList.remove('plexd-panel-open');
@@ -11780,6 +11913,7 @@ const PlexdApp = (function() {
             return;
         }
         var cState = PlexdCast.getState();
+        console.log('[toggleCast] state:', JSON.stringify(cState), '| avail:', JSON.stringify(PlexdCast.getAvailability()));
         if (cState.active) {
             PlexdCast.stopCasting();
             showMessage('Cast disconnected');
@@ -11917,7 +12051,12 @@ const PlexdApp = (function() {
         // Tags
         toggleTag,
         clearTagSelection,
-        loadTaggedStreams
+        loadTaggedStreams,
+        // Performers
+        togglePerformer,
+        clearPerformerSelection,
+        // Shared filtered loading (tags + performers)
+        loadFilteredStreams
     };
 })();
 

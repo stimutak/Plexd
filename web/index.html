@@ -85,7 +85,7 @@
                 <button onclick="PlexdApp.togglePanel('streams-panel')" class="plexd-button plexd-button-secondary" title="Active streams list [S]">Strms</button>
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History">Hist</button>
-                <button id="xfill-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.xfill()" title="Load 6 top-rated streams">xfill</button>
+                <button id="tags-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePanel('tags-panel')" title="Browse & load tagged clips [U]">Tags</button>
             </div>
         </header>
 
@@ -100,6 +100,22 @@
             </div>
             <div id="queue-list" class="plexd-panel-content">
                 <div class="plexd-panel-empty">Queue is empty</div>
+            </div>
+        </aside>
+
+        <!-- Tags Panel -->
+        <aside id="tags-panel" class="plexd-panel plexd-tags-panel">
+            <div class="plexd-panel-header">
+                <h3>Tags <span id="tags-selected-count" class="badge"></span></h3>
+                <div class="plexd-panel-actions">
+                    <button class="plexd-button-small" onclick="PlexdApp.clearTagSelection()">Clear</button>
+                    <button id="tags-load-btn" class="plexd-button-small" onclick="PlexdApp.loadTaggedStreams()">Load</button>
+                    <button onclick="PlexdApp.togglePanel('tags-panel')" class="plexd-panel-close">&times;</button>
+                </div>
+            </div>
+            <div class="plexd-panel-hint">Select tags, then Load [U]</div>
+            <div id="tags-list" class="plexd-panel-content">
+                <div class="plexd-panel-empty">Loading tags...</div>
             </div>
         </aside>
 
@@ -174,6 +190,9 @@
         </div>
     </div>
 
+    <!-- Cast SDK (Chrome only, non-blocking) -->
+    <script src="//www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" async></script>
+
     <!-- HLS.js for streaming support -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
@@ -181,6 +200,7 @@
     <script src="js/grid.js?v=103"></script>
     <script src="js/stream.js?v=103"></script>
     <script src="js/moments.js?v=103"></script>
+    <script src="js/cast.js?v=103"></script>
     <script src="js/app.js?v=103"></script>
 </body>
 </html>

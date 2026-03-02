@@ -42,9 +42,12 @@ if [ -n "$pids" ]; then
     echo -e "${GREEN}Port $PORT is free${NC}"
 fi
 
-# 2. Start server (AI servers auto-start via server.js autoStartSkier())
+# 2. Start server with --watch for auto-reload on code changes
+# Without --watch, editing server.js while the server runs causes stale code
+# bugs (e.g., moment browser videos fail because the running process doesn't
+# have the latest route handlers). --watch restarts automatically on file change.
 cd "$PROJECT_DIR"
-node server.js > "$LOG" 2>&1 &
+node --watch server.js > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "Starting server (PID: $SERVER_PID)..."
 

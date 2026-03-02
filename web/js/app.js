@@ -1572,8 +1572,8 @@ const PlexdApp = (function() {
     }
 
     // Determine which tag categories to show based on selected Network tags.
-    // Stash network IDs: <= -1000. Aylo network IDs: > -1000 and < 0.
-    // Stash categories: 'Stash', 'Stash Studios'. Everything else is Aylo.
+    // Network ID ranges: Reptyle = -2000, Stash = -1000, Aylo = -1 to -99.
+    // Source categories: 'Stash'/'Stash Studios' = Stash, 'Reptyle' = Reptyle, rest = Aylo.
     function _getVisibleCategories(tags) {
         var allCats = Object.keys(tags);
         var selectedNetworks = [];
@@ -1583,15 +1583,25 @@ const PlexdApp = (function() {
         }
         if (selectedNetworks.length === 0) return allCats; // No filter — show all
 
-        var hasStash = selectedNetworks.some(function(id) { return id <= -1000; });
+        var hasStash = selectedNetworks.some(function(id) { return id === -1000 || (id < -1000 && id > -2000); });
         var hasAylo = selectedNetworks.some(function(id) { return id > -1000; });
+        var hasReptyle = selectedNetworks.some(function(id) { return id === -2000; });
         var stashCats = { 'Stash': true, 'Stash Studios': true };
+        var reptyleCats = { 'Reptyle': true };
 
         return allCats.filter(function(cat) {
             if (cat === 'Network') return true; // Always show Network
-            if (hasStash && !hasAylo) return !!stashCats[cat]; // Stash only
-            if (hasAylo && !hasStash) return !stashCats[cat];  // Aylo only
-            return true; // Both selected — show all
+            var isStash = !!stashCats[cat];
+            var isReptyle = !!reptyleCats[cat];
+            var isAylo = !isStash && !isReptyle;
+            // Show category if its source is selected (or if multiple sources selected, show all matching)
+            if (hasStash && isStash) return true;
+            if (hasReptyle && isReptyle) return true;
+            if (hasAylo && isAylo) return true;
+            // If only one source selected, hide others
+            var sourceCount = (hasStash ? 1 : 0) + (hasAylo ? 1 : 0) + (hasReptyle ? 1 : 0);
+            if (sourceCount === 1) return false;
+            return true; // Multiple sources — show all
         });
     }
 
@@ -1701,7 +1711,7 @@ const PlexdApp = (function() {
         count = count || 9;
         var tagIds = Array.from(_selectedTagIds);
         var actorIds = Array.from(_selectedPerformerIds);
-        var queryStr = '?count=' + count + '&source=brazzers';
+        var queryStr = '?count=' + count + '&source=auto';
         if (tagIds.length > 0) queryStr += '&tagIds=' + tagIds.join(',');
         if (actorIds.length > 0) queryStr += '&actorIds=' + actorIds.join(',');
 
@@ -1884,17 +1894,17 @@ const PlexdApp = (function() {
         input.parentNode.replaceChild(newInput, input);
         newInput.addEventListener('input', function() {
             var query = newInput.value.toLowerCase().trim();
-            // Filter chips
-            var chips = container.querySelectorAll('.plexd-tag-chip');
-            for (var i = 0; i < chips.length; i++) {
-                var name = chips[i].textContent.toLowerCase();
-                chips[i].style.display = (!query || name.indexOf(query) !== -1) ? '' : 'none';
+            // Filter chips and history rows
+            var items = container.querySelectorAll('.plexd-tag-chip, .plexd-history-row');
+            for (var i = 0; i < items.length; i++) {
+                var name = items[i].textContent.toLowerCase();
+                items[i].style.display = (!query || name.indexOf(query) !== -1) ? '' : 'none';
             }
             // Hide empty categories
             var cats = container.querySelectorAll('.plexd-tag-category');
             for (var j = 0; j < cats.length; j++) {
-                var visibleChips = cats[j].querySelectorAll('.plexd-tag-chip:not([style*="display: none"])');
-                cats[j].style.display = visibleChips.length > 0 ? '' : 'none';
+                var visibleItems = cats[j].querySelectorAll('.plexd-tag-chip:not([style*="display: none"]), .plexd-history-row:not([style*="display: none"])');
+                cats[j].style.display = visibleItems.length > 0 ? '' : 'none';
             }
             // Also hide standalone category labels (performers panel has a loose label)
             var labels = container.querySelectorAll(':scope > .plexd-tag-category-label');
@@ -5769,12 +5779,12 @@ const PlexdApp = (function() {
         (document.querySelector('.plexd-app') || document.body).appendChild(strip);
     }
 
-    function jumpToAdjacentMoment(direction) {
-        if (!stageHeroId) return;
-        var stream = PlexdStream.getStream(stageHeroId);
+    function jumpToAdjacentMoment(direction, targetStream) {
+        var stream = targetStream || (stageHeroId && PlexdStream.getStream(stageHeroId))
+            || PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
         if (!stream || !stream.video) return;
 
-        var moments = PlexdMoments.getMomentsForStream(stageHeroId);
+        var moments = PlexdMoments.getMomentsForStream(stream.id);
         if (moments.length === 0) {
             moments = PlexdMoments.getMomentsForSource(stream.serverUrl || stream.url);
         }
@@ -7870,6 +7880,16 @@ const PlexdApp = (function() {
                         showMessage(anyContain ? 'All: Crop (fill)' : 'All: Contain (full frame)', 'info');
                     }
                     return;
+                case '≤': // macOS Option+, produces ≤
+                    // Opt+, = jump to previous moment dot
+                    e.preventDefault();
+                    jumpToAdjacentMoment(-1);
+                    return;
+                case '≥': // macOS Option+. produces ≥
+                    // Opt+. = jump to next moment dot
+                    e.preventDefault();
+                    jumpToAdjacentMoment(1);
+                    return;
                 case '÷': // macOS Option+/ produces ÷
                 case '/':
                     // Opt+/ = reload selected stream, double-tap = reload all
@@ -8028,6 +8048,13 @@ const PlexdApp = (function() {
             // , . for 10s seek, < > (Shift+,/.) for 60s seek
             case ',':
             case '.':
+                if (e.altKey) {
+                    // Opt+, = prev moment, Opt+. = next moment
+                    e.preventDefault();
+                    jumpToAdjacentMoment(e.key === ',' ? -1 : 1);
+                    break;
+                }
+                // fall through to seek
             case '<':
             case '>':
                 // , . = ±10s seek, < > (Shift+,/.) = ±60s seek
@@ -11369,28 +11396,28 @@ const PlexdApp = (function() {
             var loadBtn = document.createElement('span');
             loadBtn.className = 'plexd-set-btn load';
             loadBtn.textContent = 'Load';
-            loadBtn.title = 'Load (replace current)';
+            loadBtn.title = 'Replace current streams with this set';
             loadBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.loadCombination(n); }; })(name);
             btns.appendChild(loadBtn);
 
             var addBtn = document.createElement('span');
             addBtn.className = 'plexd-set-btn add';
-            addBtn.textContent = '+';
-            addBtn.title = 'Add to current streams';
+            addBtn.textContent = 'Add';
+            addBtn.title = 'Add these streams to current grid';
             addBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.addCombination(n); }; })(name);
             btns.appendChild(addBtn);
 
             var updateBtn = document.createElement('span');
             updateBtn.className = 'plexd-set-btn update';
-            updateBtn.textContent = '\u2191';
-            updateBtn.title = 'Update: add open streams not in this set';
+            updateBtn.textContent = 'Merge';
+            updateBtn.title = 'Save open streams into this set';
             updateBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.mergeIntoSet(n); }; })(name);
             btns.appendChild(updateBtn);
 
             var delBtn = document.createElement('span');
-            delBtn.className = 'plexd-chip-close';
-            delBtn.textContent = '\u00d7';
-            delBtn.title = 'Delete set';
+            delBtn.className = 'plexd-set-btn delete';
+            delBtn.textContent = 'Del';
+            delBtn.title = 'Delete this set';
             delBtn.onclick = (function(n) { return function(e) { e.stopPropagation(); PlexdApp.deleteCombination(n); }; })(name);
             btns.appendChild(delBtn);
 
@@ -11682,21 +11709,44 @@ const PlexdApp = (function() {
             label.className = 'plexd-tag-category-label';
             label.textContent = groupName + ' (' + groupItems.length + ')';
             catDiv.appendChild(label);
-            var chipsDiv = document.createElement('div');
-            chipsDiv.className = 'plexd-tag-chips';
+            var listDiv = document.createElement('div');
+            listDiv.className = 'plexd-history-list';
 
             for (var j = 0; j < groupItems.length; j++) {
                 var item = groupItems[j];
                 var isActive = !!activeUrls[item.url];
                 var name = item.title || getHistoryDisplayName(item.url);
-                var chip = document.createElement('span');
-                chip.className = 'plexd-tag-chip' + (isActive ? ' selected' : '');
-                chip.textContent = name;
-                chip.title = item.url;
-                chip.onclick = (function(url) { return function(e) {
+                var source = getHistorySource(item.url);
+
+                var row = document.createElement('div');
+                row.className = 'plexd-history-row' + (isActive ? ' active' : '');
+                row.title = item.url;
+                row.onclick = (function(url) { return function(e) {
                     if (e.target.classList.contains('plexd-chip-close')) return;
                     PlexdApp.addStream(url);
                 }; })(item.url);
+
+                // Source badge
+                if (source) {
+                    var badge = document.createElement('span');
+                    badge.className = 'plexd-history-source';
+                    badge.textContent = source.label;
+                    badge.style.background = source.color;
+                    row.appendChild(badge);
+                }
+
+                // Name
+                var nameSpan = document.createElement('span');
+                nameSpan.className = 'plexd-history-name';
+                nameSpan.textContent = name;
+                row.appendChild(nameSpan);
+
+                // Time
+                var timeSpan = document.createElement('span');
+                timeSpan.className = 'plexd-history-time';
+                timeSpan.textContent = formatTimeAgo(item.timestamp);
+                row.appendChild(timeSpan);
+
                 // Delete button
                 var idx = streamHistory.indexOf(item);
                 var closeBtn = document.createElement('span');
@@ -11707,10 +11757,26 @@ const PlexdApp = (function() {
                     e.stopPropagation();
                     PlexdApp.removeHistoryItem(index);
                 }; })(idx);
-                chip.appendChild(closeBtn);
-                chipsDiv.appendChild(chip);
+                row.appendChild(closeBtn);
+                listDiv.appendChild(row);
+
+                // Async enrich Stash entries that lack a title
+                if (!item.title && /\/scene\/\d+/.test(item.url)) {
+                    (function(histItem, el) {
+                        fetch('/api/stash/scene-info?url=' + encodeURIComponent(histItem.url))
+                            .then(function(r) { return r.ok ? r.json() : null; })
+                            .then(function(info) {
+                                if (!info || !info.title) return;
+                                histItem.title = info.title;
+                                saveHistory();
+                                var nameEl = el.querySelector('.plexd-history-name');
+                                if (nameEl) nameEl.textContent = info.title;
+                            })
+                            .catch(function() {});
+                    })(item, row);
+                }
             }
-            catDiv.appendChild(chipsDiv);
+            catDiv.appendChild(listDiv);
             container.appendChild(catDiv);
         }
         _setupPanelSearch('history-search', container);
@@ -11729,7 +11795,7 @@ const PlexdApp = (function() {
         }
         try {
             const urlObj = new URL(url, window.location.origin);
-            // For server files, fileId is the original filename
+            // Server files: fileId is the original filename
             if (urlObj.pathname.startsWith('/api/files/') || urlObj.pathname.startsWith('/api/hls/')) {
                 const parts = urlObj.pathname.split('/').filter(p => p);
                 const fileId = parts[parts.length - 1];
@@ -11737,20 +11803,55 @@ const PlexdApp = (function() {
                     return decodeURIComponent(fileId).replace(/\.[^.]+$/, '').replace(/[-_.]+/g, ' ');
                 }
             }
-            // For external URLs, walk path segments and skip generic HLS names
+            // Stash: /scene/{id}/stream → "Scene #id"
+            var stashMatch = urlObj.pathname.match(/\/scene\/(\d+)/);
+            if (stashMatch) return 'Scene #' + stashMatch[1];
+            // Walk path segments, skip generic/hash/JWT names
             const parts = urlObj.pathname.split('/').filter(p => p);
-            const genericNames = ['master', 'playlist', 'index', 'stream', 'video', 'chunklist', 'media', 'hls'];
+            const genericNames = ['master', 'playlist', 'index', 'stream', 'video', 'chunklist', 'media', 'hls', 'manifest'];
+            var isHashLike = function(s) { return s.length > 8 && /^[0-9a-f]+$/i.test(s); };
+            var isJwt = function(s) { return s.startsWith('eyJ'); };
+            var isIdHash = function(s) { return s.length > 10 && /^[0-9a-zA-Z_-]+$/.test(s) && !/[aeiou]{2}/i.test(s); };
             for (let i = parts.length - 1; i >= 0; i--) {
                 const seg = decodeURIComponent(parts[i].split('?')[0]);
                 const base = seg.replace(/\.(m3u8|ts|mp4|mpd|key|webm|ogg)$/i, '');
-                if (base.length > 3 && !genericNames.includes(base.toLowerCase())) {
-                    return base.replace(/[-_.]+/g, ' ');
-                }
+                if (base.length <= 3) continue;
+                if (genericNames.includes(base.toLowerCase())) continue;
+                if (isHashLike(base)) continue;
+                if (isJwt(base)) continue;
+                if (/^\d+$/.test(base)) continue;
+                // Skip segments that are generic_hash combos (e.g. "stream_16c5a4e01b")
+                var cleaned = base.replace(/[-_.]+/g, ' ');
+                var words = cleaned.split(' ').filter(function(w) { return w.length > 0; });
+                var meaningful = words.filter(function(w) {
+                    return !genericNames.includes(w.toLowerCase()) && !isHashLike(w) && !/^\d+$/.test(w);
+                });
+                if (meaningful.length === 0) continue;
+                return cleaned;
             }
-            return urlObj.hostname.replace(/^www\./, '');
+            // Clean hostname fallback — source badge already shows origin
+            var host = urlObj.hostname.replace(/^www\./, '');
+            if (host.includes('project1content') || host.includes('project1service')) return 'Stream';
+            if (host.includes('cloudflarestream')) return 'Stream';
+            return host;
         } catch {
             return url.substring(0, 40);
         }
+    }
+
+    /**
+     * Detect history source from URL for visual indicator
+     */
+    function getHistorySource(url) {
+        if (!url) return null;
+        if (url.startsWith('blob:') || url.startsWith('data:')) return { label: 'File', color: '#888' };
+        if (url.includes('/api/files/') || url.includes('/api/hls/')) return { label: 'Local', color: '#888' };
+        if (/\/scene\/\d+/.test(url)) return { label: 'Stash', color: '#ff9333' };
+        if (url.includes('project1content') || url.includes('project1service') ||
+            url.includes('/api/proxy/hls') && url.includes('project1')) return { label: 'Aylo', color: '#c9566d' };
+        if (url.includes('cloudflarestream')) return { label: 'CF', color: '#f6821f' };
+        if (url.includes('xhamster')) return { label: 'xH', color: '#b83e3e' };
+        return { label: 'URL', color: '#666' };
     }
 
     function removeHistoryItem(index) {

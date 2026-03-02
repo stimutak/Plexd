@@ -230,7 +230,7 @@ All zones are single-tap. No double-tap required.
 
 One-click button that fills the grid with random premium video streams. Toolbar button calls `PlexdApp.xfill()` → `GET /api/demo/streams?count=16&source=brazzers`.
 
-**Sources:** `?source=brazzers` (premium, requires login) or `?source=xhamster` (free scraping). `auto` prefers Brazzers if auth is valid.
+**Sources:** `?source=brazzers` (premium, requires login), `?source=reptyle` (Paper Street Media), or `?source=xhamster` (free scraping). `auto` prefers Aylo if auth is valid, includes Reptyle when available.
 
 **Brazzers/Aylo Integration:**
 - Auth via Chrome cookie decryption from `.chrome-profile/Default/Cookies`
@@ -244,9 +244,21 @@ One-click button that fills the grid with random premium video streams. Toolbar 
 - Signed HLS URLs expire (~24hr): `master.m3u8?validto=...&ip=...&hash=...`
 - Streams route through `/api/proxy/hls` for CORS (manifest URL rewriting)
 
+**Reptyle (Paper Street Media) Integration:**
+- Auth via Chrome cookie decryption: `refresh_token` (~30 days) exchanged for `access_token` (~30 min) via `POST auth.reptyle.com/oauth/refresh`
+- Uses standard `Bearer {token}` auth (unlike Aylo's raw JWT)
+- Two API systems: ElasticSearch (`ma-store.reptyle.com/ts_index/_search`) for content discovery, REST (`api2.reptyle.com/api/v1`) for playback
+- Watch response: `{status, data: {stream, stream2: {av1, vp9, avc}, stream3}}` — streams in `data`
+- `extractBestReptyleUrl()` priority: `stream2.av1.hls` > `stream2.vp9.hls` > `stream2.avc.hls` > `stream` (legacy)
+- HLS via CacheFly CDN, routes through `/api/proxy/hls` for CORS
+- Tags are plain strings (no IDs) — hashed via `reptyleStringHash()` + `REPTYLE_TAG_OFFSET` (200000)
+- Actors discovered via ES `type:models` query, offset with `REPTYLE_ACTOR_OFFSET` (200000)
+- ID ranges: Aylo `1-99999`, Stash `100000-199999`, Reptyle `200000+`, Network IDs: Reptyle `-2000`
+
 **Key endpoints:**
 - `GET /api/demo/streams?count=16&source=brazzers` — Fetch random premium scenes
-- `GET /api/demo/auth-status` — Check Brazzers login status
+- `GET /api/demo/streams?source=reptyle&count=9` — Fetch Reptyle scenes
+- `GET /api/demo/auth-status` — Check Aylo + Reptyle + Stash login status
 
 **Key functions (server.js):**
 - `getBrazzersAuth()` — Read/decrypt Chrome cookies, refresh if expired
@@ -254,6 +266,12 @@ One-click button that fills the grid with random premium video streams. Toolbar 
 - `scrapeBrazzersScenes(count, auth)` — Fetch random scene listings, extract HLS URLs
 - `extractBestVideoUrl(files)` — Pick highest quality from files array
 - `getExternalIp()` — Cached external IP for X-Forwarded-For
+- `getReptyleAuth()` — OAuth token refresh from Chrome cookies
+- `fetchReptyleElastic(path, auth, body)` — ElasticSearch queries for content discovery
+- `fetchReptyleApi(path, auth)` — REST API for playback URLs
+- `scrapeReptyleScenes(count, auth, tagNames, actorIds)` — ES discovery + watch URL extraction
+- `refreshReptyleTagsFromApi(auth)` — Cache tags (from /tags API or ES fallback)
+- `refreshReptyleActorsFromApi(auth)` — Cache performers from ES models index
 
 ## Prohibited Practices
 

@@ -1357,6 +1357,65 @@ body {
     color: var(--bad);
 }
 
+/* History list rows */
+.plexd-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.plexd-history-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.plexd-history-row:hover {
+    background: var(--hover);
+}
+.plexd-history-row.active {
+    border-left: 2px solid var(--accent);
+    padding-left: 4px;
+}
+.plexd-history-row:hover .plexd-chip-close {
+    opacity: 1;
+}
+.plexd-history-source {
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #fff;
+    flex-shrink: 0;
+    min-width: 28px;
+    text-align: center;
+}
+.plexd-history-row .plexd-history-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-sub);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.plexd-history-row:hover .plexd-history-name {
+    color: var(--text);
+}
+.plexd-history-row.active .plexd-history-name {
+    color: var(--text);
+    font-weight: 500;
+}
+.plexd-history-time {
+    font-size: 9px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .plexd-queue-url {
     font-size: 12px;
     color: var(--text);
@@ -1543,33 +1602,42 @@ body {
     display: flex;
     gap: 3px;
     flex-shrink: 0;
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-
-.plexd-set-chip:hover .plexd-set-actions {
-    opacity: 1;
 }
 
 .plexd-set-btn {
-    font-size: 10px;
-    padding: 1px 5px;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 5px;
     border-radius: 3px;
     cursor: pointer;
-    color: var(--text-sub);
-    transition: color 0.15s;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    transition: color 0.15s, background 0.15s;
 }
 
 .plexd-set-btn.load:hover {
-    color: var(--accent);
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
 }
 
 .plexd-set-btn.add:hover {
-    color: var(--ok);
+    color: #fff;
+    background: var(--ok);
+    border-color: var(--ok);
 }
 
 .plexd-set-btn.update:hover {
-    color: var(--accent-light, #7bb8ff);
+    color: #fff;
+    background: var(--accent-light, #7bb8ff);
+    border-color: var(--accent-light, #7bb8ff);
+}
+
+.plexd-set-btn.delete:hover {
+    color: #fff;
+    background: var(--bad);
+    border-color: var(--bad);
 }
 
 .plexd-tags-panel .badge {

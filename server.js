@@ -688,6 +688,68 @@ function runTranscode(fileId, useSoftwareEncoder = false) {
     });
 }
 
+// Fix MP4 edit lists for QuickTime compatibility.
+// ffmpeg writes empty edit list entries (media_time=-1) for H.264 B-frame timing,
+// which causes QuickTime to show only ~3 seconds of video. This patches the moov
+// atom in-place to replace the 2-entry elst (empty + real) with a single clean entry.
+function fixMp4EditList(filepath) {
+    const fd = fs.openSync(filepath, 'r+');
+    try {
+        // Read first 8MB to find moov (faststart puts it near the beginning)
+        const headerBuf = Buffer.alloc(Math.min(8 * 1024 * 1024, fs.fstatSync(fd).size));
+        fs.readSync(fd, headerBuf, 0, headerBuf.length, 0);
+
+        // Find moov atom
+        let pos = 0;
+        let moovPos = -1, moovSize = 0;
+        while (pos < headerBuf.length - 8) {
+            const sz = headerBuf.readUInt32BE(pos);
+            const type = headerBuf.toString('latin1', pos + 4, pos + 8);
+            if (sz < 8) break;
+            if (type === 'moov') { moovPos = pos; moovSize = sz; break; }
+            pos += sz;
+        }
+        if (moovPos < 0) return;
+
+        // Find first elst (video track) within moov
+        const moovEnd = moovPos + moovSize;
+        let elstPos = headerBuf.indexOf(Buffer.from('elst'), moovPos);
+        if (elstPos < 0 || elstPos >= moovEnd) return;
+
+        // Parse: elstPos points to 'elst' fourcc; box starts 4 bytes earlier
+        const base = elstPos + 4; // version/flags
+        const version = headerBuf[base];
+        if (version !== 0) return;
+        const entryCount = headerBuf.readUInt32BE(base + 4);
+        if (entryCount !== 2) return;
+
+        const e0 = base + 8;
+        const segDur0 = headerBuf.readUInt32BE(e0);
+        const mediaTime0 = headerBuf.readInt32BE(e0 + 4);
+        const e1 = e0 + 12;
+        const segDur1 = headerBuf.readUInt32BE(e1);
+
+        if (mediaTime0 !== -1) return; // no empty edit, nothing to fix
+
+        // Set entry_count=1, single entry with combined duration starting at media_time=0
+        headerBuf.writeUInt32BE(1, base + 4);
+        headerBuf.writeUInt32BE(segDur0 + segDur1, e0);
+        headerBuf.writeInt32BE(0, e0 + 4);
+        headerBuf.writeUInt16BE(1, e0 + 8);
+        headerBuf.writeUInt16BE(0, e0 + 10);
+
+        // Write only the patched bytes back
+        const patchStart = base + 4;
+        const patchLen = 4 + 12;
+        fs.writeSync(fd, headerBuf.subarray(patchStart, patchStart + patchLen), 0, patchLen, patchStart);
+        console.log('[Server] Fixed MP4 edit list for QuickTime compatibility');
+    } catch (e) {
+        console.warn('[Server] Edit list fix skipped:', e.message);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 // Process the download queue (mirrors processTranscodeQueue)
 function processDownloadQueue() {
     while (activeDownloads.size < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
@@ -935,6 +997,7 @@ function runDownload(jobId) {
             // Rename .part to final file
             try {
                 fs.renameSync(partPath, job.filepath);
+                fixMp4EditList(job.filepath);
                 const sizeMB = (fs.statSync(job.filepath).size / 1048576).toFixed(1);
                 console.log(`[Server] Download complete: ${job.filename} (${sizeMB}MB)`);
                 job.status = 'complete';
@@ -1466,6 +1529,11 @@ const STASH_TAG_OFFSET = 100000;
 const STASH_PERFORMER_OFFSET = 100000;
 const STASH_STUDIO_OFFSET = -1000;
 
+// Reptyle ID offsets — no collisions with Aylo (1-99999) or Stash (100000+)
+const REPTYLE_TAG_OFFSET = 200000;       // Reptyle tag "foo" → hashCode + 200000
+const REPTYLE_ACTOR_OFFSET = 200000;     // Reptyle actor 789 → 200789
+const REPTYLE_NETWORK_ID = -2000;        // Synthetic tag for "Reptyle" in Network category
+
 async function fetchStashGraphQL(query, variables) {
     const headers = { 'Content-Type': 'application/json' };
     if (STASH_CONFIG.apiKey) headers['ApiKey'] = STASH_CONFIG.apiKey;
@@ -1882,6 +1950,8 @@ const CATALOG_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 const STASH_TAGS_CACHE = path.join(CACHE_DIR, 'stash-tags.json');
 const STASH_PERFORMERS_CACHE = path.join(CACHE_DIR, 'stash-performers.json');
 const STASH_STUDIOS_CACHE = path.join(CACHE_DIR, 'stash-studios.json');
+const REPTYLE_TAGS_CACHE = path.join(CACHE_DIR, 'reptyle-tags.json');
+const REPTYLE_PERFORMERS_CACHE = path.join(CACHE_DIR, 'reptyle-performers.json');
 
 let _tagCache = null;   // Merged tag cache (byCategory format)
 let _actorCache = null;  // Merged actor cache (sorted array)
@@ -1927,6 +1997,21 @@ function loadCacheFromDisk() {
         for (const a of stashActors) allActors[a.id] = a;
         actorSites++;
     } catch (e) { /* no stash performers cache */ }
+
+    // Load Reptyle caches (offset IDs already applied in cache files)
+    try {
+        const reptyleTags = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
+        for (const cat of Object.keys(reptyleTags)) {
+            if (!allTags[cat]) allTags[cat] = {};
+            for (const t of reptyleTags[cat]) allTags[cat][t.id] = t;
+        }
+        tagSites++;
+    } catch (e) { /* no reptyle tags cache */ }
+    try {
+        const reptyleActors = JSON.parse(fs.readFileSync(REPTYLE_PERFORMERS_CACHE, 'utf8'));
+        for (const a of reptyleActors) allActors[a.id] = a;
+        actorSites++;
+    } catch (e) { /* no reptyle performers cache */ }
 
     // Fallback: load old single-file caches if no per-site caches exist
     if (tagSites === 0) {
@@ -1993,6 +2078,18 @@ function rebuildMergedCaches() {
         const stashActors = JSON.parse(fs.readFileSync(STASH_PERFORMERS_CACHE, 'utf8'));
         for (const a of stashActors) allActors[a.id] = a;
     } catch (e) { /* no stash performers cache */ }
+    // Reptyle caches (offset IDs already applied)
+    try {
+        const reptyleTags = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
+        for (const cat of Object.keys(reptyleTags)) {
+            if (!allTags[cat]) allTags[cat] = {};
+            for (const t of reptyleTags[cat]) allTags[cat][t.id] = t;
+        }
+    } catch (e) { /* no reptyle tags cache */ }
+    try {
+        const reptyleActors = JSON.parse(fs.readFileSync(REPTYLE_PERFORMERS_CACHE, 'utf8'));
+        for (const a of reptyleActors) allActors[a.id] = a;
+    } catch (e) { /* no reptyle performers cache */ }
 
     if (Object.keys(allTags).length > 0) {
         _tagCache = {};
@@ -2128,6 +2225,218 @@ async function refreshStashStudios() {
     console.log('[Cache] Refreshed Stash studios: ' + studios.length);
 }
 
+// ── Reptyle API helpers & cache refresh ────────────────────────────────────────
+// Two API systems: ElasticSearch (ma-store.reptyle.com) for content discovery,
+// REST (api2.reptyle.com/api/v1) for playback URLs. Auth is Bearer token.
+
+// Simple string hash for generating stable tag IDs from tag name strings
+function reptyleStringHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
+}
+
+async function fetchReptyleElastic(path, auth, body) {
+    const url = 'https://ma-store.reptyle.com' + path;
+    const opts = {
+        method: body ? 'POST' : 'GET',
+        headers: {
+            'Authorization': 'Bearer ' + auth.accessToken,
+            'Content-Type': 'application/json',
+            'User-Agent': BROWSER_UA,
+        },
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(url, opts);
+    if (!resp.ok) throw new Error('Reptyle ES error: ' + resp.status);
+    return resp.json();
+}
+
+async function fetchReptyleApi(apiPath, auth) {
+    const url = 'https://api2.reptyle.com/api/v1' + apiPath;
+    const resp = await fetch(url, {
+        headers: {
+            'Authorization': 'Bearer ' + auth.accessToken,
+            'User-Agent': BROWSER_UA,
+        },
+    });
+    if (!resp.ok) throw new Error('Reptyle API error: ' + resp.status);
+    return resp.json();
+}
+
+// Extract best stream URL from Reptyle /movie/:id/watch response
+// Response wraps in {status, data, message} — actual streams are in data
+function extractBestReptyleUrl(watchResp) {
+    const d = watchResp.data || watchResp; // Handle both wrapped and raw
+    // Priority: stream2.av1.hls > stream2.vp9.hls > stream2.avc.hls > stream (legacy)
+    const s2 = d.stream2;
+    if (s2) {
+        if (s2.av1 && s2.av1.hls) return s2.av1.hls;
+        if (s2.vp9 && s2.vp9.hls) return s2.vp9.hls;
+        if (s2.avc && s2.avc.hls) return s2.avc.hls;
+    }
+    // Legacy fallback
+    if (d.stream) return d.stream;
+    return null;
+}
+
+async function scrapeReptyleScenes(count, auth, tagNames, actorIds) {
+    // Build ES query string
+    let q = 'type:movies AND isUpcoming:false';
+    if (tagNames && tagNames.length > 0) {
+        for (const name of tagNames) q += ' AND tags:"' + name.replace(/"/g, '\\"') + '"';
+    }
+    if (actorIds && actorIds.length > 0) {
+        // Un-offset actor IDs to get real Reptyle IDs
+        const realIds = actorIds.map(id => id - REPTYLE_ACTOR_OFFSET);
+        for (const id of realIds) q += ' AND models.id:' + id;
+    }
+
+    // Discover total count first for random offset
+    const countResp = await fetchReptyleElastic('/ts_index/_search?size=0&q=' + encodeURIComponent(q), auth);
+    const total = countResp.hits?.total?.value || countResp.hits?.total || 0;
+    console.log('[Reptyle] ES query: "' + q + '" → ' + total + ' results');
+    const maxOffset = Math.max(0, total - count);
+    const offset = maxOffset > 0 ? Math.floor(Math.random() * maxOffset) : 0;
+
+    // Fetch movies
+    const esResp = await fetchReptyleElastic(
+        '/ts_index/_search?q=' + encodeURIComponent(q) +
+        '&size=' + (count * 2) + '&from=' + offset + '&sort=publishedDate:desc',
+        auth
+    );
+    const hits = esResp.hits?.hits || [];
+    console.log('[Reptyle] ES returned ' + hits.length + ' hits (offset=' + offset + ')');
+    if (hits.length === 0) return [];
+
+    // Get stream URLs in parallel (limit to count * 1.5 to avoid excessive API calls)
+    const candidates = hits.slice(0, Math.ceil(count * 1.5));
+    const watchResults = await Promise.allSettled(
+        candidates.map(hit =>
+            fetchReptyleApi('/movie/' + hit._source.id + '/watch', auth)
+                .then(watch => ({ hit, watch }))
+        )
+    );
+
+    let watchOk = 0, watchFail = 0, urlFail = 0;
+    const streams = [];
+    for (const r of watchResults) {
+        if (r.status !== 'fulfilled') { watchFail++; continue; }
+        const { hit, watch } = r.value;
+        watchOk++;
+        const src = hit._source;
+        const url = extractBestReptyleUrl(watch);
+        if (!url) { urlFail++; continue; }
+
+        const tags = Array.isArray(src.tags) ? [...src.tags] : [];
+        if (!tags.includes('Reptyle')) tags.unshift('Reptyle');
+        const actors = (src.models || []).map(m => m.name);
+        streams.push({
+            url,
+            title: src.title || 'Reptyle Scene',
+            tags,
+            actors,
+            category: src.site?.siteName || 'Reptyle',
+            site: 'Reptyle',
+            thumbnail: src.thumb || null,
+        });
+        if (streams.length >= count) break;
+    }
+    console.log('[Reptyle] Watch API: ' + watchOk + ' ok, ' + watchFail + ' failed, ' + urlFail + ' no URL → ' + streams.length + ' streams');
+
+    return streams;
+}
+
+// Reptyle tag names are plain strings — hash to stable IDs with offset
+async function refreshReptyleTagsFromApi(auth) {
+    // Primary: try /tags API, then fall back to extracting from ES movie results
+    let tags = [];
+    try {
+        const tagResp = await fetchReptyleApi('/tags', auth);
+        // Handle both array and object responses ({tags: [...]}, {data: [...]}, etc.)
+        const tagList = Array.isArray(tagResp) ? tagResp
+            : Array.isArray(tagResp?.tags) ? tagResp.tags
+            : Array.isArray(tagResp?.data) ? tagResp.data
+            : [];
+        tags = tagList
+            .filter(t => typeof t === 'string' || (t && t.name))
+            .map(t => {
+                const name = typeof t === 'string' ? t : t.name;
+                return { id: reptyleStringHash(name) + REPTYLE_TAG_OFFSET, name };
+            });
+    } catch (e) {
+        console.log('[Cache] Reptyle /tags API failed (' + e.message + '), falling back to ES extraction');
+    }
+    // Fallback: extract from ES movie results if /tags returned nothing
+    if (tags.length === 0) {
+        try {
+            const esResp = await fetchReptyleElastic(
+                '/ts_index/_search?q=' + encodeURIComponent('type:movies AND isUpcoming:false') +
+                '&size=200&sort=publishedDate:desc',
+                auth
+            );
+            const tagSet = {};
+            for (const hit of (esResp.hits?.hits || [])) {
+                for (const tag of (hit._source?.tags || [])) {
+                    if (!tagSet[tag]) tagSet[tag] = { id: reptyleStringHash(tag) + REPTYLE_TAG_OFFSET, name: tag };
+                }
+            }
+            tags = Object.values(tagSet);
+        } catch (e2) {
+            console.log('[Cache] Reptyle ES tag extraction also failed:', e2.message);
+        }
+    }
+    if (tags.length > 0) {
+        tags.sort((a, b) => a.name.localeCompare(b.name));
+        saveCacheToDisk(REPTYLE_TAGS_CACHE, { Reptyle: tags });
+        console.log('[Cache] Refreshed Reptyle tags: ' + tags.length);
+        rebuildMergedCaches();
+    } else {
+        console.log('[Cache] Reptyle tags: none found (API may not support tag listing)');
+    }
+}
+
+async function refreshReptyleActorsFromApi(auth) {
+    try {
+        const esResp = await fetchReptyleElastic(
+            '/ts_index/_search?q=' + encodeURIComponent('type:models') +
+            '&size=500&sort=followCount:desc',
+            auth
+        );
+        const actors = (esResp.hits?.hits || [])
+            .filter(h => h._source && h._source.id && h._source.name)
+            .map(h => ({
+                id: h._source.id + REPTYLE_ACTOR_OFFSET,
+                name: h._source.name,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        if (actors.length > 0) {
+            saveCacheToDisk(REPTYLE_PERFORMERS_CACHE, actors);
+            console.log('[Cache] Refreshed Reptyle performers: ' + actors.length);
+            rebuildMergedCaches();
+        }
+    } catch (e) {
+        console.log('[Cache] Reptyle performer refresh failed:', e.message);
+    }
+}
+
+// Reverse-map a Reptyle offset tag ID back to the tag name string (for ES query filtering)
+function reptyleTagIdToName(tagId) {
+    // Read cached tags and find by ID
+    try {
+        const cached = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
+        for (const tags of Object.values(cached)) {
+            for (const t of tags) {
+                if (t.id === tagId) return t.name;
+            }
+        }
+    } catch (e) { /* no cache */ }
+    return null;
+}
+
 // Fetch collections (sub-brands) for a site from /v1/collections API
 async function refreshCollectionsFromApi(auth) {
     const siteName = auth._site || 'unknown';
@@ -2236,6 +2545,16 @@ async function backgroundCatalogRefresh() {
         } catch (e) {
             console.log('[Cache] Stash refresh failed:', e.message);
         }
+        // Reptyle refresh (independent of Aylo/Stash)
+        try {
+            const reptyleAuth = await getReptyleAuth();
+            if (reptyleAuth.accessToken) {
+                await Promise.allSettled([refreshReptyleTagsFromApi(reptyleAuth), refreshReptyleActorsFromApi(reptyleAuth)]);
+                console.log('[Cache] Reptyle background refresh complete');
+            }
+        } catch (e) {
+            console.log('[Cache] Reptyle refresh failed:', e.message);
+        }
     } catch (e) {
         console.log('[Cache] Background refresh failed:', e.message);
     }
@@ -2262,20 +2581,49 @@ const AUTH_KEEPALIVE_INTERVAL = 45 * 60 * 1000; // 45 minutes
 async function authKeepalive() {
     const seen = new Set();
     let refreshed = 0, failed = 0;
+    // Aylo sites — clear cache only AFTER successful refresh to avoid
+    // destroying a still-valid token when the refresh_token is expired
     for (const siteName of Object.keys(AYLO_SITES)) {
         const host = AYLO_SITES[siteName].cookieHost;
         if (seen.has(host)) continue;
         seen.add(host);
         try {
-            // Clear cached token for this host to force a fresh refresh
+            const oldToken = _refreshedTokens[host];
             delete _refreshedTokens[host];
             delete _cookieCache[host];
             const auth = await getAyloAuth(siteName);
-            if (auth.accessToken) { refreshed++; } else { failed++; }
+            if (auth.accessToken) {
+                refreshed++;
+            } else {
+                // Refresh failed — restore the old token if it was still valid
+                if (oldToken && !isJwtExpired(oldToken)) {
+                    _refreshedTokens[host] = oldToken;
+                    console.log('[Auth:keepalive] ' + siteName + ' refresh failed, kept existing token');
+                }
+                failed++;
+            }
         } catch (e) {
             console.error('[Auth:keepalive] Error refreshing ' + siteName + ':', e.message);
             failed++;
         }
+    }
+    // Reptyle — same safe pattern
+    try {
+        const oldReptyle = _reptyleAccessToken;
+        _reptyleAccessToken = null;
+        const reptyle = await getReptyleAuth();
+        if (reptyle.accessToken) {
+            refreshed++;
+        } else {
+            if (oldReptyle && !isJwtExpired(oldReptyle)) {
+                _reptyleAccessToken = oldReptyle;
+                console.log('[Auth:keepalive] Reptyle refresh failed, kept existing token');
+            }
+            failed++;
+        }
+    } catch (e) {
+        console.error('[Auth:keepalive] Error refreshing reptyle:', e.message);
+        failed++;
     }
     if (refreshed > 0 || failed > 0) {
         console.log('[Auth:keepalive] Refreshed ' + refreshed + ' site(s)' + (failed > 0 ? ', ' + failed + ' failed' : ''));
@@ -4178,13 +4526,21 @@ const server = http.createServer(async (req, res) => {
                 error: auth.error || null
             };
         }
+        // Reptyle
+        _reptyleAccessToken = null;
+        const reptyleAuth = await getReptyleAuth();
+        results.reptyle = {
+            loggedIn: !!reptyleAuth.accessToken,
+            hasSession: !!getReptyleRefreshToken(),
+            error: reptyleAuth.error || null
+        };
         const loggedIn = Object.values(results).filter(r => r.loggedIn).length;
         console.log('[Auth] Refresh complete: ' + loggedIn + '/' + Object.keys(results).length + ' sites authenticated');
         jsonOk(res, { results, loggedIn, total: Object.keys(results).length });
         return;
     }
 
-    // GET /api/demo/auth-status - Check Aylo + Stash status
+    // GET /api/demo/auth-status - Check Aylo + Stash + Reptyle status
     if (pathname === '/api/demo/auth-status' && req.method === 'GET') {
         const aylo = {};
         for (const siteName of Object.keys(AYLO_SITES)) {
@@ -4195,6 +4551,12 @@ const server = http.createServer(async (req, res) => {
                 warning: auth.warning || auth.error || null
             };
         }
+        const reptyle = await getReptyleAuth();
+        const reptyleStatus = {
+            loggedIn: !!reptyle.accessToken,
+            hasSession: !!getReptyleRefreshToken(),
+            warning: reptyle.error || null
+        };
         const stash = await checkStashConnection();
         stash.url = STASH_CONFIG.url;
         const groups = {};
@@ -4202,7 +4564,7 @@ const server = http.createServer(async (req, res) => {
             groups[site] = gs.map(g => g.name);
         }
         // Backward compat: keep top-level 'brazzers' key pointing to brazzers status
-        jsonOk(res, { aylo, stash, groups, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
+        jsonOk(res, { aylo, reptyle: reptyleStatus, stash, groups, brazzers: aylo.brazzers || aylo[Object.keys(aylo)[0]] });
         return;
     }
 
@@ -4254,6 +4616,7 @@ const server = http.createServer(async (req, res) => {
             }
         }
         networkTags.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
+        networkTags.push({ id: REPTYLE_NETWORK_ID, name: 'Reptyle' });
         networkTags.sort((a, b) => a.name.localeCompare(b.name));
 
         // Stash studios as a separate category at the end
@@ -4366,19 +4729,25 @@ const server = http.createServer(async (req, res) => {
         if (source === 'brazzers') source = 'aylo';
 
         // Partition IDs by source:
-        //   Stash tags: >= STASH_TAG_OFFSET (100000)
-        //   Stash performers: >= STASH_PERFORMER_OFFSET (100000)
-        //   Stash studios: <= STASH_STUDIO_OFFSET (-1000), including -1000 itself (umbrella)
+        //   Reptyle tags: >= REPTYLE_TAG_OFFSET (200000)
+        //   Reptyle performers: >= REPTYLE_ACTOR_OFFSET (200000)
+        //   Reptyle network: REPTYLE_NETWORK_ID (-2000)
+        //   Stash tags: >= STASH_TAG_OFFSET (100000) && < REPTYLE_TAG_OFFSET
+        //   Stash performers: >= STASH_PERFORMER_OFFSET (100000) && < REPTYLE_ACTOR_OFFSET
+        //   Stash studios: <= STASH_STUDIO_OFFSET (-1000) && > REPTYLE_NETWORK_ID
         //   Aylo site filters: -1 to -99 (negative but above -1000)
         //   Aylo tags: positive < 100000
-        const stashTagIds = tagIdList.filter(id => id >= STASH_TAG_OFFSET);
-        const stashStudioIds = tagIdList.filter(id => id <= STASH_STUDIO_OFFSET);
-        const ayloTagIds = tagIdList.filter(id => id > STASH_STUDIO_OFFSET && id < STASH_TAG_OFFSET);
-        const stashActorIds = actorIdList.filter(id => id >= STASH_PERFORMER_OFFSET);
-        const ayloActorIds = actorIdList.filter(id => id < STASH_PERFORMER_OFFSET);
+        const reptyleTagIds = tagIdList.filter(id => id >= REPTYLE_TAG_OFFSET || id === REPTYLE_NETWORK_ID);
+        const stashTagIds = tagIdList.filter(id => id >= STASH_TAG_OFFSET && id < REPTYLE_TAG_OFFSET);
+        const stashStudioIds = tagIdList.filter(id => id <= STASH_STUDIO_OFFSET && id > REPTYLE_NETWORK_ID);
+        const ayloTagIds = tagIdList.filter(id => id > STASH_STUDIO_OFFSET && id < STASH_TAG_OFFSET && id !== REPTYLE_NETWORK_ID);
+        const reptyleActorIds = actorIdList.filter(id => id >= REPTYLE_ACTOR_OFFSET);
+        const stashActorIds = actorIdList.filter(id => id >= STASH_PERFORMER_OFFSET && id < REPTYLE_ACTOR_OFFSET);
+        const ayloActorIds = actorIdList.filter(id => id > 0 && id < STASH_PERFORMER_OFFSET);
 
         const hasStashFilters = stashTagIds.length > 0 || stashActorIds.length > 0 || stashStudioIds.length > 0;
         const hasAyloFilters = ayloTagIds.length > 0 || ayloActorIds.length > 0;
+        const hasReptyleFilters = reptyleTagIds.length > 0 || reptyleActorIds.length > 0;
 
         // Auto-detect: prefer Aylo if logged in, always include Stash if reachable
         if (source === 'auto') {
@@ -4386,36 +4755,83 @@ const server = http.createServer(async (req, res) => {
             source = auths.length > 0 ? 'aylo' : 'xhamster';
         }
 
+        // Explicit source=reptyle — query Reptyle only
+        if (source === 'reptyle') {
+            try {
+                const reptyleAuth = await getReptyleAuth();
+                if (!reptyleAuth.accessToken) {
+                    jsonError(res, 401, reptyleAuth.error || 'Reptyle login required');
+                    return;
+                }
+                // Resolve tag IDs to names (Reptyle ES uses string queries)
+                const tagNames = reptyleTagIds
+                    .filter(id => id !== REPTYLE_NETWORK_ID)
+                    .map(id => reptyleTagIdToName(id))
+                    .filter(Boolean);
+                const streams = await scrapeReptyleScenes(count, reptyleAuth, tagNames, reptyleActorIds);
+                console.log('[Demo] Reptyle: ' + streams.length + ' scenes');
+                jsonOk(res, { streams, source: 'reptyle', fetched: streams.length, failed: 0, authenticated: true });
+            } catch (err) {
+                console.error('[Demo] Reptyle error:', err.message);
+                jsonError(res, 500, 'Reptyle fetch failed: ' + err.message);
+            }
+            return;
+        }
+
         if (source === 'aylo' || source === 'auto') {
             try {
                 const results = [];
 
-                if (hasStashFilters && !hasAyloFilters) {
-                    // Only Stash filters — query Stash only
-                    const stashStreams = await scrapeStashScenes(count, stashTagIds, stashActorIds, stashStudioIds);
-                    results.push(...stashStreams);
-                } else if (hasAyloFilters && !hasStashFilters) {
-                    // Only Aylo filters — query Aylo only (existing behavior)
-                    const ayloStreams = await scrapeAyloScenes(count, ayloTagIds, ayloActorIds);
-                    results.push(...ayloStreams);
-                } else if (hasStashFilters && hasAyloFilters) {
-                    // Mixed filters — query both with their respective filters
-                    const [stashStreams, ayloStreams] = await Promise.allSettled([
-                        scrapeStashScenes(Math.ceil(count / 2), stashTagIds, stashActorIds, stashStudioIds),
-                        scrapeAyloScenes(Math.ceil(count / 2), ayloTagIds, ayloActorIds),
-                    ]);
-                    if (stashStreams.status === 'fulfilled') results.push(...stashStreams.value);
-                    if (ayloStreams.status === 'fulfilled') results.push(...ayloStreams.value);
+                // Determine which sources to query based on filter partitioning
+                const activeSources = [];
+                if (hasReptyleFilters && !hasAyloFilters && !hasStashFilters) {
+                    activeSources.push('reptyle');
+                } else if (hasStashFilters && !hasAyloFilters && !hasReptyleFilters) {
+                    activeSources.push('stash');
+                } else if (hasAyloFilters && !hasStashFilters && !hasReptyleFilters) {
+                    activeSources.push('aylo');
+                } else if (hasAyloFilters || hasStashFilters || hasReptyleFilters) {
+                    // Mixed filters — query each source that has filters
+                    if (hasAyloFilters) activeSources.push('aylo');
+                    if (hasStashFilters) activeSources.push('stash');
+                    if (hasReptyleFilters) activeSources.push('reptyle');
                 } else {
-                    // No filters — query both, split count, shuffle
-                    const stashCount = Math.ceil(count / 3);      // ~33% Stash
-                    const ayloCount = count - stashCount;          // ~67% Aylo
-                    const [stashStreams, ayloStreams] = await Promise.allSettled([
-                        scrapeStashScenes(stashCount),
-                        scrapeAyloScenes(ayloCount, [], []),
-                    ]);
-                    if (stashStreams.status === 'fulfilled') results.push(...stashStreams.value);
-                    if (ayloStreams.status === 'fulfilled') results.push(...ayloStreams.value);
+                    // No filters — query all available sources
+                    activeSources.push('aylo', 'stash', 'reptyle');
+                }
+
+                const perSource = Math.ceil(count / activeSources.length);
+                const promises = [];
+
+                if (activeSources.includes('stash')) {
+                    promises.push(
+                        scrapeStashScenes(activeSources.length === 1 ? count : perSource, stashTagIds, stashActorIds, stashStudioIds)
+                            .then(s => ({ source: 'stash', streams: s }))
+                    );
+                }
+                if (activeSources.includes('aylo')) {
+                    promises.push(
+                        scrapeAyloScenes(activeSources.length === 1 ? count : perSource, ayloTagIds, ayloActorIds)
+                            .then(s => ({ source: 'aylo', streams: s }))
+                    );
+                }
+                if (activeSources.includes('reptyle')) {
+                    const reptyleAuth = await getReptyleAuth();
+                    if (reptyleAuth.accessToken) {
+                        const tagNames = reptyleTagIds
+                            .filter(id => id !== REPTYLE_NETWORK_ID)
+                            .map(id => reptyleTagIdToName(id))
+                            .filter(Boolean);
+                        promises.push(
+                            scrapeReptyleScenes(activeSources.length === 1 ? count : perSource, reptyleAuth, tagNames, reptyleActorIds)
+                                .then(s => ({ source: 'reptyle', streams: s }))
+                        );
+                    }
+                }
+
+                const settled = await Promise.allSettled(promises);
+                for (const r of settled) {
+                    if (r.status === 'fulfilled') results.push(...r.value.streams);
                 }
 
                 // Shuffle merged results for variety

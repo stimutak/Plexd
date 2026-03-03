@@ -1494,6 +1494,197 @@ const PlexdStream = (function() {
         });
     }
 
+    // ── Projector Viewer (single pop-out for external display) ──
+    let projectorWindow = null;
+    let projectorStreamId = null;
+
+    /**
+     * Build self-contained HTML for the projector popup window.
+     * Minimal chrome — just a full-viewport video with HLS.js support
+     * and a postMessage listener for stream switching.
+     */
+    function buildProjectorHtml(url, startTime, title) {
+        return `<!DOCTYPE html>
+<html>
+<head>
+    <title>Plexd Projector${title ? ' — ' + title.replace(/[<>&"]/g, function(c) { return {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]; }) : ''}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
+        body:hover { cursor: default; }
+        body.idle { cursor: none; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        .title-overlay {
+            position: fixed; top: 0; left: 0; right: 0;
+            padding: 16px 24px; color: #fff; font: 18px/1.3 -apple-system, sans-serif;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+            opacity: 1; transition: opacity 0.5s; pointer-events: none; z-index: 10;
+        }
+        .title-overlay.hidden { opacity: 0; }
+    </style>
+</head>
+<body>
+    <div class="title-overlay" id="titleBar"></div>
+    <video id="video" autoplay></video>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"><\/script>
+    <script>
+        var video = document.getElementById('video');
+        var titleBar = document.getElementById('titleBar');
+        var hls = null;
+        var titleTimer = null;
+        var idleTimer = null;
+
+        function showTitle(text) {
+            titleBar.textContent = text || '';
+            titleBar.classList.remove('hidden');
+            clearTimeout(titleTimer);
+            titleTimer = setTimeout(function() { titleBar.classList.add('hidden'); }, 3000);
+        }
+
+        function loadVideo(url, time, title) {
+            if (hls) { hls.destroy(); hls = null; }
+            if (title) document.title = 'Plexd Projector — ' + title;
+            showTitle(title || '');
+
+            if (url && url.includes('.m3u8') && Hls.isSupported()) {
+                hls = new Hls({ capLevelToPlayerSize: false });
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function(e, data) {
+                    if (data.levels && data.levels.length > 0) hls.currentLevel = data.levels.length - 1;
+                    if (time) video.currentTime = time;
+                    video.play();
+                });
+            } else if (url) {
+                video.src = url;
+                video.addEventListener('loadedmetadata', function onMeta() {
+                    video.removeEventListener('loadedmetadata', onMeta);
+                    if (time) video.currentTime = time;
+                    video.play();
+                });
+            }
+        }
+
+        // Listen for commands from the main Plexd window (origin-checked)
+        var allowedOrigin = ${JSON.stringify(window.location.origin)};
+        window.addEventListener('message', function(e) {
+            if (e.origin !== allowedOrigin) return;
+            if (e.data && e.data.cmd === 'load') {
+                loadVideo(e.data.url, e.data.time, e.data.title);
+            }
+        });
+
+        // Double-click toggles native fullscreen (for projector display)
+        document.addEventListener('dblclick', function() {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                document.documentElement.requestFullscreen();
+            }
+        });
+
+        // Auto-hide cursor after 3s idle
+        document.addEventListener('mousemove', function() {
+            document.body.classList.remove('idle');
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(function() { document.body.classList.add('idle'); }, 3000);
+        });
+
+        // Load initial video
+        loadVideo(${JSON.stringify(url)}, ${startTime || 0}, ${JSON.stringify(title || '')});
+    <\/script>
+</body>
+</html>`;
+    }
+
+    /**
+     * Open (or reuse) the projector viewer window showing the given stream.
+     * The projector is a single shared popup — switching streams sends a
+     * postMessage to the existing window rather than opening a new one.
+     */
+    function openProjectorViewer(streamId) {
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const url = stream.sourceUrl || stream.url;
+        const currentTime = (stream.video && stream.video.currentTime) || 0;
+        const title = stream.title || stream.fileName || '';
+
+        // Reuse existing window if still open
+        if (projectorWindow && !projectorWindow.closed) {
+            updateProjectorStream(streamId);
+            return;
+        }
+
+        // Open at full screen size for easy drag-to-projector
+        const screenW = window.screen.availWidth;
+        const screenH = window.screen.availHeight;
+        const html = buildProjectorHtml(url, currentTime, title);
+
+        projectorWindow = window.open('', 'plexd-projector',
+            `width=${screenW},height=${screenH},left=0,top=0,resizable=yes`);
+
+        if (projectorWindow) {
+            try {
+                projectorWindow.document.write(html);
+                projectorWindow.document.close();
+                projectorStreamId = streamId;
+            } catch (e) {
+                // Popup was blocked or restricted — clean up
+                console.warn('Projector popup blocked:', e);
+                projectorWindow = null;
+                projectorStreamId = null;
+            }
+        }
+    }
+
+    /**
+     * Send a new stream URL to the already-open projector window.
+     */
+    function updateProjectorStream(streamId) {
+        if (!projectorWindow || projectorWindow.closed) {
+            projectorWindow = null;
+            projectorStreamId = null;
+            return;
+        }
+        const stream = streams.get(streamId);
+        if (!stream) return;
+
+        const url = stream.sourceUrl || stream.url;
+        const currentTime = (stream.video && stream.video.currentTime) || 0;
+        const title = stream.title || stream.fileName || '';
+
+        projectorWindow.postMessage({
+            cmd: 'load',
+            url: url,
+            time: currentTime,
+            title: title
+        }, window.location.origin);
+        projectorStreamId = streamId;
+    }
+
+    /**
+     * Close the projector viewer window.
+     */
+    function closeProjectorViewer() {
+        if (projectorWindow && !projectorWindow.closed) {
+            projectorWindow.close();
+        }
+        projectorWindow = null;
+        projectorStreamId = null;
+    }
+
+    /**
+     * Check if the projector viewer is currently open.
+     */
+    function isProjectorOpen() {
+        if (projectorWindow && projectorWindow.closed) {
+            projectorWindow = null;
+            projectorStreamId = null;
+        }
+        return projectorWindow !== null;
+    }
+
     /**
      * Toggle stream info overlay for a single stream
      */
@@ -2290,7 +2481,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlL;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsSyYß=`÷≤≥+\-_\[\]{}\\|]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlLfF;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsSyYß=`÷≤≥+\-_\[\]{}\\|]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -2326,12 +2517,7 @@ const PlexdStream = (function() {
                     break;
                 // Escape is now handled via propagateKeys dispatch to document
                 // where app.js handles Bug Eye/Mosaic priority before fullscreen exit
-                case 'f':
-                case 'F':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    toggleTrueFullscreen(stream.id);
-                    break;
+                // Note: f/F handled by propagateKeys (dispatched to app.js for fullscreen + Shift+F projector)
             }
         });
 
@@ -2739,6 +2925,11 @@ const PlexdStream = (function() {
 
         // Unregister
         streams.delete(streamId);
+
+        // Clear projector tracking if this was the projected stream
+        if (projectorStreamId === streamId) {
+            projectorStreamId = null;
+        }
 
         // If we were in fullscreen and have another stream, enter fullscreen on it
         if (wasFullscreen && nextStreamForFullscreen) {
@@ -3158,6 +3349,11 @@ const PlexdStream = (function() {
                         updateMuteButton(stream);
                     }
                 }
+            }
+
+            // Projector auto-follow: update projector window when selection changes
+            if (streamId && streamId !== previousStreamId && isProjectorOpen()) {
+                updateProjectorStream(streamId);
             }
         }
     }
@@ -5048,7 +5244,12 @@ const PlexdStream = (function() {
         // Moment dots on seek bars
         updateMomentDots,
         // URL proxying (for app.js fallback video paths)
-        getProxiedHlsUrl
+        getProxiedHlsUrl,
+        // Projector viewer (external display)
+        openProjectorViewer,
+        updateProjectorStream,
+        closeProjectorViewer,
+        isProjectorOpen
     };
 })();
 

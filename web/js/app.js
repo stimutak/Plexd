@@ -2658,6 +2658,24 @@ const PlexdApp = (function() {
             if (isTypingTarget(e.target)) return;
 
             if (e.key === 'f' || e.key === 'F') {
+                // Shift+F: Toggle projector viewer (external display pop-out)
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    if (PlexdStream.isProjectorOpen()) {
+                        PlexdStream.closeProjectorViewer();
+                        showMessage('Projector closed', 'info');
+                    } else {
+                        var target = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                        if (target) {
+                            PlexdStream.openProjectorViewer(target.id);
+                            showMessage('Projector opened — drag to external display, double-click for fullscreen', 'info');
+                        } else {
+                            showMessage('Select a stream first', 'warning');
+                        }
+                    }
+                    return;
+                }
+
                 // If Sets panel is open, F opens files modal (handled by handleSetsPanelKeyboard)
                 const setsPanel = document.getElementById('saved-panel');
                 if (setsPanel && setsPanel.classList.contains('plexd-panel-open')) {
@@ -2951,6 +2969,10 @@ const PlexdApp = (function() {
                         s.wrapper.style.width = '';
                         s.wrapper.style.height = '';
                         s.wrapper.style.display = '';
+                        s.wrapper.style.zIndex = '';
+                        s.wrapper.style.opacity = '';
+                        s.wrapper.style.visibility = '';
+                        s.wrapper.style.pointerEvents = '';
                     }
                 });
                 PlexdStream.setGridCols(Math.ceil(Math.sqrt(streamsToShow.length)));
@@ -3067,7 +3089,7 @@ const PlexdApp = (function() {
 
         // Update efficiency display if element exists
         const efficiencyEl = document.getElementById('layout-efficiency');
-        if (efficiencyEl) {
+        if (efficiencyEl && layout.efficiency != null) {
             efficiencyEl.textContent = Math.round(layout.efficiency * 100) + '%';
         }
 
@@ -11624,6 +11646,7 @@ const PlexdApp = (function() {
                         <div class="plexd-shortcut"><kbd>Z</kbd> / <kbd>Enter</kbd> Focus/zoom stream</div>
                         <div class="plexd-shortcut"><kbd>Esc</kbd> Exit focus / back</div>
                         <div class="plexd-shortcut"><kbd>F</kbd> Toggle fullscreen</div>
+                        <div class="plexd-shortcut"><kbd>Shift+F</kbd> Projector (external display)</div>
                     </div>
                     <div class="plexd-shortcuts-section">
                         <h4>Playback</h4>

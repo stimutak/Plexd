@@ -3703,6 +3703,10 @@ const PlexdApp = (function() {
     }
 
     function applyTheaterScene() {
+        if (useDensitySystem) {
+            applyTheaterSceneDensity();
+            return;
+        }
         if (coverflowMode) toggleCoverflowMode();
 
         // Clear lineup weights when switching scenes (will be re-set if entering lineup)
@@ -3815,6 +3819,75 @@ const PlexdApp = (function() {
         updateLayout();
     }
 
+    function applyTheaterSceneDensity() {
+        if (coverflowMode) toggleCoverflowMode();
+        window._plexdLineupWeights = null;
+
+        if (theaterScene !== 'casting' && faceDetectionActive) stopFaceDetection();
+        if (theaterScene !== 'casting') {
+            PlexdStream.getAllStreams().forEach(function(s) {
+                if (s.wrapper) s.wrapper.classList.remove('starred-glow', 'low-rated');
+            });
+        }
+
+        switch (theaterScene) {
+            case 'casting':
+                setViewMode('all');
+                setDensity(5); setStyleVariant(0); // Mosaic
+                if (!faceDetectionActive) startFaceDetection();
+                updateCastingCallVisuals();
+                break;
+            case 'lineup':
+                {
+                    var favCount = PlexdStream.getFavoriteCount();
+                    setViewMode(favCount > 0 ? 'favorites' : 'all');
+                }
+                setDensity(2); setStyleVariant(0); // Grid
+                break;
+            case 'stage':
+                setDensity(1); setStyleVariant(0); // Spotlight
+                if (!stageHeroId || !PlexdStream.getStream(stageHeroId)) {
+                    var streams = getFilteredStreams();
+                    stageHeroId = streams.length > 0 ? streams[0].id : null;
+                }
+                if (stageHeroId) PlexdStream.selectStream(stageHeroId);
+                updateStageMomentStrip();
+                break;
+            case 'climax':
+                applyClimaxSubModeDensity();
+                return;
+            case 'encore':
+                showEncoreView();
+                return;
+        }
+
+        updateDensityClasses();
+        updateModeIndicator();
+        updateLayout();
+    }
+
+    function applyClimaxSubModeDensity() {
+        stopAutoRotate();
+        switch (climaxSubMode) {
+            case 0: // Tight Wall -> Fill crop
+                setDensity(3); setStyleVariant(0);
+                break;
+            case 1: // Auto-Rotate Hero -> Spotlight
+                setDensity(1); setStyleVariant(0);
+                startAutoRotate();
+                break;
+            case 2: // Collage -> Fill skyline
+                setDensity(3); setStyleVariant(1);
+                break;
+            case 3: // Single Focus -> Focused
+                setDensity(0);
+                break;
+        }
+        updateDensityClasses();
+        updateModeIndicator();
+        updateLayout();
+    }
+
     function updateModeIndicator() {
         const el = document.getElementById('mode-indicator');
         if (!el) return;
@@ -3829,6 +3902,19 @@ const PlexdApp = (function() {
             badge.className = 'badge badge-scene';
             badge.textContent = sceneNames[theaterScene] || theaterScene;
             el.appendChild(badge);
+        } else if (useDensitySystem) {
+            // Density mode indicator
+            var densityBadge = document.createElement('span');
+            densityBadge.className = 'badge badge-density';
+            densityBadge.textContent = getDensityLabel();
+            el.appendChild(densityBadge);
+
+            if (viewMode !== 'all') {
+                var filterBadge = document.createElement('span');
+                filterBadge.className = 'badge';
+                filterBadge.textContent = viewMode === 'favorites' ? 'FAV' : 'R' + viewMode;
+                el.appendChild(filterBadge);
+            }
         } else {
             // Always show ADV badge so user knows they're in Advanced mode
             const advBadge = document.createElement('span');

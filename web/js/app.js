@@ -657,13 +657,13 @@ const PlexdApp = (function() {
 
     const DENSITY_NAMES = ['Fullscreen', 'Focused', 'Spotlight', 'Grid', 'Fill', 'Strips', 'Mosaic'];
     const DENSITY_VARIANT_NAMES = {
-        '-1': [['Fullscreen']],
-        '0':  [['Focused']],
-        '1':  [['Hero + Side', 'Hero + Bottom']],
-        '2':  [['Even Grid', 'Z-Depth', 'Content Visible']],
-        '3':  [['Crop Tiles', 'Skyline', 'Masonry']],
-        '4':  [['Vertical Columns', 'Horizontal Rows']],
-        '5':  [['Mosaic', 'Bug Eye']]
+        '-1': ['Fullscreen'],
+        '0':  ['Focused'],
+        '1':  ['Hero + Side', 'Hero + Bottom'],
+        '2':  ['Even Grid', 'Z-Depth', 'Content Visible'],
+        '3':  ['Crop Tiles', 'Skyline', 'Masonry'],
+        '4':  ['Vertical Columns', 'Horizontal Rows'],
+        '5':  ['Mosaic', 'Bug Eye']
     };
     // Max variant index per level (0-indexed)
     const DENSITY_MAX_VARIANT = { '-1': 0, '0': 0, '1': 1, '2': 2, '3': 2, '4': 1, '5': 1 };
@@ -700,6 +700,13 @@ const PlexdApp = (function() {
         // Handle focused mode transitions
         if (level === 0) {
             var selected = PlexdStream.getSelectedStream();
+            if (!selected) {
+                var visible = getFilteredStreams();
+                if (visible.length > 0) {
+                    PlexdStream.selectStream(visible[0].id);
+                    selected = visible[0];
+                }
+            }
             if (selected) PlexdStream.enterFocusedMode(selected.id);
         } else if (prevDensityLevel === 0) {
             var fsMode = PlexdStream.getFullscreenMode();
@@ -760,8 +767,8 @@ const PlexdApp = (function() {
     function getDensityLabel() {
         var levelName = DENSITY_NAMES[densityLevel + 1] || 'Unknown';
         var variants = DENSITY_VARIANT_NAMES[String(densityLevel)];
-        if (variants && variants[0] && variants[0][styleVariant] && styleVariant > 0) {
-            return levelName + ' > ' + variants[0][styleVariant];
+        if (variants && variants[styleVariant] && styleVariant > 0) {
+            return levelName + ' > ' + variants[styleVariant];
         }
         return levelName;
     }
@@ -824,6 +831,15 @@ const PlexdApp = (function() {
         if (bugEyeMode) toggleBugEyeMode(true);
         if (mosaicMode) toggleMosaicMode(true);
 
+        // Exit fullscreen/focused if density was at those levels
+        if (densityLevel === -1 && document.fullscreenElement) {
+            document.exitFullscreen();
+        }
+        if (densityLevel === 0) {
+            var fsMode = PlexdStream.getFullscreenMode();
+            if (fsMode === 'browser-fill') PlexdStream.exitFocusedMode();
+        }
+
         setTetrisMode(0);
         setWallMode(0);
         coverflowMode = false;
@@ -831,7 +847,12 @@ const PlexdApp = (function() {
         switch (densityLevel) {
             case 1: setWallMode(3); break;
             case 2:
-                if (styleVariant === 2) setTetrisMode(4);
+                if (styleVariant === 1) {
+                    coverflowMode = true;
+                    window._plexdCoverflowMode = true;
+                    var app = document.querySelector('.plexd-app');
+                    if (app) app.classList.add('coverflow-mode');
+                } else if (styleVariant === 2) setTetrisMode(4);
                 break;
             case 3:
                 if (styleVariant === 0) setWallMode(2);
@@ -846,7 +867,7 @@ const PlexdApp = (function() {
         updateWallModeClasses();
         updateTetrisModeClasses();
         var coverflowBtn = document.getElementById('coverflow-btn');
-        if (coverflowBtn) coverflowBtn.classList.remove('active');
+        if (coverflowBtn) coverflowBtn.classList.toggle('active', coverflowMode);
     }
 
     // --- Density System: Key Handler ---
@@ -870,9 +891,9 @@ const PlexdApp = (function() {
                     return true;
                 }
                 return false;
-            case 'y':
             case 'Y':
-                if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                // Shift+Y cycles style variant (plain Y stays as performers panel toggle)
+                if (e.shiftKey && !e.metaKey && !e.ctrlKey) {
                     e.preventDefault();
                     cycleStyleVariant();
                     return true;
@@ -899,6 +920,17 @@ const PlexdApp = (function() {
                 return false;
         }
     }
+
+    // Sync density level when browser exits fullscreen (e.g. user presses Escape)
+    document.addEventListener('fullscreenchange', function() {
+        if (!document.fullscreenElement && useDensitySystem && densityLevel === -1) {
+            setDensityLevel(prevDensityLevel !== -1 ? prevDensityLevel : 2);
+            setStyleVariant(0);
+            updateDensityClasses();
+            updateModeIndicator();
+            updateLayout();
+        }
+    });
 
     // Header visibility (starts hidden)
     let headerVisible = false;
@@ -2957,7 +2989,9 @@ const PlexdApp = (function() {
 
             if (result.type === 'overlay') {
                 if (result.mode === 'bugeye' && !bugEyeMode) {
-                    toggleBugEyeMode();
+                    // Only attempt Bug Eye if there's a target stream
+                    var bugTarget = PlexdStream.getFullscreenStream() || PlexdStream.getSelectedStream();
+                    if (bugTarget) toggleBugEyeMode();
                 }
                 return;
             } else if (result.type === 'mosaic-grid') {
@@ -3716,6 +3750,12 @@ const PlexdApp = (function() {
     }
 
     function detectCurrentScene() {
+        if (useDensitySystem) {
+            if (densityLevel <= 1) return 'stage'; // Fullscreen/Focused/Spotlight
+            if (densityLevel >= 3) return 'climax'; // Fill/Strips/Mosaic
+            if (viewMode === 'favorites' || (typeof viewMode === 'number' && viewMode >= 5)) return 'lineup';
+            return 'casting'; // Grid (level 2) default
+        }
         const mode = PlexdStream.getFullscreenMode();
         if (mode === 'true-focused' || mode === 'browser-fill') return 'stage';
         if (wallMode === 3) return 'stage'; // Spotlight = Stage
@@ -3855,7 +3895,7 @@ const PlexdApp = (function() {
         switch (theaterScene) {
             case 'casting':
                 setViewMode('all');
-                setDensity(5); setStyleVariant(0); // Mosaic
+                setStyleVariant(0); setDensity(5); // Mosaic
                 if (!faceDetectionActive) startFaceDetection();
                 updateCastingCallVisuals();
                 break;
@@ -3864,10 +3904,10 @@ const PlexdApp = (function() {
                     var favCount = PlexdStream.getFavoriteCount();
                     setViewMode(favCount > 0 ? 'favorites' : 'all');
                 }
-                setDensity(2); setStyleVariant(0); // Grid
+                setStyleVariant(0); setDensity(2); // Grid
                 break;
             case 'stage':
-                setDensity(1); setStyleVariant(0); // Spotlight
+                setStyleVariant(0); setDensity(1); // Spotlight
                 if (!stageHeroId || !PlexdStream.getStream(stageHeroId)) {
                     var streams = getFilteredStreams();
                     stageHeroId = streams.length > 0 ? streams[0].id : null;
@@ -3883,6 +3923,7 @@ const PlexdApp = (function() {
                 return;
         }
 
+        // Ensure layout updates even when setDensity() was a no-op (same level, different variant)
         updateDensityClasses();
         updateModeIndicator();
         updateLayout();
@@ -3890,21 +3931,29 @@ const PlexdApp = (function() {
 
     function applyClimaxSubModeDensity() {
         stopAutoRotate();
+        // Use setDensity for level+variant changes so focused/fullscreen transitions are handled.
+        // For same-level variant changes, set variant BEFORE setDensity to avoid the
+        // variant-reset-then-layout-with-wrong-variant race.
         switch (climaxSubMode) {
-            case 0: // Tight Wall -> Fill crop
-                setDensity(3); setStyleVariant(0);
+            case 0: // Tight Wall -> Fill crop (level 3 variant 0)
+                setStyleVariant(0);
+                setDensity(3);
                 break;
-            case 1: // Auto-Rotate Hero -> Spotlight
-                setDensity(1); setStyleVariant(0);
+            case 1: // Auto-Rotate Hero -> Spotlight (level 1 variant 0)
+                setStyleVariant(0);
+                setDensity(1);
                 startAutoRotate();
                 break;
-            case 2: // Collage -> Fill skyline
-                setDensity(3); setStyleVariant(1);
+            case 2: // Collage -> Fill skyline (level 3 variant 1)
+                setStyleVariant(1);
+                setDensity(3);
                 break;
-            case 3: // Single Focus -> Focused
+            case 3: // Single Focus -> Focused (level 0)
+                setStyleVariant(0);
                 setDensity(0);
                 break;
         }
+        // Ensure layout updates even when setDensity was a no-op (same level)
         updateDensityClasses();
         updateModeIndicator();
         updateLayout();
@@ -8809,8 +8858,8 @@ const PlexdApp = (function() {
                         // If we were in Climax Single Focus, fall back to Tight Wall (submode 0)
                         if (theaterMode && theaterScene === 'climax' && climaxSubMode === 3) {
                             climaxSubMode = 0;
-                            applyClimaxSubMode();
-                            updateLayout();
+                            if (useDensitySystem) applyClimaxSubModeDensity();
+                            else applyClimaxSubMode();
                         }
                         if (inputEl) inputEl.blur();
                         break;
@@ -8959,14 +9008,16 @@ const PlexdApp = (function() {
                 // Theater Climax: E cycles sub-mode
                 if (theaterMode && theaterScene === 'climax') {
                     climaxSubMode = (climaxSubMode + 1) % 4;
-                    applyClimaxSubMode();
+                    if (useDensitySystem) applyClimaxSubModeDensity();
+                    else applyClimaxSubMode();
                     showMessage(getSceneName('climax'), 'info');
                 }
                 break;
             case 'E':
                 if (theaterMode && theaterScene === 'climax') {
                     climaxSubMode = (climaxSubMode + 3) % 4; // reverse
-                    applyClimaxSubMode();
+                    if (useDensitySystem) applyClimaxSubModeDensity();
+                    else applyClimaxSubMode();
                     showMessage(getSceneName('climax'), 'info');
                 }
                 break;

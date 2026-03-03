@@ -2205,15 +2205,12 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Grid variant 2: Content-visible — standard grid with contentVisible flag.
-     * Uses contain fit (no cropping) so all video content is visible.
+     * Grid variant 2: Content-visible — standard grid with contain fit.
+     * No cropping so all video content is visible (styled via density CSS classes).
      */
     function densityGridContentVisible(container, streams) {
         var layout = calculateLayout(container, streams);
         layout.mode = 'density-grid-content-visible';
-        for (var i = 0; i < layout.cells.length; i++) {
-            layout.cells[i].contentVisible = true;
-        }
         return layout;
     }
 

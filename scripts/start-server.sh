@@ -42,9 +42,9 @@ if [ -n "$pids" ]; then
     echo -e "${GREEN}Port $PORT is free${NC}"
 fi
 
-# 2. Start server
+# 2. Start server with --watch for auto-reload on code changes
 cd "$PROJECT_DIR"
-node server.js > "$LOG" 2>&1 &
+node --watch server.js > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "Starting server (PID: $SERVER_PID)..."
 

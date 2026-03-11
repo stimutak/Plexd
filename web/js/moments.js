@@ -404,9 +404,9 @@ const PlexdMoments = (function() {
             if (data && Array.isArray(data.moments)) {
                 _mergeServerMoments(data.moments);
             }
-            // Clear dirty tracking for synced IDs
-            _dirtyIds = {};
-            dirty = false;
+            // Clear only the IDs we actually synced (new dirties added mid-flight survive)
+            for (var j = 0; j < ids.length; j++) delete _dirtyIds[ids[j]];
+            dirty = Object.keys(_dirtyIds).length > 0;
             console.log('[Moments] Synced ' + toSync.length + ' moments to server');
         })
         .catch(function(e) {

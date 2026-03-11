@@ -15,10 +15,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/remote.css">
+    <link rel="stylesheet" href="css/remote.css?v=101">
 
     <!-- HLS.js for streaming -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 </head>
 <body>
     <div class="app">
@@ -45,7 +45,7 @@
                     </svg>
                 </div>
                 <p class="empty-title">No Streams</p>
-                <p class="empty-hint">Open Plexd on your computer to start</p>
+                <p class="empty-hint">Open Plexd on your computer to add streams<br>Use the Moments tab below to browse saved moments</p>
             </div>
 
             <!-- Remote UI (when streams exist) -->
@@ -429,7 +429,7 @@
         <div class="stream-indicator" id="stream-indicator"></div>
     </div>
 
-    <script src="js/remote.js"></script>
+    <script src="js/remote.js?v=101"></script>
     <script>
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {

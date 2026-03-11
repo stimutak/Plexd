@@ -18,7 +18,7 @@ const PlexdGrid = (function() {
     function calculateLayout(container, streams) {
         const count = streams.length;
 
-        if (count === 0) {
+        if (count === 0 || container.width <= 0 || container.height <= 0) {
             return { cells: [], rows: 0, cols: 0 };
         }
 
@@ -200,7 +200,10 @@ const PlexdGrid = (function() {
             const videoWrapper = videoElements.get(cell.streamId);
             if (videoWrapper) {
                 // Skip streams in fullscreen mode - don't override their positioning
+                // but DO clear stale visibility/pointer-events from previous hidden state
                 if (videoWrapper.classList.contains('plexd-fullscreen')) {
+                    videoWrapper.style.visibility = '';
+                    videoWrapper.style.pointerEvents = '';
                     return;
                 }
                 videoWrapper.style.position = 'absolute';
@@ -1987,7 +1990,7 @@ const PlexdGrid = (function() {
 
     /**
      * Unified entry point for the density layout system.
-     * @param {number} density - Density level: -1=Fullscreen, 0=Focused, 1=Spotlight, 2=Grid, 3=Fill, 4=Strips, 5=Mosaic
+     * @param {number} density - Density level: 0=Focused, 1=Spotlight, 2=Grid, 3=Fill, 4=Strips, 5=Mosaic
      * @param {number} variant - Style variant within the density level (0-based)
      * @param {Object} container - {width, height} of the layout container
      * @param {Array} streams - Array of stream objects
@@ -1997,7 +2000,6 @@ const PlexdGrid = (function() {
     function calculateDensityLayout(density, variant, container, streams, selectedIdx) {
         if (streams.length === 0) return { cells: [], rows: 0, cols: 0, mode: 'empty' };
         switch (density) {
-            case -1: return densityFullscreen(container, streams, selectedIdx);
             case  0: return densityFocused(container, streams, selectedIdx);
             case  1: return densitySpotlight(variant, container, streams, selectedIdx);
             case  2: return densityGrid(variant, container, streams, selectedIdx);
@@ -2009,7 +2011,8 @@ const PlexdGrid = (function() {
     }
 
     /**
-     * Density -1: Fullscreen — selected stream fills container, others hidden.
+     * Single-stream layout helper — selected stream fills container, others hidden.
+     * Used by densityFocused (level 0).
      */
     function densityFullscreen(container, streams, selectedIdx) {
         var idx = (selectedIdx >= 0 && selectedIdx < streams.length) ? selectedIdx : 0;
@@ -2209,7 +2212,14 @@ const PlexdGrid = (function() {
      * No cropping so all video content is visible (styled via density CSS classes).
      */
     function densityGridContentVisible(container, streams) {
-        var layout = calculateLayout(container, streams);
+        // Use the Tetris content-visible algorithm for aspect-ratio-aware sizing
+        var streamData = streams.map(function(s, i) {
+            var ar = (s.video && s.video.videoWidth && s.video.videoHeight)
+                ? s.video.videoWidth / s.video.videoHeight
+                : (s.aspectRatio || 16 / 9);
+            return { stream: s, index: i, aspectRatio: ar };
+        });
+        var layout = tryTetrisContentVisible(container, streamData);
         layout.mode = 'density-grid-content-visible';
         return layout;
     }

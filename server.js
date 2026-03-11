@@ -41,6 +41,29 @@ function jsonError(res, status, message) {
     res.end(JSON.stringify({ error: message }));
 }
 
+const MAX_JSON_BODY = 10 * 1024 * 1024; // 10MB cap for JSON POST bodies
+
+/**
+ * Collect request body with size limit. Calls onBody(body) on success,
+ * or sends 413 and destroys the request if the limit is exceeded.
+ */
+function collectBody(req, res, onBody, maxBytes = MAX_JSON_BODY) {
+    let body = '';
+    let exceeded = false;
+    req.on('data', chunk => {
+        if (exceeded) return;
+        body += chunk;
+        if (body.length > maxBytes) {
+            exceeded = true;
+            req.destroy();
+            jsonError(res, 413, 'Request body too large');
+        }
+    });
+    req.on('end', () => {
+        if (!exceeded) onBody(body);
+    });
+}
+
 const PORT = process.argv[2] || 8080;
 const WEB_ROOT = path.join(__dirname, 'web');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -94,7 +117,7 @@ const extractJobs = {};           // { jobId: { momentId, status, progress, outp
 const extractQueue = [];          // FIFO queue of jobIds
 const activeExtracts = new Set();
 const MAX_CONCURRENT_EXTRACTS = 2;
-let extractsPaused = false; // One at a time (MAX_CONCURRENT_EXTRACTS=1), triggered on demand
+let extractsPaused = true; // Start paused — extractions only run when explicitly started
 
 // Moments persistence
 const MOMENTS_JSON = path.join(MOMENTS_DIR, 'moments.json');
@@ -288,6 +311,10 @@ function upsertMoment(incoming) {
         }
         if (existing.extractedPath) {
             merged.extractedPath = existing.extractedPath;
+        }
+        // extracted flag is server-owned — client never knows when extraction completes
+        if (existing.extracted) {
+            merged.extracted = true;
         }
         momentsDb[existingIdx] = merged;
         return merged;
@@ -774,6 +801,17 @@ function processExtractQueue() {
 function runExtract(jobId, useSoftwareEncoder = false) {
     const job = extractJobs[jobId];
     if (!job) return;
+
+    // Skip extractions from expired signed URLs (Aylo validto= parameter)
+    const validtoMatch = (job.sourceUrl || '').match(/validto=(\d+)/);
+    if (validtoMatch && parseInt(validtoMatch[1]) < Math.floor(Date.now() / 1000)) {
+        console.log(`[Server] Skipping extraction (URL expired): ${job.momentId}`);
+        job.status = 'failed';
+        job.error = 'Source URL expired';
+        activeExtracts.delete(jobId);
+        processExtractQueue();
+        return;
+    }
 
     // Resolve input source: prefer local server file over remote URL
     let inputSource = job.sourceUrl;
@@ -1813,7 +1851,9 @@ function refreshAyloAccessToken(instanceToken, refreshToken, origin) {
                 try {
                     const json = JSON.parse(data);
                     if (res.statusCode === 200 && json.access_token) {
-                        resolve(json.access_token);
+                        // Return both tokens — the new refresh_token must be saved
+                        // because Aylo invalidates the old one on each renew
+                        resolve({ access_token: json.access_token, refresh_token: json.refresh_token || null });
                     } else {
                         resolve(null);
                     }
@@ -1831,6 +1871,7 @@ function refreshAyloAccessToken(instanceToken, refreshToken, origin) {
 // Cookie reads are cached per cookieHost to avoid redundant decryption.
 let _cookieCache = {};       // cookieHost → { cookies, ts }
 let _refreshedTokens = {};   // cookieHost → refreshed accessToken
+let _refreshedRefreshTokens = {}; // cookieHost → refreshed refreshToken (survives cookie expiry)
 const COOKIE_CACHE_TTL = 30000; // 30s
 
 async function getAyloAuth(siteName) {
@@ -1859,15 +1900,20 @@ async function getAyloAuth(siteName) {
         return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
     }
 
-    // Try refresh with refresh_token (once per cookieHost)
-    const refreshToken = cookies.refresh_token_ma;
+    // Try refresh with refresh_token — prefer our saved token (from previous refresh)
+    // over Chrome cookie (which may be stale after we consumed it)
+    const refreshToken = _refreshedRefreshTokens[site.cookieHost] || cookies.refresh_token_ma;
     if (refreshToken && !isJwtExpired(refreshToken)) {
         console.log('[Aylo:' + siteName + '] Access token expired, attempting refresh...');
-        accessToken = await refreshAyloAccessToken(instanceToken, refreshToken, site.origin);
-        if (accessToken) {
+        const result = await refreshAyloAccessToken(instanceToken, refreshToken, site.origin);
+        if (result) {
             console.log('[Aylo:' + siteName + '] Token refreshed via refresh_token');
-            _refreshedTokens[site.cookieHost] = accessToken;
-            return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
+            _refreshedTokens[site.cookieHost] = result.access_token;
+            // Save the new refresh_token — Aylo invalidates the old one on each renew
+            if (result.refresh_token) {
+                _refreshedRefreshTokens[site.cookieHost] = result.refresh_token;
+            }
+            return { accessToken: result.access_token, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
     }
 
@@ -1878,6 +1924,10 @@ async function getAyloAuth(siteName) {
         if (result) {
             console.log('[Aylo:' + siteName + '] Reauth via instance token succeeded');
             _refreshedTokens[site.cookieHost] = result.access_token;
+            // Save the refresh_token from reauth too
+            if (result.refresh_token) {
+                _refreshedRefreshTokens[site.cookieHost] = result.refresh_token;
+            }
             return { accessToken: result.access_token, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
     }
@@ -2577,15 +2627,16 @@ setTimeout(backgroundCatalogRefresh, 10000);
 setInterval(backgroundCatalogRefresh, CATALOG_REFRESH_INTERVAL);
 
 // ── Auth Keepalive ─────────────────────────────────────────────────────────────
-// Proactively refresh Aylo tokens every 45 minutes (access_token expires ~1hr).
-// Without this, tokens go stale if no API calls happen for >1 hour.
-const AUTH_KEEPALIVE_INTERVAL = 45 * 60 * 1000; // 45 minutes
+// Proactively refresh Aylo tokens every 25 minutes (access_token expires ~1hr).
+// Shorter interval ensures we refresh before the access_token expires, keeping
+// the refresh_token chain alive (Aylo invalidates old refresh tokens on use).
+const AUTH_KEEPALIVE_INTERVAL = 25 * 60 * 1000; // 25 minutes
 
 async function authKeepalive() {
     const seen = new Set();
     let refreshed = 0, failed = 0;
-    // Aylo sites — clear cache only AFTER successful refresh to avoid
-    // destroying a still-valid token when the refresh_token is expired
+    // Aylo sites — clear access token cache to force re-check, but keep
+    // _refreshedRefreshTokens intact (they're our chain of trust)
     for (const siteName of Object.keys(AYLO_SITES)) {
         const host = AYLO_SITES[siteName].cookieHost;
         if (seen.has(host)) continue;
@@ -2894,9 +2945,7 @@ const server = http.createServer(async (req, res) => {
             jsonOk(res, currentState);
         } else if (req.method === 'POST') {
             // Main app posts state updates
-            let body = '';
-            req.on('data', chunk => body += chunk);
-            req.on('end', () => {
+            collectBody(req, res, (body) => {
                 try {
                     currentState = JSON.parse(body);
                     currentState.timestamp = Date.now();
@@ -2916,9 +2965,7 @@ const server = http.createServer(async (req, res) => {
             jsonOk(res, cmd || null);
         } else if (req.method === 'POST') {
             // Remote posts commands
-            let body = '';
-            req.on('data', chunk => body += chunk);
-            req.on('end', () => {
+            collectBody(req, res, (body) => {
                 try {
                     const cmd = JSON.parse(body);
                     cmd.timestamp = Date.now();
@@ -3273,42 +3320,42 @@ const server = http.createServer(async (req, res) => {
         });
 
         req.on('end', () => {
-            writeStream.end();
+            writeStream.end(() => {
+                // Determine content type from file extension if not provided
+                let mimeType = contentType.split(';')[0].trim();
+                if (!mimeType || mimeType === 'application/octet-stream') {
+                    const ext = path.extname(fileName).toLowerCase();
+                    mimeType = MIME_TYPES[ext] || 'application/octet-stream';
+                }
 
-            // Determine content type from file extension if not provided
-            let mimeType = contentType.split(';')[0].trim();
-            if (!mimeType || mimeType === 'application/octet-stream') {
-                const ext = path.extname(fileName).toLowerCase();
-                mimeType = MIME_TYPES[ext] || 'application/octet-stream';
-            }
+                fileMetadata[fileId] = {
+                    fileName,
+                    size,
+                    savedAt: Date.now(),
+                    setName,
+                    contentType: mimeType,
+                    originalFileName: fileName,
+                    originalSize: size,
+                    hlsReady: false
+                };
+                saveMetadata();
 
-            fileMetadata[fileId] = {
-                fileName,
-                size,
-                savedAt: Date.now(),
-                setName,
-                contentType: mimeType,
-                originalFileName: fileName,
-                originalSize: size,
-                hlsReady: false
-            };
-            saveMetadata();
+                console.log(`[Server] Uploaded: ${fileName} (${(size / 1024 / 1024).toFixed(2)} MB) -> ${fileId}`);
 
-            console.log(`[Server] Uploaded: ${fileName} (${(size / 1024 / 1024).toFixed(2)} MB) -> ${fileId}`);
+                // Start HLS transcoding for video files
+                if (mimeType.startsWith('video/')) {
+                    startHLSTranscode(fileId);
+                }
 
-            // Start HLS transcoding for video files
-            if (mimeType.startsWith('video/')) {
-                startHLSTranscode(fileId);
-            }
-
-            jsonOk(res, {
-                success: true,
-                fileId,
-                url: `/api/files/${fileId}`,
-                fileName,
-                size,
-                hlsReady: false,
-                transcoding: mimeType.startsWith('video/')
+                jsonOk(res, {
+                    success: true,
+                    fileId,
+                    url: `/api/files/${fileId}`,
+                    fileName,
+                    size,
+                    hlsReady: false,
+                    transcoding: mimeType.startsWith('video/')
+                });
             });
         });
 
@@ -3500,9 +3547,7 @@ const server = http.createServer(async (req, res) => {
 
     // Import a local file (copy to uploads, add metadata, start transcode)
     if (pathname === '/api/files/import' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             try {
                 const { filePath } = JSON.parse(body);
                 if (!filePath || !fs.existsSync(filePath)) {
@@ -3596,9 +3641,7 @@ const server = http.createServer(async (req, res) => {
 
     // Purge all files (or files for a specific set)
     if (pathname === '/api/files/purge' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             let setName = null;
             try {
                 const data = JSON.parse(body);
@@ -3624,9 +3667,7 @@ const server = http.createServer(async (req, res) => {
 
     // Associate files with a saved set (to prevent auto-delete)
     if (pathname === '/api/files/associate' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             try {
                 const { fileIds, setName } = JSON.parse(body);
                 let updated = 0;
@@ -3991,9 +4032,7 @@ const server = http.createServer(async (req, res) => {
 
     // POST /api/moments — Upsert a single moment
     if (pathname === '/api/moments' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             try {
                 const data = JSON.parse(body);
                 if (!data.id) {
@@ -4016,9 +4055,7 @@ const server = http.createServer(async (req, res) => {
 
     // POST /api/moments/sync — Bulk sync
     if (pathname === '/api/moments/sync' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             try {
                 const data = JSON.parse(body);
                 const incoming = data.moments;
@@ -4100,9 +4137,7 @@ const server = http.createServer(async (req, res) => {
     // === Moment Clip Extraction API ===
 
     if (pathname === '/api/moments/extract' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk);
-        req.on('end', () => {
+        collectBody(req, res, (body) => {
             try {
                 const data = JSON.parse(body);
                 const { momentId, sourceUrl, start, end, sourceFileId } = data;

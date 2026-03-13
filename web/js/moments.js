@@ -391,7 +391,7 @@ const PlexdMoments = (function() {
             return Promise.resolve();
         }
 
-        return fetch('/api/moments/sync', {
+        return plexdFetch('/api/moments/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ moments: toSync })
@@ -419,7 +419,7 @@ const PlexdMoments = (function() {
      * Load all moments from the server and merge with local store
      */
     function loadFromServer() {
-        return fetch('/api/moments')
+        return plexdFetch('/api/moments')
         .then(function(res) {
             if (!res.ok) throw new Error('Load failed: ' + res.status);
             return res.json();

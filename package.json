@@ -8,7 +8,8 @@
     "autostart": "./scripts/autostart.sh",
     "test-chrome": "node scripts/chrome-test.js"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "puppeteer": "^23.0.0"
   },
   "engines": {

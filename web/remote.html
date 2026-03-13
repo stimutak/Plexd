@@ -19,6 +19,12 @@
 
     <!-- HLS.js for streaming -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
+    <!-- API token: plexdFetch delegates to patched window.fetch (token handled there) -->
+    <script>
+    (function() {
+        window.plexdFetch = function(url, opts) { return fetch(url, opts); };
+    })();
+    </script>
 </head>
 <body>
     <div class="app">
@@ -343,7 +349,7 @@
 
     <!-- Moments Player Overlay -->
     <div id="moments-player" class="moments-player hidden">
-        <video class="moments-player-video" id="moments-player-video" playsinline></video>
+        <video class="moments-player-video" id="moments-player-video" playsinline muted></video>
         <div class="moments-player-controls" id="moments-player-controls">
             <div class="moments-player-top">
                 <button class="moments-player-close" id="moments-player-close" aria-label="Close">
@@ -429,7 +435,45 @@
         <div class="stream-indicator" id="stream-indicator"></div>
     </div>
 
-    <script src="js/remote.js?v=101"></script>
+    <!-- API token auth: auto-refreshes token on 401 (server restart) -->
+    <script>
+    (function() {
+        var meta = document.querySelector('meta[name="plexd-api-token"]');
+        if (!meta) return;
+        var token = meta.content;
+        var _fetch = window.fetch;
+        var _refreshing = null;
+        function refreshToken() {
+            if (_refreshing) return _refreshing;
+            _refreshing = _fetch.call(window, '/remote.html').then(function(r) { return r.text(); }).then(function(html) {
+                var m = html.match(/plexd-api-token[^>]*content="([a-f0-9]+)"/);
+                if (m) { token = m[1]; meta.content = token; }
+                _refreshing = null;
+            }).catch(function() { _refreshing = null; });
+            return _refreshing;
+        }
+        window.fetch = function(url, opts) {
+            if (typeof url === 'string' && url.startsWith('/api/')) {
+                opts = opts || {};
+                opts.headers = new Headers(opts.headers || {});
+                opts.headers.set('X-Plexd-Token', token);
+            }
+            return _fetch.call(this, url, opts).then(function(resp) {
+                if (resp.status === 401 && typeof url === 'string' && url.startsWith('/api/')) {
+                    return refreshToken().then(function() {
+                        var retry = Object.assign({}, opts);
+                        retry.headers = new Headers(opts.headers || {});
+                        retry.headers.set('X-Plexd-Token', token);
+                        return _fetch.call(window, url, retry);
+                    });
+                }
+                return resp;
+            });
+        };
+    })();
+    </script>
+
+    <script src="js/remote.js?v=102"></script>
     <script>
         // Register service worker for PWA
         if ('serviceWorker' in navigator) {

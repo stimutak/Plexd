@@ -53,10 +53,16 @@ const PlexdRemote = (function() {
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
-    const POLL_INTERVAL = 300;
-    const CONNECTION_TIMEOUT = 2000;
+    const POLL_INTERVAL = 500;
+    const CONNECTION_TIMEOUT = 5000;
     const SELECTION_GRACE_PERIOD = 2500;
     const SWIPE_THRESHOLD = 50;
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
 
     // ============================================
     // Haptic Feedback
@@ -243,14 +249,21 @@ const PlexdRemote = (function() {
         if (_pollPending) return;
         _pollPending = true;
         try {
-            const res = await fetch('/api/remote/state');
+            const res = await plexdFetch('/api/remote/state');
             if (res.ok) {
                 const newState = await res.json();
                 const age = Date.now() - (newState.timestamp || 0);
-                if (newState.timestamp && age < 3000) {
+                // Accept state up to 5s old — with 30+ streams the Mac's POST
+                // competes with video segments for HTTP/1.1 connections
+                if (newState.timestamp && age < 5000) {
                     handleStateUpdate(newState);
                     return;
                 }
+                // Server reachable but main app hasn't pushed state (or state is stale).
+                // Keep connection alive with synthetic empty state so the Moments tab
+                // and other server-only features stay accessible.
+                handleStateUpdate(state || { streams: [], timestamp: Date.now() });
+                return;
             }
         } catch (e) {
             // Server unreachable — fall back to localStorage
@@ -263,7 +276,7 @@ const PlexdRemote = (function() {
         if (stored) {
             try {
                 const newState = JSON.parse(stored);
-                if (newState.timestamp && Date.now() - newState.timestamp < 3000) {
+                if (newState.timestamp && Date.now() - newState.timestamp < 5000) {
                     handleStateUpdate(newState);
                 }
             } catch (e) { console.warn('[Remote] localStorage parse error:', e.message); }
@@ -278,7 +291,7 @@ const PlexdRemote = (function() {
             channel.postMessage(command);
         }
 
-        fetch('/api/remote/command', {
+        plexdFetch('/api/remote/command', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(command)
@@ -374,7 +387,7 @@ const PlexdRemote = (function() {
 
     function showStreamIndicator(stream) {
         if (!el.streamIndicator) return;
-        const name = stream.fileName || getDisplayName(stream.url);
+        const name = stream.title || stream.fileName || getDisplayName(stream.url);
         el.streamIndicator.textContent = name;
         el.streamIndicator.classList.add('visible');
         setTimeout(() => el.streamIndicator.classList.remove('visible'), 1000);
@@ -494,6 +507,8 @@ const PlexdRemote = (function() {
     }
 
     function updateHeroVideo() {
+        // Don't reload hero while moments are open — saves connections for clips
+        if (momentsBrowserOpen || momentsPlayerOpen) return;
         const stream = getCurrentStream();
         if (!stream || !el.heroVideo) return;
 
@@ -529,7 +544,7 @@ const PlexdRemote = (function() {
         if (!stream || !viewerMode) return;
 
         // Update viewer UI
-        const name = stream.fileName || getDisplayName(stream.url);
+        const name = stream.title || stream.fileName || getDisplayName(stream.url);
         if (el.viewerTitle) el.viewerTitle.textContent = name;
         if (el.viewerCounter) {
             const total = state?.streams?.length || 0;
@@ -540,7 +555,7 @@ const PlexdRemote = (function() {
         }
         if (el.viewerProgressFill && stream.duration > 0) {
             const pct = (stream.currentTime / stream.duration) * 100;
-            el.viewerProgressFill.style.width = `${pct}%`;
+            el.viewerProgressFill.style.transform = `scaleX(${pct / 100})`;
         }
         if (el.viewerPlay) {
             el.viewerPlay.classList.toggle('playing', !stream.paused);
@@ -640,7 +655,12 @@ const PlexdRemote = (function() {
         const hasStreams = state.streams && state.streams.length > 0;
 
         el.emptyState?.classList.toggle('hidden', hasStreams);
-        el.remoteUI?.classList.toggle('hidden', !hasStreams);
+        // Always show remote-ui (toolbar with Moments tab must stay accessible)
+        el.remoteUI?.classList.remove('hidden');
+        el.remoteUI?.classList.toggle('no-streams', !hasStreams);
+
+        // Always render toolbar (moment count badge, theater state)
+        renderToolbar();
 
         if (hasStreams) {
             renderHero();
@@ -650,7 +670,6 @@ const PlexdRemote = (function() {
             renderFilterTabs();
             renderThumbnails();
             renderAudioButton();
-            renderToolbar();
             updateHeroVideo();
 
             if (viewerMode) {
@@ -704,6 +723,11 @@ const PlexdRemote = (function() {
             const count = state.momentCount || 0;
             el.momentCountBadge.textContent = count > 0 ? count : '';
         }
+
+        // Disable capture buttons when no streams (they need an active stream)
+        const hasStreams = state.streams && state.streams.length > 0;
+        if (el.btnMomentCapture) el.btnMomentCapture.classList.toggle('disabled', !hasStreams);
+        if (el.btnMomentCaptureAll) el.btnMomentCaptureAll.classList.toggle('disabled', !hasStreams);
     }
 
     function renderHero() {
@@ -758,7 +782,7 @@ const PlexdRemote = (function() {
         const stream = getCurrentStream();
         if (!stream) return;
 
-        const name = stream.fileName || getDisplayName(stream.url);
+        const name = stream.title || stream.fileName || getDisplayName(stream.url);
         if (el.streamTitle) el.streamTitle.textContent = name;
 
         if (el.streamTime) {
@@ -768,8 +792,8 @@ const PlexdRemote = (function() {
         // Progress bar (only if not dragging)
         if (!isDraggingProgress) {
             const progress = stream.duration > 0 ? (stream.currentTime / stream.duration) * 100 : 0;
-            if (el.progressFill) el.progressFill.style.width = `${progress}%`;
-            if (el.progressThumb) el.progressThumb.style.left = `${progress}%`;
+            if (el.progressFill) el.progressFill.style.transform = `scaleX(${progress / 100})`;
+            if (el.progressThumb) el.progressThumb.style.setProperty('--progress', progress);
         }
     }
 
@@ -821,12 +845,14 @@ const PlexdRemote = (function() {
             const rating = stream.rating || 0;
             const isFavorite = stream.favorite || false;
             const hasThumbnail = !!stream.thumbnail;
+            const safeId = escapeHtml(stream.id);
+            const safeSrc = escapeHtml(stream.thumbnail || '');
 
             return `
                 <div class="thumb-item ${isSelected ? 'selected' : ''}"
-                     data-id="${stream.id}">
+                     data-id="${safeId}">
                     ${hasThumbnail
-                        ? `<img class="thumb-img" src="${stream.thumbnail}" alt="">`
+                        ? `<img class="thumb-img" src="${safeSrc}" alt="">`
                         : `<div class="thumb-placeholder"></div>`
                     }
                     ${isFavorite ? `<span class="thumb-fav">♥</span>` : ''}
@@ -1436,8 +1462,8 @@ const PlexdRemote = (function() {
             const percent = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
             const seekTime = percent * stream.duration;
 
-            if (el.progressFill) el.progressFill.style.width = `${percent * 100}%`;
-            if (el.progressThumb) el.progressThumb.style.left = `${percent * 100}%`;
+            if (el.progressFill) el.progressFill.style.transform = `scaleX(${percent})`;
+            if (el.progressThumb) el.progressThumb.style.setProperty('--progress', percent * 100);
 
             lastSeekTime = seekTime;
             return seekTime;
@@ -1488,12 +1514,19 @@ const PlexdRemote = (function() {
     // Utilities
     // ============================================
     function getDisplayName(url) {
+        var GENERIC = ['stream', 'master', 'master.m3u8', 'playlist', 'playlist.m3u8', 'index', 'index.m3u8', 'video', 'media'];
         try {
             const urlObj = new URL(url);
-            const pathname = urlObj.pathname;
-            const filename = pathname.split('/').pop() || urlObj.hostname;
-            const decoded = decodeURIComponent(filename);
-            return decoded.length > 50 ? decoded.substring(0, 47) + '...' : decoded;
+            const parts = urlObj.pathname.split('/').filter(Boolean);
+            // Walk backward to find a non-generic segment
+            for (var i = parts.length - 1; i >= 0; i--) {
+                var seg = decodeURIComponent(parts[i]).replace(/\.\w+$/, '');
+                if (seg && GENERIC.indexOf(seg.toLowerCase()) === -1) {
+                    var decoded = decodeURIComponent(parts[i]);
+                    return decoded.length > 50 ? decoded.substring(0, 47) + '...' : decoded;
+                }
+            }
+            return urlObj.hostname;
         } catch (e) {
             return url?.substring(0, 50) || 'Unknown';
         }
@@ -1523,7 +1556,7 @@ const PlexdRemote = (function() {
         if (el.momentsEmpty) el.momentsEmpty.classList.add('hidden');
 
         try {
-            const res = await fetch('/api/moments');
+            const res = await plexdFetch('/api/moments');
             if (!res.ok) throw new Error('HTTP ' + res.status);
             momentsData = await res.json();
 
@@ -1577,9 +1610,27 @@ const PlexdRemote = (function() {
         momentsSelectedIndex = 0;
     }
 
+    // Suspend hero video to free HTTP connections for moment clip loads.
+    // Dead HLS streams timeout-retry and saturate the 6-connection pool.
+    function suspendHeroVideo() {
+        if (heroHls) { heroHls.destroy(); heroHls = null; }
+        if (el.heroVideo) {
+            el.heroVideo.pause();
+            el.heroVideo.removeAttribute('src');
+            el.heroVideo.load();
+        }
+        currentVideoUrl = null;
+    }
+
+    function resumeHeroVideo() {
+        // updateHeroVideo() will re-create HLS on next state poll
+        currentVideoUrl = null;
+    }
+
     function openMomentsBrowser() {
         momentsBrowserOpen = true;
         if (el.momentsBrowser) el.momentsBrowser.classList.remove('hidden');
+        suspendHeroVideo();
 
         fetchMoments().then(function() {
             renderMomentsGrid();
@@ -1590,6 +1641,7 @@ const PlexdRemote = (function() {
     function closeMomentsBrowser() {
         momentsBrowserOpen = false;
         if (el.momentsBrowser) el.momentsBrowser.classList.add('hidden');
+        if (!momentsPlayerOpen) resumeHeroVideo();
     }
 
     function createMomentCard(m, idx) {
@@ -1720,21 +1772,50 @@ const PlexdRemote = (function() {
             _mpProgressRAF = null;
         }
         clearTimeout(_mpControlsTimeout);
+        if (!momentsBrowserOpen) resumeHeroVideo();
     }
+
+    var _momentLoadTimeout = null;
 
     function loadMomentVideo(moment) {
         if (!el.momentsPlayerVideo || !moment) return;
 
+        clearTimeout(_momentLoadTimeout);
         if (momentPlayerHls) {
             momentPlayerHls.destroy();
             momentPlayerHls = null;
         }
 
         var video = el.momentsPlayerVideo;
+        video.muted = true;
+
+        // Remove any previous error handler
+        if (video._momentErrorHandler) {
+            video.removeEventListener('error', video._momentErrorHandler);
+            video._momentErrorHandler = null;
+        }
+
+        // Error/timeout handler — auto-skip to next on failure
+        function onLoadFail(reason) {
+            clearTimeout(_momentLoadTimeout);
+            console.warn('[Remote] Moment load failed:', moment.id, reason);
+            moment._unplayable = true;
+            if (momentsAutoAdvance && momentsPlayerOpen) {
+                navigateMoment('next');
+            }
+        }
+        video._momentErrorHandler = function() { onLoadFail('media error'); };
+        video.addEventListener('error', video._momentErrorHandler, { once: true });
+        // Timeout: if video hasn't started within 8s, skip
+        _momentLoadTimeout = setTimeout(function() {
+            if (momentsPlayerOpen && video.readyState < 2) onLoadFail('timeout');
+        }, 8000);
+        // Cancel timeout once video starts playing
+        video.addEventListener('canplay', function() { clearTimeout(_momentLoadTimeout); }, { once: true });
 
         // Prefer extracted clip
-        if (moment.extracted) {
-            var clipUrl = '/api/moments/' + encodeURIComponent(moment.id) + '/clip.mp4';
+        if (moment.extracted || moment.extractedPath) {
+            var clipUrl = moment.extractedPath || ('/api/moments/' + encodeURIComponent(moment.id) + '/clip.mp4');
             video.src = clipUrl;
             video.currentTime = 0;
             video.play().catch(function() {});
@@ -1744,7 +1825,7 @@ const PlexdRemote = (function() {
 
         // Non-extracted: play source video seeked to start
         var sourceUrl = getMomentSourceUrl(moment.sourceUrl);
-        if (!sourceUrl) return;
+        if (!sourceUrl) { onLoadFail('no source URL'); return; }
 
         if (isHlsUrl(sourceUrl)) {
             if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -1756,7 +1837,7 @@ const PlexdRemote = (function() {
                     video.play().catch(function() {});
                 });
                 hls.on(Hls.Events.ERROR, function(ev, data) {
-                    if (data.fatal) console.warn('[Remote] Moment HLS error:', data.details);
+                    if (data.fatal) onLoadFail('HLS ' + data.details);
                 });
                 momentPlayerHls = hls;
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -1886,7 +1967,7 @@ const PlexdRemote = (function() {
             el.mpAutoAdvance.classList.toggle('active', momentsAutoAdvance);
         }
 
-        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.width = '0%';
+        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.transform = 'scaleX(0)';
         if (el.momentsPlayerTime) {
             var dur = (moment.end && moment.start) ? moment.end - moment.start : 0;
             el.momentsPlayerTime.textContent = '0:00 / ' + formatTime(dur);
@@ -1931,7 +2012,7 @@ const PlexdRemote = (function() {
         var current = video.currentTime - start;
         var pct = Math.max(0, Math.min(100, (current / total) * 100));
 
-        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.width = pct + '%';
+        if (el.momentsPlayerProgressFill) el.momentsPlayerProgressFill.style.transform = `scaleX(${pct / 100})`;
         if (el.momentsPlayerTime) {
             el.momentsPlayerTime.textContent = formatTime(Math.max(0, current)) + ' / ' + formatTime(total);
         }
@@ -1942,7 +2023,7 @@ const PlexdRemote = (function() {
             var moment = momentsData.find(function(m) { return m.id === momentId; });
             if (moment) Object.assign(moment, updates);
 
-            await fetch('/api/moments', {
+            await plexdFetch('/api/moments', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(Object.assign({ id: momentId }, updates))

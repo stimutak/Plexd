@@ -124,7 +124,7 @@
         } catch (err) {
             console.error('Popup init error:', err);
             if (contentEl) {
-                contentEl.innerHTML = '<div class="empty-state"><h3>Error</h3><p>' + err.message + '</p></div>';
+                contentEl.innerHTML = '<div class="empty-state"><h3>Error</h3><p>' + escapeHtml(err.message) + '</p></div>';
             }
         }
     }

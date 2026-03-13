@@ -317,6 +317,8 @@ body {
     gap: 10px;
     width: 100%;
     margin-bottom: 10px;
+    padding: 8px 0;
+    cursor: pointer;
 }
 
 /* Moment dots overlaid on seek bar */
@@ -341,21 +343,23 @@ body {
 
 .plexd-seek-bar {
     flex: 1;
-    height: 8px;
+    height: 6px;
     -webkit-appearance: none;
     appearance: none;
     background: rgba(237, 232, 224, 0.2);
     border-radius: 4px;
     cursor: pointer;
     outline: none;
+    transition: height 0.15s ease;
 }
 
-.plexd-seek-bar:hover {
-    height: 12px;
+.plexd-seek-container:hover .plexd-seek-bar {
+    height: 14px;
 }
 
 .plexd-seek-bar::-webkit-slider-runnable-track {
-    height: inherit;
+    height: 100%;
+    background: transparent;
     border-radius: 4px;
 }
 
@@ -368,6 +372,18 @@ body {
     cursor: pointer;
 }
 
+.plexd-seek-container:hover .plexd-seek-bar::-webkit-slider-thumb {
+    width: 22px;
+    height: 22px;
+}
+
+.plexd-seek-bar::-moz-range-track {
+    height: 100%;
+    background: transparent;
+    border-radius: 4px;
+    border: none;
+}
+
 .plexd-seek-bar::-moz-range-thumb {
     width: 14px;
     height: 14px;
@@ -375,6 +391,11 @@ body {
     border-radius: 50%;
     cursor: pointer;
     border: none;
+}
+
+.plexd-seek-container:hover .plexd-seek-bar::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
 }
 
 .plexd-time-display {
@@ -1518,6 +1539,43 @@ body {
 .plexd-tag-chip.selected::before {
     content: '\2713 ';
 }
+
+/* Selected group at top of filter panels */
+.plexd-selected-group {
+    border-left: 2px solid rgba(232, 197, 71, 0.5);
+    padding-left: 8px;
+    margin-bottom: 8px;
+}
+.plexd-selected-group .plexd-tag-category-label {
+    color: #e8c547;
+    font-size: 0.7rem;
+}
+
+/* Filter presets bar */
+.plexd-presets-bar {
+    display: flex;
+    gap: 6px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 8px;
+}
+.plexd-preset-chip {
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    font-size: 0.75rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.plexd-preset-chip:hover { background: rgba(255,255,255,0.15); }
+.plexd-preset-chip.active { background: rgba(232, 197, 71, 0.25); color: #e8c547; }
+.plexd-preset-add {
+    background: rgba(255,255,255,0.04);
+    border: 1px dashed rgba(255,255,255,0.15);
+}
+.plexd-preset-add:hover { border-color: rgba(255,255,255,0.3); }
 
 /* Chip close button (streams, history, sets) */
 .plexd-chip-close {
@@ -2782,9 +2840,13 @@ body {
 }
 
 /* Coverflow stream styling - smooth transitions for carousel effect */
+/* Only animate GPU-composited properties (transform, opacity, box-shadow).
+   Never animate left/top/width/height — they trigger reflows on every frame. */
 .plexd-app.coverflow-mode .plexd-stream,
 .plexd-app.smart-layout-mode .plexd-stream {
-    transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                opacity 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                box-shadow 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
     border-radius: 8px;
     transform-style: preserve-3d;
@@ -3167,7 +3229,7 @@ body {
     inset: 0;
     z-index: 150000;
     pointer-events: none;
-    background: rgba(0, 0, 0, 0.3);
+    background: rgba(0, 0, 0, 0.55);
     opacity: 0;
     transition: opacity 0.3s ease;
 }
@@ -4343,21 +4405,18 @@ body {
     transition: none; /* No layout transitions — instant snap */
 }
 
-/* Mosaic: CSS grid at density level 5, variant 0 */
-.plexd-app.density-level-5.density-variant-0 .plexd-grid {
-    display: grid !important;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 2px;
-}
+/* Mosaic: CSS grid at density level 5, variant 0 (grid set inline by JS) */
 .plexd-app.density-level-5.density-variant-0 .plexd-stream {
     position: static !important;
     width: auto !important;
     height: auto !important;
-    aspect-ratio: 16/9;
     transform: none !important;
+    overflow: hidden;
 }
 .plexd-app.density-level-5.density-variant-0 .plexd-stream .plexd-video {
     object-fit: cover;
+    width: 100%;
+    height: 100%;
 }
 
 /* Density indicator badge */

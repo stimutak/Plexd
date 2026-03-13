@@ -67,6 +67,18 @@ function collectBody(req, res, onBody, maxBytes = MAX_JSON_BODY) {
 const PORT = process.argv[2] || 8080;
 const WEB_ROOT = path.join(__dirname, 'web');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
+// ── Security token ────────────────────────────────────────────────────────────
+// Random token generated at startup. All /api/* endpoints (except static-file
+// proxies and server-info) require X-Plexd-Token header. The token is injected
+// into every served HTML page via a <meta> tag so browsers pick it up without
+// a separate handshake. This prevents CSRF and stops arbitrary LAN clients from
+// controlling the app or reading/importing local files.
+const API_TOKEN = crypto.randomBytes(16).toString('hex');
+
+// Directories that /api/files/local, /api/files/import, and /api/files/scan-local
+// are allowed to access. Any path outside these is rejected with 403.
+const ALLOWED_LOCAL_DIRS = []; // populated after DEFAULT_SCAN_FOLDER is defined
 const UPLOADS_META = path.join(UPLOADS_DIR, 'metadata.json');
 const HLS_DIR = path.join(UPLOADS_DIR, 'hls');
 const FILE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -77,6 +89,22 @@ const VIDEO_RANGE_CAP = 4 * 1024 * 1024; // 4MB max per video range response —
 // Default local folder to scan for videos (user's Downloads)
 const os = require('os');
 const DEFAULT_SCAN_FOLDER = path.join(os.homedir(), 'Downloads');
+
+// Populate allowed dirs for local file access once constants are defined
+ALLOWED_LOCAL_DIRS.push(
+    path.resolve(UPLOADS_DIR),
+    path.resolve(DEFAULT_SCAN_FOLDER)
+);
+
+/**
+ * Return true if filePath resolves to within one of the ALLOWED_LOCAL_DIRS.
+ * Prevents path-traversal / LFI attacks on /api/files/local, /import, /scan-local.
+ */
+function isAllowedLocalPath(filePath) {
+    const resolved = path.resolve(filePath);
+    return ALLOWED_LOCAL_DIRS.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
+}
+
 const VIDEO_EXTENSIONS = new Set(['.mov', '.mp4', '.m4v', '.webm', '.mkv', '.avi', '.ogv', '.3gp', '.flv', '.mpeg', '.mpg', '.ts', '.mts', '.m2ts', '.wmv', '.asf', '.vob', '.divx', '.f4v']);
 
 // Ensure uploads and HLS directories exist
@@ -205,8 +233,9 @@ function saveMomentsDb() {
         if (fixedBlobs > 0) console.log(`[Server] Reconciled ${fixedBlobs} blob URLs → server files`);
         if (fixedExtracted > 0) console.log(`[Server] Reconciled ${fixedExtracted} moments with existing clips`);
     }
-    // Queue extraction for moments that don't have clips yet
+    // Queue extraction for moments that have available sources but no clip yet
     let queued = 0;
+    let skippedNoSource = 0;
     for (const m of momentsDb) {
         if (m.extracted) continue;
         if (!m.sourceUrl || m.sourceUrl.startsWith('blob:')) continue;
@@ -214,6 +243,23 @@ function saveMomentsDb() {
         if (fs.existsSync(clipPath)) continue;
         const startF = parseFloat(m.start), endF = parseFloat(m.end);
         if (!isFinite(startF) || !isFinite(endF) || startF >= endF) continue;
+        // Verify source is actually available before queueing
+        let sourceAvailable = false;
+        if (m.sourceUrl.startsWith('/api/files/')) {
+            const fileId = decodeURIComponent(m.sourceUrl.replace('/api/files/', ''));
+            const fPath = path.join(UPLOADS_DIR, fileId);
+            const hPath = path.join(HLS_DIR, fileId, 'playlist.m3u8');
+            sourceAvailable = fs.existsSync(fPath) || fs.existsSync(hPath);
+        } else if (m.sourceFileId) {
+            const fPath = path.join(UPLOADS_DIR, m.sourceFileId);
+            const hPath = path.join(HLS_DIR, m.sourceFileId, 'playlist.m3u8');
+            sourceAvailable = fs.existsSync(fPath) || fs.existsSync(hPath);
+        } else if (m.sourceUrl.startsWith('http://') || m.sourceUrl.startsWith('https://')) {
+            // External URLs (Stash, etc) — check for expired signed URLs
+            const validto = (m.sourceUrl.match(/validto=(\d+)/) || [])[1];
+            sourceAvailable = !validto || parseInt(validto) > Math.floor(Date.now() / 1000);
+        }
+        if (!sourceAvailable) { skippedNoSource++; continue; }
         const jobId = `ext_boot_${m.id}`;
         extractJobs[jobId] = {
             status: 'queued', progress: 0,
@@ -227,9 +273,12 @@ function saveMomentsDb() {
         extractQueue.push(jobId);
         queued++;
     }
+    if (queued > 0 || skippedNoSource > 0) {
+        console.log(`[Server] Queued ${queued} moments for extraction` +
+            (skippedNoSource > 0 ? ` (${skippedNoSource} skipped — source unavailable)` : ''));
+    }
     if (queued > 0) {
-        console.log(`[Server] Queued ${queued} moments for extraction`);
-        setTimeout(processExtractQueue, 5000); // Start after server is fully up
+        setTimeout(processExtractQueue, 5000);
     }
 })();
 
@@ -1331,6 +1380,19 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}, tim
         return;
     }
 
+    // SSRF guard: the proxy is for external CDN content only.
+    // Block loopback, link-local, and RFC-1918 private ranges.
+    try {
+        const parsedHost = new URL(targetUrl).hostname;
+        if (/^(localhost$|127\.|0\.0\.0\.0|::1$|\[::1\]$|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(parsedHost)) {
+            callback(new Error(`SSRF blocked: private/loopback host (${parsedHost})`));
+            return;
+        }
+    } catch (e) {
+        callback(new Error('Invalid proxy URL'));
+        return;
+    }
+
     const mod = targetUrl.startsWith('https') ? https : http;
     const headers = { 'User-Agent': 'Plexd/1.0', ...extraHeaders };
     const req = mod.get(targetUrl, { headers, timeout: timeoutMs }, (proxyRes) => {
@@ -1367,28 +1429,38 @@ function fetchPage(url) {
     });
 }
 
-// Scrape xHamster listing page for video URLs
+// Scrape xHamster listing page for video URLs (retries on 404)
 async function scrapeXhamsterListing(count) {
-    const page = Math.floor(Math.random() * 20) + 1;
-    const listUrl = 'https://xhamster.com/best/' + page;
-    console.log('[Demo] Fetching listing: ' + listUrl);
+    const MAX_PAGE = 10;
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const page = Math.floor(Math.random() * MAX_PAGE) + 1;
+        const listUrl = 'https://xhamster.com/best/' + page;
+        console.log('[Demo] Fetching listing: ' + listUrl);
 
-    const html = await fetchPage(listUrl);
-
-    // Extract video page URLs from listing (exclude /my/ nav links)
-    const linkPattern = /href="(https:\/\/xhamster\.com\/videos\/[a-z0-9][\w-]+-\w+)"/gi;
-    const urls = [];
-    const seen = new Set();
-    let match;
-    while ((match = linkPattern.exec(html)) !== null) {
-        if (!seen.has(match[1])) {
-            seen.add(match[1]);
-            urls.push(match[1]);
+        let html;
+        try {
+            html = await fetchPage(listUrl);
+        } catch (e) {
+            console.log('[Demo] Scrape error: ' + e.message + (attempt < MAX_RETRIES - 1 ? ', retrying...' : ''));
+            continue;
         }
-    }
 
-    // Grab more than needed to absorb failures
-    return urls.slice(0, Math.ceil(count * 1.5));
+        const linkPattern = /href="(https:\/\/xhamster\.com\/videos\/[a-z0-9][\w-]+-\w+)"/gi;
+        const urls = [];
+        const seen = new Set();
+        let match;
+        while ((match = linkPattern.exec(html)) !== null) {
+            if (!seen.has(match[1])) {
+                seen.add(match[1]);
+                urls.push(match[1]);
+            }
+        }
+
+        if (urls.length > 0) return urls.slice(0, Math.ceil(count * 1.5));
+        console.log('[Demo] No videos found on page ' + page + (attempt < MAX_RETRIES - 1 ? ', retrying...' : ''));
+    }
+    return [];
 }
 
 // Extract HLS URL + title from an xHamster video page
@@ -2738,14 +2810,22 @@ async function scrapeAyloScenes(count, tagIds, actorIds) {
         const actorIdSet = new Set(actorIds || []);
 
         const queries = [];
+        const hasActorFilter = actorIdSet.size > 0;
         for (const combo of combos) {
-            // Filtered result sets are much smaller (~5-15% of catalog), use conservative offset
-            const maxOffset = Math.max(10, Math.floor((combo.total || 500) * 0.05));
-            const offset = Math.floor(Math.random() * maxOffset);
             const groupParam = combo.groupId ? '&groupId=' + combo.groupId : '';
-            const basePath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating${groupParam}`;
-            for (const id of tagIdSet) queries.push(fetchAyloApi(basePath + '&tagId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
-            for (const id of actorIdSet) queries.push(fetchAyloApi(basePath + '&actorId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
+            // Tag queries: small random offset for variety (tags match many scenes)
+            if (tagIdSet.size > 0) {
+                const maxOffset = Math.max(10, Math.floor((combo.total || 500) * 0.05));
+                const offset = Math.floor(Math.random() * maxOffset);
+                const tagBasePath = `/v2/releases?limit=${limit}&offset=${offset}&type=scene&orderBy=-stats.rating${groupParam}`;
+                for (const id of tagIdSet) queries.push(fetchAyloApi(tagBasePath + '&tagId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
+            }
+            // Actor queries: offset 0 — performers typically have 5-50 scenes per brand,
+            // any positive offset risks skipping past all their content
+            if (hasActorFilter) {
+                const actorBasePath = `/v2/releases?limit=${limit}&offset=0&type=scene&orderBy=-dateReleased${groupParam}`;
+                for (const id of actorIdSet) queries.push(fetchAyloApi(actorBasePath + '&actorId=' + id, combo.auth).then(r => ({ r, groupName: combo.groupName })));
+            }
         }
 
         const results = await Promise.allSettled(queries);
@@ -2757,7 +2837,9 @@ async function scrapeAyloScenes(count, tagIds, actorIds) {
                 if (sceneMap[scene.id]) continue;
                 let score = 0;
                 for (const t of (scene.tags || [])) if (tagIdSet.has(t.id)) score++;
-                for (const a of (scene.actors || [])) if (actorIdSet.has(a.id)) score++;
+                // Actor matches get a heavy boost — performers are high-intent selections
+                // and must not be buried under tag-only matches
+                for (const a of (scene.actors || [])) if (actorIdSet.has(a.id)) score += 100;
                 sceneMap[scene.id] = { scene, score, groupName };
             }
         }
@@ -2905,11 +2987,16 @@ function serveFileWithRange(req, res, filePath, stat, contentType) {
 }
 
 const server = http.createServer(async (req, res) => {
-    // Enable CORS for all requests (including Chrome extension Private Network Access)
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS: allow same-origin, localhost, and LAN (RFC-1918) clients.
+    // The Chrome extension needs Access-Control-Allow-Private-Network.
+    const origin = req.headers.origin || '';
+    const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(origin)
+        ? origin : `http://localhost:${PORT}`;
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Plexd-Token, X-File-Name, X-Set-Name');
     res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    res.setHeader('Vary', 'Origin');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -2921,6 +3008,25 @@ const server = http.createServer(async (req, res) => {
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
+
+    // ── Token auth ───────────────────────────────────────────────────────────
+    // Media-serving GET endpoints are exempt because <video src>, <img src>,
+    // and HLS.js XHR loaders cannot send custom headers — only fetch() can,
+    // and native browser media loading bypasses the patched window.fetch.
+    // POST/DELETE endpoints still require the token for mutation protection.
+    const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download']);
+    const isMediaGet = req.method === 'GET' && (
+        pathname.startsWith('/api/proxy/') ||
+        pathname.startsWith('/api/files/') ||
+        pathname.startsWith('/api/hls/') ||
+        (pathname.startsWith('/api/moments/') && (pathname.endsWith('/clip.mp4') || pathname.endsWith('/thumb.jpg'))));
+    if (pathname.startsWith('/api/') && !TOKEN_EXEMPT.has(pathname) && !isMediaGet) {
+        const tok = req.headers['x-plexd-token'] || url.searchParams.get('_t');
+        if (tok !== API_TOKEN) {
+            jsonError(res, 401, 'Unauthorized');
+            return;
+        }
+    }
 
     // --- Cast / Server Info ---
     if (pathname === '/api/server-info' && req.method === 'GET') {
@@ -3456,6 +3562,12 @@ const server = http.createServer(async (req, res) => {
             folderPath = path.join(__dirname, folderPath);
         }
 
+        // Security: only allow scanning permitted directories
+        if (!isAllowedLocalPath(folderPath)) {
+            jsonError(res, 403, 'Folder not in an allowed directory');
+            return;
+        }
+
         try {
             if (!fs.existsSync(folderPath)) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -3517,7 +3629,7 @@ const server = http.createServer(async (req, res) => {
             jsonOk(res, { folder: folderPath, files });
         } catch (e) {
             console.error(`[Server] Scan error: ${e.message}`);
-            jsonError(res, 500, e.message);
+            jsonError(res, 500, 'Folder scan failed');
         }
         return;
     }
@@ -3540,7 +3652,8 @@ const server = http.createServer(async (req, res) => {
             }).filter(Boolean);
             jsonOk(res, { files });
         } catch (e) {
-            jsonError(res, 500, e.message);
+            console.error(`[Server] Orphaned files error: ${e.message}`);
+            jsonError(res, 500, 'Failed to list orphaned files');
         }
         return;
     }
@@ -3552,6 +3665,11 @@ const server = http.createServer(async (req, res) => {
                 const { filePath } = JSON.parse(body);
                 if (!filePath || !fs.existsSync(filePath)) {
                     jsonError(res, 400, 'Invalid file path');
+                    return;
+                }
+                // Security: only allow importing from permitted directories
+                if (!isAllowedLocalPath(filePath)) {
+                    jsonError(res, 403, 'Path not in an allowed directory');
                     return;
                 }
 
@@ -3607,7 +3725,7 @@ const server = http.createServer(async (req, res) => {
                 });
             } catch (e) {
                 console.error(`[Server] Import error: ${e.message}`);
-                jsonError(res, 500, e.message);
+                jsonError(res, 500, 'File import failed');
             }
         });
         return;
@@ -3618,6 +3736,12 @@ const server = http.createServer(async (req, res) => {
         const filePath = url.searchParams.get('path');
         if (!filePath) {
             jsonError(res, 400, 'Missing path parameter');
+            return;
+        }
+
+        // Security: only serve files from permitted directories
+        if (!isAllowedLocalPath(filePath)) {
+            jsonError(res, 403, 'Path not in an allowed directory');
             return;
         }
 
@@ -3634,7 +3758,7 @@ const server = http.createServer(async (req, res) => {
             serveFileWithRange(req, res, filePath, stats, contentType);
         } catch (e) {
             console.error(`[Server] Local file error: ${e.message}`);
-            jsonError(res, 500, e.message);
+            jsonError(res, 500, 'Failed to serve file');
         }
         return;
     }
@@ -3808,11 +3932,23 @@ const server = http.createServer(async (req, res) => {
                                contentType.includes('m3u8');
 
             if (isManifest) {
-                // Collect manifest content and rewrite URLs
+                // Collect manifest content and rewrite URLs.
+                // Cap at 10MB — a real HLS manifest is never larger than a few KB.
+                const MAX_MANIFEST_BYTES = 10 * 1024 * 1024;
                 let body = '';
+                let manifestOverflow = false;
                 proxyRes.setEncoding('utf8');
-                proxyRes.on('data', chunk => body += chunk);
+                proxyRes.on('data', chunk => {
+                    if (manifestOverflow) return;
+                    body += chunk;
+                    if (body.length > MAX_MANIFEST_BYTES) {
+                        manifestOverflow = true;
+                        proxyRes.destroy();
+                        if (!res.headersSent) jsonError(res, 502, 'Manifest too large');
+                    }
+                });
                 proxyRes.on('end', () => {
+                    if (manifestOverflow) return;
                     const rewritten = rewriteM3u8(body, targetUrl);
                     res.writeHead(200, {
                         'Content-Type': 'application/vnd.apple.mpegurl',
@@ -4441,7 +4577,7 @@ const server = http.createServer(async (req, res) => {
 
         } catch (err) {
             console.error('[Server] AI analysis failed:', err.message);
-            jsonError(res, 500, 'AI analysis failed: ' + err.message);
+            jsonError(res, 500, 'AI analysis failed');
         }
         return;
     }
@@ -4556,7 +4692,8 @@ const server = http.createServer(async (req, res) => {
                 thumbnail: scene.paths?.screenshot || null,
             });
         } catch (err) {
-            jsonError(res, 500, 'Stash query failed: ' + err.message);
+            console.error('[Server] Stash query failed:', err.message);
+            jsonError(res, 500, 'Stash query failed');
         }
         return;
     }
@@ -4686,7 +4823,7 @@ const server = http.createServer(async (req, res) => {
             const auth = await getAnyAyloAuth();
             if (!auth.accessToken) { jsonOk(res, { actors: [], error: 'No cached data and login required' }); return; }
             try { jsonOk(res, { actors: await refreshActorsFromApi(auth) || [] }); }
-            catch (err) { jsonError(res, 500, 'Failed to fetch actors: ' + err.message); }
+            catch (err) { console.error('[Server] Actor fetch failed:', err.message); jsonError(res, 500, 'Failed to fetch actors'); }
         }
         return;
     }
@@ -4777,7 +4914,8 @@ const server = http.createServer(async (req, res) => {
             const performers = Object.values(perfMap).sort((a, b) => b.scenes - a.scenes).slice(0, limit);
             jsonOk(res, { performers });
         } catch (err) {
-            jsonError(res, 500, 'Performer search failed: ' + err.message);
+            console.error('[Server] Performer search failed:', err.message);
+            jsonError(res, 500, 'Performer search failed');
         }
         return;
     }
@@ -4817,7 +4955,8 @@ const server = http.createServer(async (req, res) => {
             console.log('[Demo] Performer ' + actorId + ': ' + streams.length + ' scenes from ' + auths.length + ' sites');
             jsonOk(res, { streams, source: 'aylo', fetched: streams.length });
         } catch (err) {
-            jsonError(res, 500, 'Performer scenes failed: ' + err.message);
+            console.error('[Server] Performer scenes failed:', err.message);
+            jsonError(res, 500, 'Performer scenes failed');
         }
         return;
     }
@@ -4858,10 +4997,33 @@ const server = http.createServer(async (req, res) => {
         const hasAyloFilters = ayloTagIds.length > 0 || ayloActorIds.length > 0;
         const hasReptyleFilters = reptyleTagIds.length > 0 || reptyleActorIds.length > 0;
 
-        // Auto-detect: prefer Aylo if logged in, always include Stash if reachable
+        // Auto-detect: try authenticated sources first, xhamster is last resort.
+        // The 'aylo' code path fans out to Stash + Reptyle too (multi-source),
+        // so we use it whenever ANY authenticated source is available.
         if (source === 'auto') {
+            let hasAnyAuth = false;
             const auths = await getAllAyloAuths();
-            source = auths.length > 0 ? 'aylo' : 'xhamster';
+            if (auths.length > 0) hasAnyAuth = true;
+            if (!hasAnyAuth) {
+                try {
+                    const reptyleAuth = await getReptyleAuth();
+                    if (reptyleAuth.accessToken) hasAnyAuth = true;
+                } catch (e) { /* no reptyle */ }
+            }
+            if (!hasAnyAuth) {
+                try {
+                    await fetchStashGraphQL('{ systemStatus { status } }');
+                    hasAnyAuth = true;
+                } catch (e) { /* no stash */ }
+            }
+            if (!hasAnyAuth && (actorIds.length > 0 || tagIds.length > 0)) {
+                jsonOk(res, {
+                    streams: [], source: 'none', fetched: 0, failed: 0,
+                    error: 'Performer/tag filtering requires login. No authenticated source available — check Chrome is running with the Plexd profile.'
+                });
+                return;
+            }
+            source = hasAnyAuth ? 'aylo' : 'xhamster';
         }
 
         // Explicit source=reptyle — query Reptyle only
@@ -4882,7 +5044,7 @@ const server = http.createServer(async (req, res) => {
                 jsonOk(res, { streams, source: 'reptyle', fetched: streams.length, failed: 0, authenticated: true });
             } catch (err) {
                 console.error('[Demo] Reptyle error:', err.message);
-                jsonError(res, 500, 'Reptyle fetch failed: ' + err.message);
+                jsonError(res, 500, 'Reptyle fetch failed');
             }
             return;
         }
@@ -4964,7 +5126,7 @@ const server = http.createServer(async (req, res) => {
                 });
             } catch (err) {
                 console.error('[Demo] Stream fetch error:', err.message);
-                jsonError(res, 500, 'Failed to fetch streams: ' + err.message);
+                jsonError(res, 500, 'Failed to fetch streams');
             }
             return;
         }
@@ -5015,8 +5177,7 @@ const server = http.createServer(async (req, res) => {
             });
         } catch (err) {
             console.error('[Demo] Scrape error:', err.message);
-            jsonError(res, 500,
-                'Failed to scrape demo streams: ' + err.message);
+            jsonError(res, 500, 'Failed to scrape demo streams');
         }
         return;
     }
@@ -5047,8 +5208,17 @@ const server = http.createServer(async (req, res) => {
         const ext = path.extname(filePath).toLowerCase();
         const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-        res.writeHead(200, { 'Content-Type': contentType });
-        res.end(data);
+        // Inject the API token into HTML so the browser picks it up via <meta>
+        if (ext === '.html') {
+            const tokenMeta = `<meta name="plexd-api-token" content="${API_TOKEN}">`;
+            const html = data.toString('utf8').replace('</head>', `  ${tokenMeta}
+</head>`);
+            res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(html) });
+            res.end(html);
+        } else {
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(data);
+        }
     });
 
     } catch (err) {

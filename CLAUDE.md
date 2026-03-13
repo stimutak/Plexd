@@ -604,6 +604,42 @@ cd ~/Projects/nsfw_ai_model_server
 **Key endpoints:**
 - `GET /api/server-info` — LAN IP and port for URL rewriting
 
+### Projector Viewer (External Display)
+
+**Purpose:** Show video on a projector/second display via HDMI while keeping the Plexd control UI on the laptop. Separate from Cast (which targets wireless Chromecast/AirPlay).
+
+**Key binding:** `Shift+F` — toggle projector viewer open/closed. Uses the selected or fullscreen stream.
+
+**Architecture:** Single shared popup window (`window.name='plexd-projector'`) managed by `PlexdStream` module in `stream.js`. Communication via `postMessage` with origin validation (no bidirectional — projector is a "dumb terminal").
+
+**Key functions (stream.js):**
+- `buildProjectorHtml(url, startTime, title)` — Self-contained HTML string with HLS.js, postMessage listener, auto-hide cursor/title
+- `openProjectorViewer(streamId)` — Opens (or reuses) full-screen popup, writes HTML via same pattern as `popoutStream`
+- `updateProjectorStream(streamId)` — Sends `{cmd:'load', url, time, title}` via `postMessage` to existing popup
+- `closeProjectorViewer()` — Closes popup, clears state
+- `isProjectorOpen()` — Boolean check (auto-cleans stale references)
+
+**Auto-follow:** `selectStream()` calls `updateProjectorStream()` when projector is open and selection changes. Stream switches are instant (no new window).
+
+**Popup features:**
+- Full-viewport black background, no controls (controlled from main UI)
+- Double-click toggles native fullscreen (for projector display)
+- Title overlay fades after 3s (`titleTimer`), cursor hides after 3s idle (`idleTimer` — separate timers)
+- HLS.js loaded from CDN (synchronous `<script>` tag, same as `popoutStream`)
+
+**Safety:**
+- `postMessage` origin validation (`e.origin !== allowedOrigin` check in popup)
+- `postMessage` target origin set to `window.location.origin` (not `'*'`)
+- try/catch around popup write for popup-blocked edge cases
+- `removeStream()` clears `projectorStreamId` when projected stream is removed
+- Null guards on `stream.video` access
+
+**Relationship to other features:**
+- `Shift+F` handled in the same capture-phase `F` key handler as fullscreen (`e.shiftKey` check runs first)
+- `fF` added to `propagateKeys` regex — works in true fullscreen mode
+- Dead `case 'f'/'F'` removed from focused-mode switch (propagateKeys handles it)
+- Independent from Cast (`Shift+P`) — both can run simultaneously (wired HDMI vs wireless)
+
 ### HLS Transcoding System
 
 **Architecture:**

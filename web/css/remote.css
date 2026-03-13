@@ -200,6 +200,8 @@ button {
    ============================================ */
 .main {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
@@ -215,7 +217,7 @@ button {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 60vh;
+    flex: 1;
     padding: 32px 24px;
     text-align: center;
 }
@@ -260,6 +262,14 @@ button {
 }
 
 .remote-ui.hidden { display: none; }
+
+/* When no streams, hide stream-specific sections but keep toolbar for moments access */
+.remote-ui.no-streams .hero,
+.remote-ui.no-streams .info-section,
+.remote-ui.no-streams .transport-row,
+.remote-ui.no-streams .rating-section,
+.remote-ui.no-streams .filter-section,
+.remote-ui.no-streams .thumbs-section { display: none; }
 
 /* ============================================
    Hero Section - Preview Only
@@ -524,24 +534,30 @@ button {
     position: absolute;
     top: 0;
     left: 0;
+    width: 100%;
     height: 100%;
     background: rgba(237, 232, 224, 0.2);
     border-radius: 8px;
     pointer-events: none;
-    transition: width 0.1s linear;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.1s linear;
 }
 
 .progress-thumb {
     position: absolute;
     top: 50%;
-    transform: translate(-50%, -50%);
+    left: 0;
+    /* translateX moves thumb to correct position; -50% centres it on the point.
+       Using transform instead of `left` keeps this on the GPU compositor. */
+    transform: translateX(calc(var(--progress, 0) * 1% - 9px)) translateY(-50%);
     width: 18px;
     height: 18px;
     background: var(--text);
     border-radius: 50%;
     box-shadow: 0 2px 8px var(--shadow);
     pointer-events: none;
-    transition: left 0.1s linear;
+    transition: transform 0.1s linear;
 }
 
 .progress-track.dragging .progress-fill,
@@ -1000,7 +1016,8 @@ button {
     color: var(--text);
 }
 
-/* Scene buttons disabled when not in Theater mode */
+/* Disabled toolbar buttons */
+.toolbar-btn.disabled,
 .toolbar-btn-scene.disabled {
     opacity: 0.3;
     pointer-events: none;
@@ -1140,10 +1157,12 @@ button {
 
 .viewer-progress-fill {
     height: 100%;
+    width: 100%;
     background: rgba(237, 232, 224, 0.8);
     border-radius: 2px;
-    width: 0%;
-    transition: width 0.1s ease;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.1s ease;
 }
 
 .viewer-actions {
@@ -1623,10 +1642,12 @@ button {
 
 .moments-player-progress-fill {
     height: 100%;
+    width: 100%;
     background: var(--accent);
     border-radius: 2px;
-    width: 0%;
-    transition: width 0.2s ease;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.2s ease;
 }
 
 .moments-player-time {

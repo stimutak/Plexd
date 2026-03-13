@@ -1424,7 +1424,7 @@ const PlexdStream = (function() {
                 // Server file: download original
                 const m = (originalUrl || url).match(/\\/api\\/(files|hls)\\/([^/?]+)/);
                 if (m) {
-                    const r = await fetch('/api/files/' + encodeURIComponent(m[2]));
+                    const r = await plexdFetch('/api/files/' + encodeURIComponent(m[2]));
                     if (r.ok) {
                         const b = await r.blob();
                         const a = document.createElement('a');
@@ -1495,112 +1495,15 @@ const PlexdStream = (function() {
     }
 
     // ── Projector Viewer (single pop-out for external display) ──
+    // Uses /projector.html — a real server-hosted page (not document.write)
+    // so the popup has a proper origin, base URL, and normal browser behavior.
     let projectorWindow = null;
     let projectorStreamId = null;
-
-    /**
-     * Build self-contained HTML for the projector popup window.
-     * Minimal chrome — just a full-viewport video with HLS.js support
-     * and a postMessage listener for stream switching.
-     */
-    function buildProjectorHtml(url, startTime, title) {
-        return `<!DOCTYPE html>
-<html>
-<head>
-    <title>Plexd Projector${title ? ' — ' + title.replace(/[<>&"]/g, function(c) { return {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]; }) : ''}</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; background: #000; overflow: hidden; cursor: none; }
-        body:hover { cursor: default; }
-        body.idle { cursor: none; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-        .title-overlay {
-            position: fixed; top: 0; left: 0; right: 0;
-            padding: 16px 24px; color: #fff; font: 18px/1.3 -apple-system, sans-serif;
-            background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
-            opacity: 1; transition: opacity 0.5s; pointer-events: none; z-index: 10;
-        }
-        .title-overlay.hidden { opacity: 0; }
-    </style>
-</head>
-<body>
-    <div class="title-overlay" id="titleBar"></div>
-    <video id="video" autoplay></video>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"><\/script>
-    <script>
-        var video = document.getElementById('video');
-        var titleBar = document.getElementById('titleBar');
-        var hls = null;
-        var titleTimer = null;
-        var idleTimer = null;
-
-        function showTitle(text) {
-            titleBar.textContent = text || '';
-            titleBar.classList.remove('hidden');
-            clearTimeout(titleTimer);
-            titleTimer = setTimeout(function() { titleBar.classList.add('hidden'); }, 3000);
-        }
-
-        function loadVideo(url, time, title) {
-            if (hls) { hls.destroy(); hls = null; }
-            if (title) document.title = 'Plexd Projector — ' + title;
-            showTitle(title || '');
-
-            if (url && url.includes('.m3u8') && Hls.isSupported()) {
-                hls = new Hls({ capLevelToPlayerSize: false });
-                hls.loadSource(url);
-                hls.attachMedia(video);
-                hls.on(Hls.Events.MANIFEST_PARSED, function(e, data) {
-                    if (data.levels && data.levels.length > 0) hls.currentLevel = data.levels.length - 1;
-                    if (time) video.currentTime = time;
-                    video.play();
-                });
-            } else if (url) {
-                video.src = url;
-                video.addEventListener('loadedmetadata', function onMeta() {
-                    video.removeEventListener('loadedmetadata', onMeta);
-                    if (time) video.currentTime = time;
-                    video.play();
-                });
-            }
-        }
-
-        // Listen for commands from the main Plexd window (origin-checked)
-        var allowedOrigin = ${JSON.stringify(window.location.origin)};
-        window.addEventListener('message', function(e) {
-            if (e.origin !== allowedOrigin) return;
-            if (e.data && e.data.cmd === 'load') {
-                loadVideo(e.data.url, e.data.time, e.data.title);
-            }
-        });
-
-        // Double-click toggles native fullscreen (for projector display)
-        document.addEventListener('dblclick', function() {
-            if (document.fullscreenElement) {
-                document.exitFullscreen();
-            } else {
-                document.documentElement.requestFullscreen();
-            }
-        });
-
-        // Auto-hide cursor after 3s idle
-        document.addEventListener('mousemove', function() {
-            document.body.classList.remove('idle');
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(function() { document.body.classList.add('idle'); }, 3000);
-        });
-
-        // Load initial video
-        loadVideo(${JSON.stringify(url)}, ${startTime || 0}, ${JSON.stringify(title || '')});
-    <\/script>
-</body>
-</html>`;
-    }
+    let projectorPendingLoad = null; // queued load while projector.html is loading
 
     /**
      * Open (or reuse) the projector viewer window showing the given stream.
-     * The projector is a single shared popup — switching streams sends a
-     * postMessage to the existing window rather than opening a new one.
+     * Opens /projector.html and sends the stream URL via postMessage once loaded.
      */
     function openProjectorViewer(streamId) {
         const stream = streams.get(streamId);
@@ -1616,27 +1519,38 @@ const PlexdStream = (function() {
             return;
         }
 
-        // Open at full screen size for easy drag-to-projector
+        // Queue the initial load — sent when projector.html signals ready
+        projectorPendingLoad = { url, time: currentTime, title };
+
+        // Open projector.html (proper origin, no about:blank issues)
         const screenW = window.screen.availWidth;
         const screenH = window.screen.availHeight;
-        const html = buildProjectorHtml(url, currentTime, title);
-
-        projectorWindow = window.open('', 'plexd-projector',
+        projectorWindow = window.open('/projector.html', 'plexd-projector',
             `width=${screenW},height=${screenH},left=0,top=0,resizable=yes`);
 
         if (projectorWindow) {
-            try {
-                projectorWindow.document.write(html);
-                projectorWindow.document.close();
-                projectorStreamId = streamId;
-            } catch (e) {
-                // Popup was blocked or restricted — clean up
-                console.warn('Projector popup blocked:', e);
-                projectorWindow = null;
-                projectorStreamId = null;
-            }
+            projectorStreamId = streamId;
+        } else {
+            projectorPendingLoad = null;
         }
     }
+
+    // Listen for projector-ready signal from the popup
+    window.addEventListener('message', function(e) {
+        if (e.origin !== window.location.origin) return;
+        if (e.data && e.data.cmd === 'projector-ready' && projectorPendingLoad) {
+            var load = projectorPendingLoad;
+            projectorPendingLoad = null;
+            if (projectorWindow && !projectorWindow.closed) {
+                projectorWindow.postMessage({
+                    cmd: 'load',
+                    url: load.url,
+                    time: load.time,
+                    title: load.title
+                }, window.location.origin);
+            }
+        }
+    });
 
     /**
      * Send a new stream URL to the already-open projector window.
@@ -2481,7 +2395,7 @@ const PlexdStream = (function() {
             // Number keys (0-9), arrow keys, seeking/random keys, Escape, and B should propagate to document handler
             // for rating filter/assignment, stream navigation, seeking, random seek, Bug Eye, Mosaic, etc.
             // In true fullscreen, we need to manually dispatch since document may be outside fullscreen context
-            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlLfF;:wWtToOaAeErRxXjJkK'nNmMgGvVhHiIpPcCdDuUsSyYß=`÷≤≥+\-_\[\]{}\\|]$/.test(e.key) || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
+            const propagateKeys = /^[0-9]$/.test(e.key) || e.key.startsWith('Arrow') || /^[,.<>/?bBqQlLfF;:wWtToOaAeErRxXjJkKzZ'nNmMgGvVhHiIpPcCdDuUsSyYß¨≈=`÷≤≥+\-_\[\]{}\\|]$/.test(e.key) || e.key === 'Dead' || e.key === 'Escape' || e.key === ' ' || e.key === 'Tab' || e.key === 'Delete' || e.key === 'Backspace' || e.key === 'Enter';
             if (propagateKeys) {
                 // IMPORTANT:
                 // We dispatch a synthetic event to `document` so app-level shortcuts still work
@@ -3392,6 +3306,15 @@ const PlexdStream = (function() {
             return;
         }
 
+        // Exclude hidden/zero-dimension cells — they share (0,0) position
+        // and corrupt row clustering when mixed with visible cells
+        cells = cells.filter(c => c.width > 0 && c.height > 0);
+        if (cells.length === 0) {
+            cachedLayoutOrder = [];
+            cachedLayoutRows = [];
+            return;
+        }
+
         // Calculate adaptive row tolerance based on median cell height
         const heights = cells.map(c => c.height).filter(h => h > 0).sort((a, b) => a - b);
         const medianHeight = heights.length > 0 ? heights[Math.floor(heights.length / 2)] : 100;
@@ -3507,6 +3430,7 @@ const PlexdStream = (function() {
 
         return list.filter(s => {
             if (!s.wrapper) return false;
+            if (s.hidden) return false;
             if (s.wrapper.style && s.wrapper.style.display === 'none') return false;
             const rect = s.wrapper.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
@@ -4189,6 +4113,28 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Normalize a URL key by stripping signed/ephemeral query params (validto, hash, ip, etc.)
+     * so ratings can match across sessions when signed URLs change.
+     * Returns null for non-HTTP URLs or URLs without query params.
+     */
+    function normalizeUrlKey(url) {
+        if (!url || url.startsWith('blob:') || url.startsWith('/')) return null;
+        try {
+            const u = new URL(url);
+            // Strip signed params that change per-session
+            u.searchParams.delete('validto');
+            u.searchParams.delete('hash');
+            u.searchParams.delete('ip');
+            u.searchParams.delete('hdnea');
+            u.searchParams.delete('hdnts');
+            const norm = u.toString();
+            return norm !== url ? norm : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
      * Cycle rating for a stream (1 -> 2 -> ... -> 9 -> 0 -> 1...)
      */
     function cycleRating(streamId) {
@@ -4216,11 +4162,27 @@ const PlexdStream = (function() {
         const urlKey = stream.url;
         if (!urlKey) return;
 
+        const prev = getRating(stream.url, stream.fileName);
+        if (prev !== rating) {
+            console.log(`[Rating] ${streamId}: ${prev} → ${rating} (url=${urlKey.substring(0, 60)}...)`);
+        }
+
         // Store by URL (for remote streams)
         if (rating === 0) {
             ratings.delete(urlKey);
         } else {
             ratings.set(urlKey, rating);
+        }
+
+        // Also store under normalized URL (strips signed params like validto/hash/ip)
+        // so ratings survive xfill with new signed URLs
+        const normKey = normalizeUrlKey(urlKey);
+        if (normKey && normKey !== urlKey) {
+            if (rating === 0) {
+                ratings.delete(normKey);
+            } else {
+                ratings.set(normKey, rating);
+            }
         }
 
         // For blob URLs (local files), store by fileName for persistence
@@ -4336,8 +4298,18 @@ const PlexdStream = (function() {
             if (fileNameRating !== undefined) return fileNameRating;
         }
 
-        // Fall back to URL-based rating
-        return ratings.get(url) || 0;
+        // Fall back to URL-based rating (exact match first)
+        const urlRating = ratings.get(url);
+        if (urlRating) return urlRating;
+
+        // Try normalized URL key (strips signed params for cross-session matching)
+        const normKey = normalizeUrlKey(url);
+        if (normKey) {
+            const normRating = ratings.get(normKey);
+            if (normRating) return normRating;
+        }
+
+        return 0;
     }
 
     /**
@@ -4400,6 +4372,8 @@ const PlexdStream = (function() {
             return 0;
         }
 
+        console.log(`[Rating] distributeRatingsEvenly: ${unratedStreams.length} unrated of ${streams.size} total`);
+
         const counts = getAllRatingCounts();
 
         // Deterministic balancing: always choose the currently least-populated slot.
@@ -4426,19 +4400,23 @@ const PlexdStream = (function() {
      * Saves both URL-based ratings and fileName-based ratings (for blob URLs)
      */
     function saveRatings() {
-        const obj = {};
-        // Save URL-based ratings
-        ratings.forEach((rating, url) => {
-            obj[url] = rating;
-        });
-        localStorage.setItem('plexd_ratings', JSON.stringify(obj));
+        try {
+            const obj = {};
+            // Save URL-based ratings
+            ratings.forEach((rating, url) => {
+                obj[url] = rating;
+            });
+            localStorage.setItem('plexd_ratings', JSON.stringify(obj));
 
-        // Save fileName-based ratings separately (for blob URLs)
-        const fileNameObj = {};
-        fileNameRatings.forEach((rating, fileName) => {
-            fileNameObj[fileName] = rating;
-        });
-        localStorage.setItem('plexd_fileName_ratings', JSON.stringify(fileNameObj));
+            // Save fileName-based ratings separately (for blob URLs)
+            const fileNameObj = {};
+            fileNameRatings.forEach((rating, fileName) => {
+                fileNameObj[fileName] = rating;
+            });
+            localStorage.setItem('plexd_fileName_ratings', JSON.stringify(fileNameObj));
+        } catch (e) {
+            console.error('[Rating] saveRatings FAILED:', e.message, '(ratings Map size:', ratings.size, ')');
+        }
     }
 
     /**

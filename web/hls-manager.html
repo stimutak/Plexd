@@ -180,6 +180,42 @@
     </div>
 
     <script>
+        // API token auth — auto-refreshes token on 401 (server restart)
+        (function() {
+            var meta = document.querySelector('meta[name="plexd-api-token"]');
+            if (!meta) return;
+            var token = meta.content;
+            var _fetch = window.fetch;
+            var _refreshing = null;
+            function refreshToken() {
+                if (_refreshing) return _refreshing;
+                _refreshing = _fetch.call(window, '/hls-manager.html').then(function(r) { return r.text(); }).then(function(html) {
+                    var m = html.match(/plexd-api-token[^>]*content="([a-f0-9]+)"/);
+                    if (m) { token = m[1]; meta.content = token; }
+                    _refreshing = null;
+                }).catch(function() { _refreshing = null; });
+                return _refreshing;
+            }
+            window.fetch = function(url, opts) {
+                if (typeof url === 'string' && url.startsWith('/api/')) {
+                    opts = opts || {};
+                    opts.headers = new Headers(opts.headers || {});
+                    opts.headers.set('X-Plexd-Token', token);
+                }
+                return _fetch.call(this, url, opts).then(function(resp) {
+                    if (resp.status === 401 && typeof url === 'string' && url.startsWith('/api/')) {
+                        return refreshToken().then(function() {
+                            var retry = Object.assign({}, opts);
+                            retry.headers = new Headers(opts.headers || {});
+                            retry.headers.set('X-Plexd-Token', token);
+                            return _fetch.call(window, url, retry);
+                        });
+                    }
+                    return resp;
+                });
+            };
+        })();
+
         let autoRefreshInterval = null;
 
         async function fetchFiles() {

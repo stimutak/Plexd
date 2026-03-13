@@ -141,7 +141,8 @@ const PlexdCast = (function() {
                         castState.mode = 'cast';
                         castState.targetName = castSession.getCastDevice().friendlyName;
                         castSession.addMessageListener('urn:x-cast:plexd', function(ns, msg) {
-                            handleReceiverMessage(JSON.parse(msg));
+                            try { handleReceiverMessage(JSON.parse(msg)); }
+                            catch (e) { console.warn('[Cast] Bad message from receiver:', e.message); }
                         });
                         notifyStateChange();
                         break;
@@ -250,7 +251,8 @@ const PlexdCast = (function() {
                 notifyStateChange();
 
                 connection.addEventListener('message', function(e) {
-                    handleReceiverMessage(JSON.parse(e.data));
+                    try { handleReceiverMessage(JSON.parse(e.data)); }
+                    catch (err) { console.warn('[Cast] Bad message from presentation:', err.message); }
                 });
 
                 connection.addEventListener('close', function() {

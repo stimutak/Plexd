@@ -12,7 +12,16 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/plexd.css?v=107">
+    <link rel="stylesheet" href="css/plexd.css?v=109">
+    <!-- API token: injected by server into <meta name="plexd-api-token"> -->
+    <!-- plexdFetch() wraps fetch() to auto-send X-Plexd-Token on all /api/ calls -->
+    <script>
+    (function() {
+        window.plexdFetch = function(url, opts) {
+            return fetch(url, opts);
+        };
+    })();
+    </script>
 </head>
 <body>
     <div class="plexd-app header-hidden">
@@ -88,7 +97,7 @@
                 <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-button plexd-button-secondary" title="Saved sets">Sets</button>
                 <button onclick="PlexdApp.togglePanel('history-panel')" class="plexd-button plexd-button-secondary" title="History [Opt+S]">Hist</button>
                 <button id="tags-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePanel('tags-panel')" title="Browse & load tagged clips [U]">Tags</button>
-                <button id="performers-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePanel('performers-panel')" title="Browse performers [Y]">Perf</button>
+                <button id="performers-btn" class="plexd-button plexd-button-secondary" onclick="PlexdApp.togglePanel('performers-panel')" title="Browse performers [Opt+U]">Perf</button>
             </div>
         </header>
 
@@ -216,11 +225,50 @@
     <!-- HLS.js for streaming support -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
 
+    <!-- API token auth: server injects <meta name="plexd-api-token"> into HTML.
+         Auto-refreshes token on 401 (server restart generates a new token). -->
+    <script>
+    (function() {
+        var meta = document.querySelector('meta[name="plexd-api-token"]');
+        if (!meta) return;
+        var token = meta.content;
+        var _fetch = window.fetch;
+        var _refreshing = null;
+        function refreshToken() {
+            if (_refreshing) return _refreshing;
+            _refreshing = _fetch.call(window, '/index.html').then(function(r) { return r.text(); }).then(function(html) {
+                var m = html.match(/plexd-api-token[^>]*content="([a-f0-9]+)"/);
+                if (m) { token = m[1]; meta.content = token; }
+                _refreshing = null;
+            }).catch(function() { _refreshing = null; });
+            return _refreshing;
+        }
+        window.fetch = function(url, opts) {
+            if (typeof url === 'string' && url.startsWith('/api/')) {
+                opts = opts || {};
+                opts.headers = new Headers(opts.headers || {});
+                opts.headers.set('X-Plexd-Token', token);
+            }
+            return _fetch.call(this, url, opts).then(function(resp) {
+                if (resp.status === 401 && typeof url === 'string' && url.startsWith('/api/')) {
+                    return refreshToken().then(function() {
+                        var retry = Object.assign({}, opts);
+                        retry.headers = new Headers(opts.headers || {});
+                        retry.headers.set('X-Plexd-Token', token);
+                        return _fetch.call(window, url, retry);
+                    });
+                }
+                return resp;
+            });
+        };
+    })();
+    </script>
+
     <!-- Scripts -->
-    <script src="js/grid.js?v=103"></script>
-    <script src="js/stream.js?v=110"></script>
+    <script src="js/grid.js?v=104"></script>
+    <script src="js/stream.js?v=114"></script>
     <script src="js/moments.js?v=105"></script>
     <script src="js/cast.js?v=105"></script>
-    <script src="js/app.js?v=117"></script>
+    <script src="js/app.js?v=121"></script>
 </body>
 </html>

@@ -77,6 +77,12 @@ When Audio Focus is disabled (speaker icon):
 - **Mute button tooltip** - Hover to see current mode (focus ON/OFF)
 - **M key without selection** - Now toggles (mute all ↔ unmute all), not just mute
 
+### Projector / External Display
+- **Projector Viewer** (`Shift+F`): Opens a single clean popup window showing the selected stream
+- **Auto-Follow**: Switch streams in the main UI — the projector window follows automatically
+- **External Display**: Drag the popup to your HDMI-connected projector/TV, double-click for fullscreen
+- **Independent from Cast**: Works via wired HDMI, separate from wireless Cast (`Shift+P`)
+
 ### Navigation
 - **Keyboard Navigation**: Arrow keys to select streams in grid
 - **Stream Selection**: Visual highlight on selected stream
@@ -106,6 +112,7 @@ When Audio Focus is disabled (speaker icon):
 | P | Picture-in-Picture for selected stream |
 | I | Toggle stream info overlay |
 | F | Toggle true fullscreen (grid view, hides browser chrome) |
+| Shift+F | Toggle projector viewer (external display popup) |
 | T | Toggle Tetris layout mode |
 | V | Cycle view modes (All → 1★ → 2★ → ... → 9★) |
 | G | Cycle rating on selected stream |

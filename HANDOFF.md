@@ -2,25 +2,266 @@
 
 ## Overview
 
-Plexd is a multiplex video stream display system. This document provides technical context for future development.
-
-## Current State
-
-**Branch**: `feature/server-file-storage` (PR #87 open)
-**Status**: Remote viewer functional, ready for interface redesign
+Plexd is a multiplex video stream display system. This document records all major sessions of work for continuity between development sessions.
 
 ---
 
-## Latest Session Summary (Jan 2026)
+## Session: March 2026 — Security Hardening + Performance Audit
+
+### What Was Done
+
+A full security, performance, and architecture review was conducted across the entire codebase (`server.js` 5,142 lines, `app.js` 14,433 lines, `stream.js` 5,237 lines, `grid.js` 2,519 lines). Ten issues were identified and fixed in a single commit (`623f39a`).
+
+---
+
+### Security Fixes
+
+#### 1. Local File Inclusion (LFI) — Critical
+
+Three endpoints accepted user-supplied filesystem paths with no restrictions, allowing any LAN client to read, copy, or enumerate arbitrary files on the host machine (SSH keys, `.env`, Chrome cookies, etc.).
+
+**Endpoints affected:**
+- `GET /api/files/local?path=<any-path>` — served any file via `serveFileWithRange()`
+- `POST /api/files/import` body `{ filePath }` — copied any file into `uploads/`
+- `GET /api/files/scan-local?folder=<any-path>` — recursively listed any directory
+
+**Fix:** Added `isAllowedLocalPath()` guard called in all three handlers before any filesystem operation:
+
+```js
+// server.js
+const ALLOWED_LOCAL_DIRS = [
+    path.resolve(UPLOADS_DIR),
+    path.resolve(DEFAULT_SCAN_FOLDER),   // ~/Downloads
+];
+
+function isAllowedLocalPath(filePath) {
+    const resolved = path.resolve(filePath);
+    return ALLOWED_LOCAL_DIRS.some(
+        dir => resolved === dir || resolved.startsWith(dir + path.sep)
+    );
+}
+```
+
+To allow additional scan roots, add to `ALLOWED_LOCAL_DIRS` at the top of `server.js`.
+
+---
+
+#### 2. SSRF — High
+
+The `/api/proxy/hls` and `/api/proxy/video` endpoints accepted any `http://` or `https://` URL and fetched it server-side. A LAN client could use this to scan internal network services, hit cloud metadata endpoints (`169.254.169.254`), or reach other localhost ports.
+
+**Fix:** Added host validation inside `fetchUrl()` before any connection is made:
+
+```js
+const parsedHost = new URL(targetUrl).hostname;
+if (/^(localhost$|127\.|0\.0\.0\.0|::1|169\.254\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(parsedHost)) {
+    callback(new Error(`SSRF blocked: private/loopback host (${parsedHost})`));
+    return;
+}
+```
+
+The proxy is only used for external CDN content (Aylo/Reptyle HLS streams), so this restriction is safe.
+
+---
+
+#### 3. CSRF / Unauthenticated API — Medium
+
+The server bound on `0.0.0.0:8080` with `Access-Control-Allow-Origin: *` and zero authentication. Any device on the network (or any webpage opened in the browser via a cross-origin fetch) could call any API endpoint — controlling playback, importing files, triggering AI analysis, deleting moments, etc.
+
+**Fix — Per-run API token:**
+
+A random 32-hex-character token is generated at server startup:
+
+```js
+const API_TOKEN = crypto.randomBytes(16).toString('hex');
+```
+
+It is injected into every served HTML page as a `<meta>` tag:
+
+```js
+// Injected into </head> of every .html response
+const tokenMeta = `<meta name="plexd-api-token" content="${API_TOKEN}">`;
+```
+
+All `/api/*` endpoints (except the proxy and `/api/server-info`, which are needed before the token is known) require the `X-Plexd-Token` header:
+
+```js
+const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download']);
+if (pathname.startsWith('/api/') && !TOKEN_EXEMPT.has(pathname)) {
+    const tok = req.headers['x-plexd-token'] || url.searchParams.get('_t');
+    if (tok !== API_TOKEN) {
+        jsonError(res, 401, 'Unauthorized');
+        return;
+    }
+}
+```
+
+**Fix — `plexdFetch()` client wrapper:**
+
+A `plexdFetch()` wrapper is defined inline in `index.html` and `remote.html` (before any JS files load). It reads the `<meta>` token once and injects it as a header on every `/api/` call automatically:
+
+```js
+window.plexdFetch = function(url, opts) {
+    opts = opts || {};
+    if (typeof url === 'string' && url.startsWith('/api/')) {
+        opts.headers = Object.assign({ 'X-Plexd-Token': getToken() }, opts.headers || {});
+    }
+    return fetch(url, opts);
+};
+```
+
+All 41 `fetch('/api/…')` calls across `app.js`, `remote.js`, `stream.js`, and `moments.js` were replaced with `plexdFetch(…)`.
+
+**Key rule:** Any new API call added to client JS must use `plexdFetch()`, not `fetch()` directly.
+
+---
+
+#### 4. CORS Wildcard — Medium
+
+`Access-Control-Allow-Origin: *` allowed any webpage to make credentialed requests to the API from the user's browser.
+
+**Fix:** Replaced with a dynamic origin allowlist — only localhost and RFC-1918 LAN addresses are permitted:
+
+```js
+const allowedOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(origin)
+    ? origin : `http://localhost:${PORT}`;
+res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+res.setHeader('Vary', 'Origin');
+```
+
+The Chrome extension's Private Network Access headers are preserved.
+
+---
+
+#### 5. Unbounded Proxy Manifest Body — Medium
+
+When the HLS proxy fetched a manifest (`.m3u8`), it accumulated the full response body in memory with no size limit. A malicious upstream server could send a gigabyte-sized response.
+
+**Fix:** Hard cap at 10MB (real manifests are a few KB):
+
+```js
+const MAX_MANIFEST_BYTES = 10 * 1024 * 1024;
+proxyRes.on('data', chunk => {
+    body += chunk;
+    if (body.length > MAX_MANIFEST_BYTES) {
+        proxyRes.destroy();
+        if (!res.headersSent) jsonError(res, 502, 'Manifest too large');
+    }
+});
+```
+
+---
+
+### Performance Fixes
+
+#### 6. `transition: all` on Stream Wrappers (plexd.css)
+
+The coverflow and smart-layout modes applied `transition: all` to `.plexd-stream` elements. Stream wrappers are positioned with `style.left`, `style.top`, `style.width`, `style.height` — so `transition: all` was animating layout properties, triggering a full reflow on every frame during carousel animation.
+
+**Fix:** Replaced with GPU-composited properties only:
+
+```css
+/* Before */
+transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+/* After */
+transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+            opacity 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+            box-shadow 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+```
+
+**Rule (already in CLAUDE.md):** Never animate `left`, `top`, `width`, or `height`. Only animate `transform` and `opacity`.
+
+---
+
+#### 7. Progress Bar Layout Thrashing (remote.css / remote.js)
+
+The iPhone remote's progress bar used `transition: width` on the fill element and `transition: left` on the thumb — both layout properties, both animating on every `timeupdate` event (multiple times per second).
+
+**Fix — CSS:** Converted to GPU-composited transforms:
+
+```css
+/* Fill: width → scaleX */
+.progress-fill {
+    width: 100%;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.1s linear;
+}
+
+/* Thumb: left → translateX via CSS custom property */
+.progress-thumb {
+    left: 0;
+    transform: translateX(calc(var(--progress, 0) * 1% - 9px)) translateY(-50%);
+    transition: transform 0.1s linear;
+}
+```
+
+**Fix — JS:** Updated all three progress update sites in `remote.js`:
+
+```js
+// Fill
+el.progressFill.style.transform = `scaleX(${progress / 100})`;
+
+// Thumb
+el.progressThumb.style.setProperty('--progress', progress);
+```
+
+Same pattern applied to `viewer-progress-fill` and `moments-player-progress-fill`.
+
+---
+
+### Housekeeping
+
+#### 8. Puppeteer moved to devDependencies
+
+`puppeteer` (300MB of bundled Chromium) was listed as a runtime `dependency` but is only used in `scripts/chrome-test.js`. Moved to `devDependencies` so production deploys don't install it.
+
+---
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `server.js` | API_TOKEN, ALLOWED_LOCAL_DIRS, isAllowedLocalPath(), SSRF guard in fetchUrl(), CORS origin allowlist, token auth middleware, manifest body cap, HTML token injection |
+| `web/index.html` | plexdFetch() wrapper inline script |
+| `web/remote.html` | plexdFetch() wrapper inline script |
+| `web/js/app.js` | 34× fetch→plexdFetch |
+| `web/js/remote.js` | 4× fetch→plexdFetch, progress bar scaleX/translateX |
+| `web/js/stream.js` | 1× fetch→plexdFetch |
+| `web/js/moments.js` | 2× fetch→plexdFetch |
+| `web/css/plexd.css` | transition: all → explicit GPU props on .plexd-stream |
+| `web/css/remote.css` | progress fill/thumb: layout props → transform |
+| `package.json` | puppeteer: dependencies → devDependencies |
+
+---
+
+### Remaining Architecture Notes (Not Fixed — Future Work)
+
+These were identified in the audit but not fixed in this session due to scope:
+
+1. **`app.js` is 14,433 lines** — a single IIFE containing theater mode, moments UI, wall editor, face detection, keyboard handling, sets, ratings, downloads, and more. Recommend extracting bounded submodules: `theater.js`, `moments-ui.js`, `keyboard.js`.
+
+2. **`server.js` is 5,142 lines** with 57 `if (pathname === …)` route branches. No routing middleware, so adding uniform auth/logging/rate-limiting requires touching every branch. A minimal route-map pattern would help.
+
+3. **`handleKeyboard` has 200+ cases** called on every keypress. A dispatch table keyed by mode + key would reduce constant-factor cost.
+
+4. **Health check polls every 5s per stream** — with 8 streams that's 8 independent timers. Consolidate to a single interval iterating all streams.
+
+5. **Static files loaded fully into memory** (`fs.readFile`) — should use `fs.createReadStream` with `ETag`/`Cache-Control` headers for large JS files.
+
+---
+
+## Session: January 2026 — Remote Interface Redesign
 
 ### Completed This Session
 
 1. **Server-Side File Storage** (`server.js`)
-   - `/api/files/upload` - Upload with name+size duplicate check
-   - `/api/files/:id` - Serve files with range request support
-   - `/api/files/list` - List all uploaded files
-   - `/api/files/purge` - Delete all or by set name
-   - `/api/files/associate` - Link files to saved sets (prevents 24h auto-delete)
+   - `/api/files/upload` — upload with name+size duplicate check
+   - `/api/files/:id` — serve files with range request support
+   - `/api/files/list` — list all uploaded files
+   - `/api/files/purge` — delete all or by set name
+   - `/api/files/associate` — link files to saved sets (prevents 24h auto-delete)
 
 2. **Remote Video Sync** (`web/js/remote.js`)
    - Phone video syncs position with Mac (within 2s tolerance)
@@ -40,116 +281,81 @@ Plexd is a multiplex video stream display system. This document provides technic
    ```
 
 4. **Remote Swipe Gestures**
-   - Swipe up/down/left/right = spatial grid navigation via `selectNext` command
-   - Double-tap thumbnail = random seek
-   - Long-press random button = action sheet
-
-5. **Mac Changes**
-   - Double-click stream = toggle focus mode
-   - Files upload to server when loading saved sets
+   - Swipe left/right = navigate streams
+   - Viewer swipe down = exit viewer
 
 ### Key Files Modified
-- `server.js` - File storage API
-- `web/js/app.js` - Upload logic, purge UI in Manage Files modal
-- `web/js/remote.js` - Tap zones, video sync, spatial swipes
-- `web/js/stream.js` - Double-click focus
-- `web/sw.js` - Cache version v8
-- `CLAUDE.md` - Remote documentation
-
----
-
-## NEXT: Remote Interface Redesign
-
-### Goal
-Three-mode interface instead of triage-only:
-
-### Mode 1: Viewer
-- Fullscreen synced video (already partially works)
-- Minimal overlay UI (title, time, auto-hide)
-- Gesture-only controls (tap zones already done)
-- Landscape orientation support
-
-### Mode 2: Controller (NEW)
-- Prominent transport bar (play, prev, next, random)
-- Large seek slider with time display
-- Stream info (title, thumbnail, rating)
-- Quick actions (focus, mute)
-
-### Mode 3: Triage (EXISTS)
-- Rating assignment strip
-- Filter tabs
-- Thumbnail grid
-- Keep current functionality
-
-### Mode Switching Options
-- **Option A**: Swipe vertical between modes
-- **Option B**: Tab bar at bottom
-
-### Implementation Plan
-1. Add mode state variable (`viewerMode`, `controllerMode`, `triageMode`)
-2. Create mode switching logic
-3. Build Controller mode layout
-4. Polish Viewer mode (add auto-hide, landscape)
-5. Add transitions
+- `server.js` — file storage API
+- `web/js/app.js` — upload logic, purge UI in Manage Files modal
+- `web/js/remote.js` — tap zones, video sync, swipe gestures
+- `web/js/stream.js` — double-click focus
+- `web/sw.js` — cache version bump
+- `CLAUDE.md` — remote documentation
 
 ---
 
 ## Development Quick Reference
 
 ### Start Server
+
 ```bash
-cd /Users/oliver/Projects/Plexd
-node server.js  # Port 8080 - MUST use this, not npx serve
+./scripts/start-server.sh     # ALWAYS use this — kills old instances first
+tail -f /tmp/plexd-server.log # Watch logs
 ```
 
-### Remote URL
+Never run `node server.js &` directly — see CLAUDE.md for why.
+
+### URLs
+
 ```
-http://<mac-ip>:8080/remote.html?v=8
-# Bump ?v=N to bust service worker cache
+http://localhost:8080/          # Main app
+http://localhost:8080/remote.html  # iPhone remote PWA
+http://<lan-ip>:8080/remote.html   # iPhone on same WiFi
 ```
 
-### Git
-```bash
-git config user.email  # oed@mac.com
+### Token Flow
+
+The API token is generated fresh on every server start. The browser gets it automatically via the `<meta name="plexd-api-token">` tag injected into HTML. The `plexdFetch()` wrapper reads it and sends `X-Plexd-Token` on every API call. No manual token management needed.
+
+If you add a new API endpoint:
+1. Add the route to `server.js` — the token middleware covers all `/api/*` automatically
+2. Call the endpoint via `plexdFetch()` in client JS, not `fetch()`
+3. If the endpoint needs to be exempt from auth (like a new proxy), add its path to `TOKEN_EXEMPT`
+
+### Extending ALLOWED_LOCAL_DIRS
+
+If you want to allow scanning/importing from a directory other than `~/Downloads`:
+
+```js
+// Near top of server.js, after ALLOWED_LOCAL_DIRS is defined:
+ALLOWED_LOCAL_DIRS.push(path.resolve('/path/to/your/media'));
 ```
-
-### Key remote.js Functions
-- `setupHeroGestures()` - Tap zones and swipes
-- `updateHeroVideo()` - Video loading and sync
-- `send(action, payload)` - Commands to Mac via relay
-- `navigateStream(dir)` - By index (use `send('selectNext', {direction})` for spatial)
-
-### Commands (remote -> Mac)
-- `selectNext` + `{direction: 'up'|'down'|'left'|'right'}` - Spatial nav
-- `seekRelative` + `{streamId, offset}` - Relative seek
-- `randomSeek` + `{streamId}` - Random position
-- `togglePause`, `toggleMute`, `enterFullscreen`, `exitFullscreen`
 
 ---
 
 ## Architecture Summary
 
-### Three Main Modules
+### Server Modules (all in server.js)
 
-1. **PlexdApp** (`web/js/app.js`)
-   - Application controller
-   - Event handling and keyboard shortcuts
-   - Queue and history management
-   - Stream combination save/load
-   - Extension message handling
+| Section | Responsibility |
+|---------|---------------|
+| File Storage | Upload, serve, transcode, HLS management |
+| Remote Relay | State sync and command bus between Mac and iPhone |
+| Proxy | HLS/video CORS bypass for external streams |
+| Moments | Capture, thumbnail, AI tagging, clip extraction |
+| Demo/Auth | Aylo (Brazzers), Reptyle, Stash integration |
+| Downloads | Background ffmpeg download queue |
+| Static Serving | Web files with token injection |
 
-2. **PlexdStream** (`web/js/stream.js`)
-   - Video element creation and lifecycle
-   - HLS.js integration for .m3u8 streams
-   - Playback controls (seek, mute, fullscreen, PiP)
-   - Stream selection and grid navigation
-   - Drag-and-drop reordering
+### Client Modules
 
-3. **PlexdGrid** (`web/js/grid.js`)
-   - Layout calculation algorithm
-   - Optimal row/column determination
-   - Position and size application
-   - Efficiency scoring
+| File | Responsibility |
+|------|---------------|
+| `grid.js` | Layout calculation (standard grid, coverflow, Tetris/Wall) |
+| `stream.js` | Video element lifecycle, HLS.js, controls, fullscreen, projector |
+| `moments.js` | Moment CRUD, server sync, thumbnail store |
+| `cast.js` | AirPlay / Chromecast / Presentation API abstraction |
+| `app.js` | Everything else: keyboard, theater mode, ratings, sets, UI |
 
 ### Data Flow
 
@@ -160,143 +366,29 @@ User Input → PlexdApp.addStream() → PlexdStream.createStream()
                                           ↓
                                    PlexdGrid.calculateLayout()
                                           ↓
-                                   DOM positions updated
+                                   DOM positions updated via left/top/width/height
 ```
 
-### Extension Integration
+### Remote Control Flow
 
 ```
-Content Script (content.js) → Detects video URLs via fetch/XHR interception
-                                          ↓
-                            Stores in chrome.storage.local
-                                          ↓
-Popup (popup.js) → Reads detected URLs → Sends to Plexd via URL params
-                                          ↓
-PlexdApp → Reads URL params → Adds streams → Saves to localStorage
+iPhone (remote.html)
+  → plexdFetch('/api/remote/command', POST, {action, payload})
+  → server.js pendingCommands[]
+  → Mac app polls GET /api/remote/command every 500ms
+  → handleRemoteCommand(action, payload)
 ```
 
-## Key Technical Decisions
+State flows the other direction: Mac POSTs to `/api/remote/state`, iPhone polls GET.
 
-### Stream Passing: URL Parameters with `|||` Separator
-- URLs with commas broke comma-separated parsing
-- Solution: Use `|||` as separator, URL-encode each stream
+---
 
-### Stream Persistence: localStorage on Plexd Page
-- chrome.storage wasn't persisting reliably between popup opens
-- Solution: Plexd page manages its own localStorage
-- Extension sends new streams via URL params, Plexd accumulates
+## Known Issues / Future Work
 
-### CORS: No crossOrigin Attribute
-- Setting `crossOrigin='anonymous'` caused preflight failures
-- Solution: Don't set crossOrigin - let browser handle it
+1. **Stream wrapper positioning** uses `left`/`top`/`width`/`height` inline styles. Coverflow/smart-layout mode transitions are now GPU-safe (transition only covers `transform`/`opacity`/`box-shadow`), but the underlying positioning could be refactored to use `transform: translate()` for consistency.
 
-### Grid Navigation: Compute from DOM
-- Module variable `gridCols` wasn't updating reliably
-- Solution: `computeGridCols()` reads actual DOM positions via `getBoundingClientRect()`
+2. **app.js size** (14k lines) makes it hard to audit or modify safely. Extracting `theater.js`, `moments-ui.js`, and `keyboard.js` would reduce risk of cross-feature breakage.
 
-### HLS Quality: Force Maximum
-- Default HLS.js behavior caps to player size
-- Solution: Set `capLevelToPlayerSize: false` and select `maxLevel` on manifest parse
+3. **No rate limiting** on API endpoints. A misbehaving LAN client could flood the moments sync or demo stream endpoints. Low priority for a personal tool but worth noting.
 
-## File Details
-
-### web/js/app.js (Main Application)
-- `init()` - Setup, load queue/history, connect callbacks
-- `addStream(url)` - Create stream, add to DOM, save to history
-- `handleKeyboard(e)` - All keyboard shortcuts
-- Queue functions: `addToQueue`, `playFromQueue`, `playAllFromQueue`
-- History functions: `addToHistory`, `clearHistory`, `loadHistory`
-- Combination functions: `saveStreamCombination`, `loadStreamCombination`
-- `togglePanel(panelId)` - Slide panels in/out
-
-### web/js/stream.js (Stream Manager)
-- `createStream(url, options)` - Creates video element with all controls
-- `createControlsOverlay(streamId)` - Seek bar, buttons, time display
-- `setupVideoEvents(stream)` - Event listeners for playback, seek, drag
-- `toggleFullscreen/toggleTrueFullscreen` - Two fullscreen modes
-- `togglePiP` - Picture-in-Picture API
-- `computeGridCols()` - DOM-based grid detection
-- `selectNextStream(direction)` - Grid-aware navigation
-- `reorderStreams(draggedId, targetId)` - Drag-drop handling
-
-### web/js/grid.js (Layout Engine)
-- `calculateLayout(container, streams)` - Main entry point
-- `findOptimalGrid(container, count)` - Tries all row/col combinations
-- `buildGridLayout()` - Calculates positions and sizes
-- `applyLayout()` - Updates DOM element positions
-
-### web/css/plexd.css
-- `.plexd-controls` - Bottom overlay with gradient
-- `.plexd-seek-container` - Seek bar and time
-- `.plexd-btn-row` - Control buttons
-- `.plexd-panel` - Slide-out sidebar panels
-- `.plexd-selected` - Stream selection highlight
-- `.plexd-fullscreen` - Browser-fill mode
-
-### extension/content.js
-- Intercepts fetch() and XMLHttpRequest
-- Detects .m3u8, .mpd, .mp4 URLs
-- Stores in chrome.storage.local with page-specific key
-
-### extension/popup.js
-- Reads detected URLs from storage
-- Finds Plexd tab (localhost matching)
-- Sends streams via URL parameters
-
-## Known Issues / TODO
-
-1. **Grid Navigation Edge Cases**: When last row has fewer items, up/down behavior could be smoother
-
-2. **Seek Bar on Live Streams**: Shows incorrect duration for live HLS streams
-
-3. **Extension Icons**: Currently no icons (removed due to missing files)
-
-4. **Mobile Touch**: Controls may need larger touch targets on mobile
-
-5. **Stream Labels**: No way to add custom names to streams yet
-
-## Potential Improvements
-
-1. **Volume Slider**: Per-stream volume control instead of just mute
-
-2. **Playback Speed**: 0.5x, 1x, 1.5x, 2x options
-
-3. **Sync Playback**: Sync all streams to same timestamp
-
-4. **Import/Export**: JSON export of stream sets
-
-5. **Thumbnails**: Preview thumbnails for saved combinations
-
-6. **Auto-Queue Mode**: Extension auto-adds detected videos without confirmation
-
-7. **Stream Quality Selector**: Manual quality override for HLS
-
-8. **Keyboard Shortcuts Modal**: Show all shortcuts in overlay
-
-## Testing Notes
-
-### Test Streams
-```
-# Big Buck Bunny (MP4)
-https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4
-
-# HLS Test Stream
-https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-```
-
-### Extension Testing
-1. Load extension in developer mode
-2. Navigate to page with video
-3. Open extension popup
-4. Check console for detected URLs
-
-## Environment
-
-- Vanilla JavaScript (no framework)
-- HLS.js via CDN for streaming
-- Chrome Extension Manifest V3
-- No build process required
-
-## Contacts
-
-Developed with Claude Code assistance. See CLAUDE.md for development guidelines.
+4. **Service worker caching** (`sw.js`) caches all static assets. After a server restart (new token), cached HTML in the service worker may have the old token. The `?v=N` cache-bust on script tags handles JS files, but the HTML itself is cached. Solution: always bump the SW cache version after deployments that change security-sensitive HTML.

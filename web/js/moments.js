@@ -404,10 +404,23 @@ const PlexdMoments = (function() {
             if (data && Array.isArray(data.moments)) {
                 _mergeServerMoments(data.moments);
             }
+            // Remove moments that server says were deleted (prevents re-sync of purged moments)
+            if (data && Array.isArray(data.deletedIds) && data.deletedIds.length > 0) {
+                var deletedSet = {};
+                for (var d = 0; d < data.deletedIds.length; d++) deletedSet[data.deletedIds[d]] = true;
+                var beforeLen = moments.length;
+                moments = moments.filter(function(m) { return !deletedSet[m.id]; });
+                if (moments.length < beforeLen) {
+                    save();
+                    console.log('[Moments] Removed ' + (beforeLen - moments.length) + ' server-deleted moments from local');
+                }
+            }
             // Clear only the IDs we actually synced (new dirties added mid-flight survive)
             for (var j = 0; j < ids.length; j++) delete _dirtyIds[ids[j]];
             dirty = Object.keys(_dirtyIds).length > 0;
-            console.log('[Moments] Synced ' + toSync.length + ' moments to server');
+            var logMsg = '[Moments] Synced ' + toSync.length + ' moments to server';
+            if (data && data.blocked > 0) logMsg += ' (' + data.blocked + ' blocked as deleted)';
+            console.log(logMsg);
         })
         .catch(function(e) {
             // Offline-first: swallow errors, will retry on next interval

@@ -181,6 +181,25 @@ try {
     }
     momentsDb = [];
 }
+
+// Deleted moments blocklist — prevents client sync from re-adding deleted moments
+const DELETED_MOMENTS_JSON = path.join(MOMENTS_DIR, 'deleted-ids.json');
+let deletedMomentIds = new Set();
+try {
+    const ids = JSON.parse(fs.readFileSync(DELETED_MOMENTS_JSON, 'utf-8'));
+    deletedMomentIds = new Set(ids);
+    console.log(`[Server] Loaded ${deletedMomentIds.size} deleted moment IDs`);
+} catch (e) {
+    if (e.code !== 'ENOENT') console.error('[Server] Failed to load deleted IDs:', e.message);
+}
+
+function saveDeletedMomentIds() {
+    try {
+        fs.writeFileSync(DELETED_MOMENTS_JSON, JSON.stringify([...deletedMomentIds]));
+    } catch (e) {
+        console.error('[Server] Failed to save deleted IDs:', e.message);
+    }
+}
 let batchProgress = { total: 0, done: 0, current: '', errors: 0, running: false };
 
 function saveMomentsDb() {
@@ -338,6 +357,8 @@ function saveThumbnailFile(id, dataUrl) {
 function upsertMoment(incoming) {
     if (!incoming || !incoming.id) return null;
     if (!isValidMomentId(incoming.id)) return null;
+    // Block re-adding deleted moments (from stale client sync)
+    if (deletedMomentIds.has(incoming.id)) return null;
 
     // Handle thumbnail
     if (incoming.thumbnailDataUrl && incoming.thumbnailDataUrl.startsWith('data:')) {
@@ -2477,11 +2498,16 @@ function extractBestReptyleUrl(watchResp) {
     // Priority: stream3 (newest, highest quality) > stream2.av1.hls > stream2.vp9.hls > stream2.avc.hls > stream (legacy)
     // stream3 may be a direct URL or nested object
     if (d.stream3) {
-        if (typeof d.stream3 === 'string') return d.stream3;
-        if (d.stream3.av1 && d.stream3.av1.hls) return d.stream3.av1.hls;
-        if (d.stream3.vp9 && d.stream3.vp9.hls) return d.stream3.vp9.hls;
-        if (d.stream3.avc && d.stream3.avc.hls) return d.stream3.avc.hls;
-        if (d.stream3.hls) return d.stream3.hls;
+        let picked;
+        if (typeof d.stream3 === 'string') picked = d.stream3;
+        else if (d.stream3.av1 && d.stream3.av1.hls) picked = d.stream3.av1.hls;
+        else if (d.stream3.vp9 && d.stream3.vp9.hls) picked = d.stream3.vp9.hls;
+        else if (d.stream3.avc && d.stream3.avc.hls) picked = d.stream3.avc.hls;
+        else if (d.stream3.hls) picked = d.stream3.hls;
+        if (picked) {
+            console.log('[Reptyle] URL from stream3:', typeof d.stream3 === 'string' ? 'direct' : Object.keys(d.stream3).join(','));
+            return picked;
+        }
     }
     const s2 = d.stream2;
     if (s2) {
@@ -4348,17 +4374,19 @@ const server = http.createServer(async (req, res) => {
                     jsonError(res, 400, 'Expected { moments: [...] }');
                     return;
                 }
-                let synced = 0;
+                let synced = 0, blocked = 0;
                 for (let i = 0; i < incoming.length; i++) {
                     if (incoming[i] && incoming[i].id && isValidMomentId(incoming[i].id)) {
-                        upsertMoment(incoming[i]);
-                        synced++;
+                        const result = upsertMoment(incoming[i]);
+                        if (result) synced++;
+                        else if (deletedMomentIds.has(incoming[i].id)) blocked++;
                     }
                 }
+                if (blocked > 0) console.log(`[Moments] Sync blocked ${blocked} deleted moment(s) from re-adding`);
                 saveMomentsDb();
-                // Return full list (stripped)
+                // Return full list (stripped) + deleted IDs so client can clean up
                 const stripped = momentsDb.map(stripLargeFields);
-                jsonOk(res, { synced, moments: stripped });
+                jsonOk(res, { synced, blocked, deletedIds: [...deletedMomentIds], moments: stripped });
             } catch (e) {
                 jsonError(res, 400, 'Invalid JSON');
             }
@@ -4430,6 +4458,10 @@ const server = http.createServer(async (req, res) => {
             return;
         }
         const removed = momentsDb.splice(idx, 1)[0];
+
+        // Add to blocklist so client sync can't re-add
+        deletedMomentIds.add(momentId);
+        saveDeletedMomentIds();
 
         // Clean up thumbnail file
         if (removed.thumbnailPath) {

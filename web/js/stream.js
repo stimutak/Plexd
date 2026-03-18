@@ -2344,18 +2344,23 @@ const PlexdStream = (function() {
     function switchFullscreenStream(direction) {
         if (!fullscreenStreamId) return;
 
-        const streamList = Array.from(streams.values());
-        if (streamList.length <= 1) return;
+        // Use navigable streams in spatial order (not Map insertion order)
+        const navigable = getNavigableStreams();
+        if (navigable.length <= 1) return;
 
-        const currentIndex = streamList.findIndex(s => s.id === fullscreenStreamId);
+        const currentIndex = navigable.findIndex(s => s.id === fullscreenStreamId);
         if (currentIndex === -1) return;
 
+        // Accept both 'next'/'prev' and 'right'/'left'/'up'/'down' direction strings
+        const forward = (direction === 'next' || direction === 'right' || direction === 'down');
         let newIndex;
-        if (direction === 'next') {
-            newIndex = (currentIndex + 1) % streamList.length;
+        if (forward) {
+            newIndex = (currentIndex + 1) % navigable.length;
         } else {
-            newIndex = (currentIndex - 1 + streamList.length) % streamList.length;
+            newIndex = (currentIndex - 1 + navigable.length) % navigable.length;
         }
+
+        const streamList = navigable;
 
         const currentStream = streamList[currentIndex];
         const newStream = streamList[newIndex];

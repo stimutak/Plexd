@@ -4216,6 +4216,7 @@ body {
     border: 1px solid rgba(201, 163, 85, 0.25);
     border-radius: 8px;
     width: min(95vw, 1600px);
+    height: 90vh;
     max-height: 95vh;
     display: flex;
     flex-direction: column;

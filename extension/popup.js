@@ -302,6 +302,15 @@
         urlSpan.textContent = shortenUrl(v.url);
         meta.appendChild(urlSpan);
 
+        // Warn about mux.project1content.com URLs (IP-bound + CORS-blocked, only work via xfill)
+        var isMuxUrl = v.url.includes('mux.project1content.com');
+        if (isMuxUrl) {
+            var warn = document.createElement('div');
+            warn.className = 'mux-warning';
+            warn.textContent = '\u26a0 IP-bound stream \u2014 use xfill in Plexd instead';
+            info.appendChild(warn);
+        }
+
         info.appendChild(title);
         info.appendChild(meta);
 

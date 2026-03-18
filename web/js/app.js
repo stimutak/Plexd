@@ -5242,17 +5242,9 @@ const PlexdApp = (function() {
             void el.offsetWidth;
             el.classList.add('flash');
         }
-        // Also update popup player info bar if open
-        var popupInfo = document.querySelector('.moment-popup-info');
-        if (popupInfo && momentBrowserState.popupOpen) {
-            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
-            var performers = (mom.performers || []).join(', ');
-            var dur = (mom.end - mom.start).toFixed(1) + 's';
-            var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
-            var loved = mom.loved ? ' \u2665' : '';
-            var infoText = performers || title;
-            if (performers && title) infoText = performers + ' \u2014 ' + title;
-            popupInfo.textContent = (infoText ? infoText + ' \u2014 ' : '') + dur + rating + loved;
+        // Also update popup player info bar + fullscreen overlay if open
+        if (momentBrowserState.popupOpen) {
+            refreshPopupContent();
         }
         // Tags bar: full-width row showing AI tags
         if (tagsBar) {
@@ -7455,9 +7447,13 @@ const PlexdApp = (function() {
                     var curIdx = momentBrowserState.selectedIndex;
                     if (curMoments.length > 0 && curMoments[curIdx]) {
                         var nowLoved = !curMoments[curIdx].loved;
-                        PlexdMoments.updateMoment(curMoments[curIdx].id, { loved: nowLoved });
+                        var lovedId = curMoments[curIdx].id;
+                        PlexdMoments.updateMoment(lovedId, { loved: nowLoved });
                         showMessage(nowLoved ? '\u2665 Loved' : '\u2665 Unloved', 'info');
                         momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                        // Follow the moment to its new position after re-sort
+                        var newLovedIdx = momentBrowserState.filteredMoments.findIndex(function(m) { return m.id === lovedId; });
+                        if (newLovedIdx >= 0) momentBrowserState.selectedIndex = newLovedIdx;
                         renderCurrentBrowserMode();
                         updateSelectedMomentStatus();
                     }
@@ -7508,14 +7504,17 @@ const PlexdApp = (function() {
                     }
                     return true;
                 }
-                if (mode === 0) {
+                if (mode === 2 && e.shiftKey) {
+                    // Player: Shift+Space = go back in playback history
+                    navigatePlayerHistory(-1);
+                } else if (mode === 0) {
                     // Grid: Space = jump to random moment
                     if (moments.length > 0) {
                         momentBrowserState.selectedIndex = Math.floor(Math.random() * moments.length);
                         updateMomentGridSelection();
                     }
                 } else if (mode === 2) {
-                    // Player: Space always plays random
+                    // Player: Space = plays random
                     advancePlayer();
                 } else {
                     // Wall/Collage: play/pause selected moment's source
@@ -9879,10 +9878,12 @@ const PlexdApp = (function() {
      * In normal mode, just select next stream
      */
     function handleArrowNav(direction, fullscreenStream, selected) {
-        // Density focused (level 0) must be checked BEFORE generic fullscreen handler.
-        // In density focused, all non-selected streams are 0x0 hidden, so spatial
-        // navigation fails. We cycle through the full stream list instead.
+        // Density system must be checked BEFORE generic fullscreen handler.
+        // Each density level has its own arrow key behavior (spotlight rotates hero,
+        // mosaic cycles list, etc.) that should NOT be overridden by switchFullscreenStream.
         if (useDensitySystem && densityLevel === 0) {
+            // Density focused: all non-selected streams are 0x0 hidden, so spatial
+            // navigation fails. We cycle through the full stream list instead.
             var dStreams = getFilteredStreams();
             if (dStreams.length === 0) return;
             var dSel = PlexdStream.getSelectedStream();
@@ -9899,10 +9900,9 @@ const PlexdApp = (function() {
             return;
         }
 
-        // Focused mode takes priority over ALL layout modes.
-        // When focused, arrows always navigate between focused streams.
-        // (Matches rotateStreams() which also checks focused first.)
-        if (fullscreenStream) {
+        // Focused mode — but only when density system is NOT active.
+        // (Density levels 1-5 handle their own navigation below.)
+        if (fullscreenStream && !useDensitySystem) {
             switchFullscreenStream(direction);
             return;
         }

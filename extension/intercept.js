@@ -6,6 +6,8 @@
  */
 (function() {
     'use strict';
+    if (window.__plexdInterceptActive) return;
+    window.__plexdInterceptActive = true;
 
     var _fetch = window.fetch;
     window.fetch = function() {

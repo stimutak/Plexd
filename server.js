@@ -154,6 +154,11 @@ const MOMENTS_THUMBS = path.join(MOMENTS_DIR, 'thumbnails');
 // Limit concurrent ffmpeg thumbnail generation to 1 (prevents server overload)
 let _thumbGenActive = false;
 
+// Limit concurrent outbound HLS proxy requests — expired signed URLs each hang for 8s,
+// and with 9+ streams retrying, they saturate the event loop and starve all other requests.
+const MAX_CONCURRENT_PROXY = 8;
+let _activeProxyRequests = 0;
+
 // Ensure moments directories exist
 if (!fs.existsSync(MOMENTS_DIR)) {
     fs.mkdirSync(MOMENTS_DIR, { recursive: true });
@@ -1394,7 +1399,7 @@ function fetchUrl(targetUrl, callback, redirectCount = 0, extraHeaders = {}, tim
     }
 
     const mod = targetUrl.startsWith('https') ? https : http;
-    const headers = { 'User-Agent': 'Plexd/1.0', ...extraHeaders };
+    const headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', ...extraHeaders };
     const req = mod.get(targetUrl, { headers, timeout: timeoutMs }, (proxyRes) => {
         // Follow redirects
         if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
@@ -1547,10 +1552,22 @@ const AYLO_GROUPS = {
 // Map: siteName → [{ name, groupId, tagId, total, native }]
 let _playableGroups = {};
 
+// Synthetic network IDs for Aylo sites that aren't groupId-based brands
+// (SpiceVids/SpiceVidsGay are user-upload platforms, not brand groups)
+const AYLO_SITE_NETWORK_IDS = {
+    spicevids:    { tagId: -100, name: 'SpiceVids' },
+    spicevidsgay: { tagId: -101, name: 'SpiceVids Gay' },
+};
+
 // Reverse lookup: synthetic tagId → { groupName, groupId }
 const AYLO_GROUP_BY_TAG_ID = {};
 for (const [name, g] of Object.entries(AYLO_GROUPS)) {
     AYLO_GROUP_BY_TAG_ID[-g.groupId] = { name, groupId: g.groupId };
+}
+// Also map site network IDs → site name for filtering
+const AYLO_SITE_BY_TAG_ID = {};
+for (const [site, cfg] of Object.entries(AYLO_SITE_NETWORK_IDS)) {
+    AYLO_SITE_BY_TAG_ID[cfg.tagId] = site;
 }
 
 // Collection (sub-brand) cache — populated from /v1/collections API per site.
@@ -1638,6 +1655,7 @@ const STASH_CONFIG = {
     url: 'http://100.100.33.117:9999',
     apiKey: null,
 };
+let _stashConnected = false; // Cached Stash connection state (updated by background refresh)
 const STASH_TAG_OFFSET = 100000;
 const STASH_PERFORMER_OFFSET = 100000;
 const STASH_STUDIO_OFFSET = -1000;
@@ -1945,6 +1963,39 @@ let _cookieCache = {};       // cookieHost → { cookies, ts }
 let _refreshedTokens = {};   // cookieHost → refreshed accessToken
 let _refreshedRefreshTokens = {}; // cookieHost → refreshed refreshToken (survives cookie expiry)
 const COOKIE_CACHE_TTL = 30000; // 30s
+const AUTH_TOKENS_FILE = path.join(__dirname, 'uploads', 'cache', 'auth-tokens.json');
+
+function _saveRefreshTokens() {
+    try {
+        // Save both access and refresh tokens — both needed to survive restarts
+        const data = { refresh: _refreshedRefreshTokens, access: _refreshedTokens };
+        fs.writeFileSync(AUTH_TOKENS_FILE, JSON.stringify(data));
+    } catch (_) {}
+}
+function _loadRefreshTokens() {
+    // Try new format first, then legacy
+    try {
+        const raw = fs.readFileSync(AUTH_TOKENS_FILE, 'utf8');
+        const data = JSON.parse(raw);
+        if (data && data.refresh) {
+            _refreshedRefreshTokens = data.refresh;
+            _refreshedTokens = data.access || {};
+        } else if (data && typeof data === 'object' && !data.refresh) {
+            // Legacy format: just refresh tokens
+            _refreshedRefreshTokens = data;
+        }
+        const validRefresh = Object.keys(_refreshedRefreshTokens).filter(k => _refreshedRefreshTokens[k] && !isJwtExpired(_refreshedRefreshTokens[k])).length;
+        const validAccess = Object.keys(_refreshedTokens).filter(k => _refreshedTokens[k] && !isJwtExpired(_refreshedTokens[k])).length;
+        console.log('[Auth] Loaded ' + validAccess + ' access + ' + validRefresh + ' refresh tokens from disk');
+    } catch (_) {
+        // Try legacy file
+        try {
+            const legacy = path.join(__dirname, 'uploads', 'cache', 'refresh-tokens.json');
+            const data = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+            if (data && typeof data === 'object') _refreshedRefreshTokens = data;
+        } catch (_2) {}
+    }
+}
 
 async function getAyloAuth(siteName) {
     const site = AYLO_SITES[siteName];
@@ -1969,6 +2020,17 @@ async function getAyloAuth(siteName) {
     // Check for already-refreshed token (shared across sites with same cookieHost)
     let accessToken = _refreshedTokens[site.cookieHost] || cookies.access_token_ma;
     if (accessToken && !isJwtExpired(accessToken)) {
+        // Persist tokens while they're valid — must save before any refresh consumes them
+        var needsSave = false;
+        if (cookies.refresh_token_ma && !_refreshedRefreshTokens[site.cookieHost]) {
+            _refreshedRefreshTokens[site.cookieHost] = cookies.refresh_token_ma;
+            needsSave = true;
+        }
+        if (!_refreshedTokens[site.cookieHost] || _refreshedTokens[site.cookieHost] !== accessToken) {
+            _refreshedTokens[site.cookieHost] = accessToken;
+            needsSave = true;
+        }
+        if (needsSave) _saveRefreshTokens();
         return { accessToken, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
     }
 
@@ -1984,6 +2046,7 @@ async function getAyloAuth(siteName) {
             // Save the new refresh_token — Aylo invalidates the old one on each renew
             if (result.refresh_token) {
                 _refreshedRefreshTokens[site.cookieHost] = result.refresh_token;
+                _saveRefreshTokens();
             }
             return { accessToken: result.access_token, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
@@ -1999,6 +2062,7 @@ async function getAyloAuth(siteName) {
             // Save the refresh_token from reauth too
             if (result.refresh_token) {
                 _refreshedRefreshTokens[site.cookieHost] = result.refresh_token;
+                _saveRefreshTokens();
             }
             return { accessToken: result.access_token, instanceToken, appSessionId, _origin: site.origin, _site: siteName };
         }
@@ -2084,26 +2148,44 @@ let _actorCache = null;  // Merged actor cache (sorted array)
 function siteTagsCacheFile(siteName) { return path.join(CACHE_DIR, siteName + '-tags.json'); }
 function siteActorsCacheFile(siteName) { return path.join(CACHE_DIR, siteName + '-performers.json'); }
 
+// Merge a tag into the allTags map, accumulating sites provenance
+function _mergeTag(allTags, cat, t, source) {
+    if (!allTags[cat]) allTags[cat] = {};
+    if (allTags[cat][t.id]) {
+        if (!allTags[cat][t.id].sites.includes(source)) allTags[cat][t.id].sites.push(source);
+    } else {
+        allTags[cat][t.id] = { id: t.id, name: t.name, sites: [source] };
+    }
+}
+function _mergeActor(allActors, a, source) {
+    if (allActors[a.id]) {
+        if (!allActors[a.id].sites.includes(source)) allActors[a.id].sites.push(source);
+    } else {
+        allActors[a.id] = { id: a.id, name: a.name, sites: [source] };
+        if (a.thumb) allActors[a.id].thumb = a.thumb;
+        if (a.scenes) allActors[a.id].scenes = a.scenes;
+    }
+}
+
 function loadCacheFromDisk() {
     try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (e) { /* exists */ }
 
-    // Load per-site caches and merge
-    const allTags = {};  // byCategory merged
-    const allActors = {}; // by id
+    // Load per-site caches and merge (with sites provenance)
+    const allTags = {};
+    const allActors = {};
     let tagSites = 0, actorSites = 0;
 
     for (const siteName of Object.keys(AYLO_SITES)) {
         try {
             const siteTags = JSON.parse(fs.readFileSync(siteTagsCacheFile(siteName), 'utf8'));
             for (const cat of Object.keys(siteTags)) {
-                if (!allTags[cat]) allTags[cat] = {};
-                for (const t of siteTags[cat]) allTags[cat][t.id] = t;
+                for (const t of siteTags[cat]) _mergeTag(allTags, cat, t, siteName);
             }
             tagSites++;
         } catch (e) { /* no cache for this site */ }
         try {
             const siteActors = JSON.parse(fs.readFileSync(siteActorsCacheFile(siteName), 'utf8'));
-            for (const a of siteActors) allActors[a.id] = a;
+            for (const a of siteActors) _mergeActor(allActors, a, siteName);
             actorSites++;
         } catch (e) { /* no cache for this site */ }
     }
@@ -2112,14 +2194,14 @@ function loadCacheFromDisk() {
     try {
         const stashTags = JSON.parse(fs.readFileSync(STASH_TAGS_CACHE, 'utf8'));
         for (const cat of Object.keys(stashTags)) {
-            if (!allTags[cat]) allTags[cat] = {};
-            for (const t of stashTags[cat]) allTags[cat][t.id] = t;
+            for (const t of stashTags[cat]) _mergeTag(allTags, cat, t, 'stash');
         }
         tagSites++;
+        _stashConnected = true;
     } catch (e) { /* no stash tags cache */ }
     try {
         const stashActors = JSON.parse(fs.readFileSync(STASH_PERFORMERS_CACHE, 'utf8'));
-        for (const a of stashActors) allActors[a.id] = a;
+        for (const a of stashActors) _mergeActor(allActors, a, 'stash');
         actorSites++;
     } catch (e) { /* no stash performers cache */ }
 
@@ -2127,14 +2209,13 @@ function loadCacheFromDisk() {
     try {
         const reptyleTags = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
         for (const cat of Object.keys(reptyleTags)) {
-            if (!allTags[cat]) allTags[cat] = {};
-            for (const t of reptyleTags[cat]) allTags[cat][t.id] = t;
+            for (const t of reptyleTags[cat]) _mergeTag(allTags, cat, t, 'reptyle');
         }
         tagSites++;
     } catch (e) { /* no reptyle tags cache */ }
     try {
         const reptyleActors = JSON.parse(fs.readFileSync(REPTYLE_PERFORMERS_CACHE, 'utf8'));
-        for (const a of reptyleActors) allActors[a.id] = a;
+        for (const a of reptyleActors) _mergeActor(allActors, a, 'reptyle');
         actorSites++;
     } catch (e) { /* no reptyle performers cache */ }
 
@@ -2177,43 +2258,40 @@ function saveCacheToDisk(file, data) {
 function rebuildMergedCaches() {
     const allTags = {};
     const allActors = {};
-    // Aylo per-site caches
+    // Aylo per-site caches (with sites provenance)
     for (const siteName of Object.keys(AYLO_SITES)) {
         try {
             const siteTags = JSON.parse(fs.readFileSync(siteTagsCacheFile(siteName), 'utf8'));
             for (const cat of Object.keys(siteTags)) {
-                if (!allTags[cat]) allTags[cat] = {};
-                for (const t of siteTags[cat]) allTags[cat][t.id] = t;
+                for (const t of siteTags[cat]) _mergeTag(allTags, cat, t, siteName);
             }
         } catch (e) { /* skip */ }
         try {
             const siteActors = JSON.parse(fs.readFileSync(siteActorsCacheFile(siteName), 'utf8'));
-            for (const a of siteActors) allActors[a.id] = a;
+            for (const a of siteActors) _mergeActor(allActors, a, siteName);
         } catch (e) { /* skip */ }
     }
-    // Stash caches (offset IDs already applied)
+    // Stash caches
     try {
         const stashTags = JSON.parse(fs.readFileSync(STASH_TAGS_CACHE, 'utf8'));
         for (const cat of Object.keys(stashTags)) {
-            if (!allTags[cat]) allTags[cat] = {};
-            for (const t of stashTags[cat]) allTags[cat][t.id] = t;
+            for (const t of stashTags[cat]) _mergeTag(allTags, cat, t, 'stash');
         }
     } catch (e) { /* no stash tags cache */ }
     try {
         const stashActors = JSON.parse(fs.readFileSync(STASH_PERFORMERS_CACHE, 'utf8'));
-        for (const a of stashActors) allActors[a.id] = a;
+        for (const a of stashActors) _mergeActor(allActors, a, 'stash');
     } catch (e) { /* no stash performers cache */ }
-    // Reptyle caches (offset IDs already applied)
+    // Reptyle caches
     try {
         const reptyleTags = JSON.parse(fs.readFileSync(REPTYLE_TAGS_CACHE, 'utf8'));
         for (const cat of Object.keys(reptyleTags)) {
-            if (!allTags[cat]) allTags[cat] = {};
-            for (const t of reptyleTags[cat]) allTags[cat][t.id] = t;
+            for (const t of reptyleTags[cat]) _mergeTag(allTags, cat, t, 'reptyle');
         }
     } catch (e) { /* no reptyle tags cache */ }
     try {
         const reptyleActors = JSON.parse(fs.readFileSync(REPTYLE_PERFORMERS_CACHE, 'utf8'));
-        for (const a of reptyleActors) allActors[a.id] = a;
+        for (const a of reptyleActors) _mergeActor(allActors, a, 'reptyle');
     } catch (e) { /* no reptyle performers cache */ }
 
     if (Object.keys(allTags).length > 0) {
@@ -2396,7 +2474,15 @@ async function fetchReptyleApi(apiPath, auth) {
 // Response wraps in {status, data, message} — actual streams are in data
 function extractBestReptyleUrl(watchResp) {
     const d = watchResp.data || watchResp; // Handle both wrapped and raw
-    // Priority: stream2.av1.hls > stream2.vp9.hls > stream2.avc.hls > stream (legacy)
+    // Priority: stream3 (newest, highest quality) > stream2.av1.hls > stream2.vp9.hls > stream2.avc.hls > stream (legacy)
+    // stream3 may be a direct URL or nested object
+    if (d.stream3) {
+        if (typeof d.stream3 === 'string') return d.stream3;
+        if (d.stream3.av1 && d.stream3.av1.hls) return d.stream3.av1.hls;
+        if (d.stream3.vp9 && d.stream3.vp9.hls) return d.stream3.vp9.hls;
+        if (d.stream3.avc && d.stream3.avc.hls) return d.stream3.avc.hls;
+        if (d.stream3.hls) return d.stream3.hls;
+    }
     const s2 = d.stream2;
     if (s2) {
         if (s2.av1 && s2.av1.hls) return s2.av1.hls;
@@ -2582,14 +2668,16 @@ async function discoverPlayableGroups(auth) {
     const probes = [];
 
     // Probe each group with explicit groupId=
+    // Check both latest scenes (for files) AND older ones (some newest are preview-only)
     for (const [name, g] of Object.entries(AYLO_GROUPS)) {
         probes.push(
-            fetchAyloApi('/v2/releases?limit=5&type=scene&groupId=' + g.groupId + '&orderBy=-dateReleased', auth)
+            fetchAyloApi('/v2/releases?limit=10&type=scene&groupId=' + g.groupId + '&orderBy=-dateReleased', auth)
                 .then(r => {
                     if (r.status === 200 && r.data.result?.length) {
                         const total = r.data.meta?.total || 0;
                         const hasFiles = r.data.result.some(s => s.videos?.full?.files?.length > 0);
-                        if (hasFiles) {
+                        // Mark playable if: has video files OR has substantial catalog (subscription may still grant access)
+                        if (hasFiles || total > 50) {
                             playable.push({ name, groupId: g.groupId, tagId: -g.groupId, total, native: false });
                         }
                     }
@@ -2644,8 +2732,13 @@ async function backgroundCatalogRefresh() {
             collectionResults.push(refreshCollectionsFromApi(auth));
             refreshes.push(
                 discoverPlayableGroups(auth).then(groups => {
-                    _playableGroups[name] = groups;
-                    console.log('[Cache] ' + name + ' playable groups: ' + groups.map(g => g.name + '(' + g.total + ')').join(', '));
+                    // Merge with existing — once a group is confirmed playable, keep it
+                    const existing = _playableGroups[name] || [];
+                    const merged = new Map();
+                    for (const g of existing) merged.set(g.groupId, g);
+                    for (const g of groups) merged.set(g.groupId, g); // new probe wins for totals
+                    _playableGroups[name] = [...merged.values()];
+                    console.log('[Cache] ' + name + ' playable groups: ' + _playableGroups[name].map(g => g.name + '(' + g.total + ')').join(', '));
                 })
             );
         }
@@ -2666,8 +2759,10 @@ async function backgroundCatalogRefresh() {
         // Stash refresh (independent of Aylo auth)
         try {
             await Promise.allSettled([refreshStashTags(), refreshStashPerformers(), refreshStashStudios()]);
+            _stashConnected = true;
             console.log('[Cache] Stash background refresh complete');
         } catch (e) {
+            _stashConnected = false;
             console.log('[Cache] Stash refresh failed:', e.message);
         }
         // Reptyle refresh (independent of Aylo/Stash)
@@ -2687,6 +2782,24 @@ async function backgroundCatalogRefresh() {
 
 // Load from disk immediately, schedule background refreshes
 loadCacheFromDisk();
+_loadRefreshTokens(); // Restore Aylo refresh tokens — critical for surviving server restarts
+// Also grab fresh refresh tokens from Chrome cookies if we don't have persisted ones
+try {
+    const seen = new Set();
+    for (const [siteName, site] of Object.entries(AYLO_SITES)) {
+        if (seen.has(site.cookieHost)) continue;
+        seen.add(site.cookieHost);
+        if (!_refreshedRefreshTokens[site.cookieHost]) {
+            const cookies = readChromeCookies('%' + site.cookieHost + '%');
+            if (cookies.refresh_token_ma) {
+                _refreshedRefreshTokens[site.cookieHost] = cookies.refresh_token_ma;
+            }
+        }
+    }
+    _saveRefreshTokens();
+    const count = Object.keys(_refreshedRefreshTokens).filter(k => _refreshedRefreshTokens[k]).length;
+    if (count > 0) console.log('[Auth] Persisted ' + count + ' refresh tokens to disk');
+} catch (e) { /* Chrome may not be available */ }
 try {
     _collectionCache = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, 'collections.json'), 'utf8'));
 } catch (e) { _collectionCache = null; }
@@ -2702,7 +2815,7 @@ setInterval(backgroundCatalogRefresh, CATALOG_REFRESH_INTERVAL);
 // Proactively refresh Aylo tokens every 25 minutes (access_token expires ~1hr).
 // Shorter interval ensures we refresh before the access_token expires, keeping
 // the refresh_token chain alive (Aylo invalidates old refresh tokens on use).
-const AUTH_KEEPALIVE_INTERVAL = 25 * 60 * 1000; // 25 minutes
+const AUTH_KEEPALIVE_INTERVAL = 15 * 60 * 1000; // 15 minutes (access_token expires ~1hr)
 
 async function authKeepalive() {
     const seen = new Set();
@@ -2754,16 +2867,26 @@ async function authKeepalive() {
     if (refreshed > 0 || failed > 0) {
         console.log('[Auth:keepalive] Refreshed ' + refreshed + ' site(s)' + (failed > 0 ? ', ' + failed + ' failed' : ''));
     }
+    // Always persist refresh tokens after keepalive — they're our lifeline across restarts
+    _saveRefreshTokens();
 }
-// First keepalive at 5 minutes (let server fully start), then every 45 min
-setTimeout(authKeepalive, 5 * 60 * 1000);
+// First keepalive at 2 minutes (after startup settles), then every 15 min
+setTimeout(authKeepalive, 2 * 60 * 1000);
 setInterval(authKeepalive, AUTH_KEEPALIVE_INTERVAL);
 
 // Build list of { auth, groupId, groupName } combos to query.
 // Groups marked `native: true` are queried WITHOUT groupId (native brand catalog).
-function getAuthGroupCombos(auths, filterGroupIds) {
+function getAuthGroupCombos(auths, filterGroupIds, filterSiteNames) {
     const combos = [];
     for (const auth of auths) {
+        // Site-specific filter (SpiceVids/SpiceVidsGay): only include matching site's native content
+        if (filterSiteNames && filterSiteNames.has(auth._site)) {
+            combos.push({ auth, groupId: null, groupName: auth._site, total: 500 });
+            continue;
+        }
+        // If only site-specific filters active (no group filters), skip non-matching sites
+        if (filterSiteNames && filterSiteNames.size > 0 && (!filterGroupIds || filterGroupIds.size === 0)) continue;
+
         const groups = _playableGroups[auth._site];
         if (groups && groups.length > 0) {
             for (const g of groups) {
@@ -2781,11 +2904,15 @@ function getAuthGroupCombos(auths, filterGroupIds) {
 // Group filter: negative tagIds (e.g. -1=groupId 1=Reality Kings) restrict to specific brands.
 async function scrapeAyloScenes(count, tagIds, actorIds) {
     const filterGroupIds = new Set();
+    const filterSiteNames = new Set(); // SpiceVids/SpiceVidsGay site-specific filters
     const realTagIds = [];
     let hasGroupFilter = false;
     for (const id of (tagIds || [])) {
         if (id < 0 && AYLO_GROUP_BY_TAG_ID[id]) {
             filterGroupIds.add(AYLO_GROUP_BY_TAG_ID[id].groupId);
+            hasGroupFilter = true;
+        } else if (id < 0 && AYLO_SITE_BY_TAG_ID[id]) {
+            filterSiteNames.add(AYLO_SITE_BY_TAG_ID[id]);
             hasGroupFilter = true;
         } else if (id > 0) {
             realTagIds.push(id);
@@ -2798,7 +2925,7 @@ async function scrapeAyloScenes(count, tagIds, actorIds) {
     const externalIp = await getExternalIp();
     for (const auth of auths) auth.externalIp = externalIp;
 
-    const combos = getAuthGroupCombos(auths, hasGroupFilter ? filterGroupIds : null);
+    const combos = getAuthGroupCombos(auths, filterGroupIds.size > 0 ? filterGroupIds : null, filterSiteNames.size > 0 ? filterSiteNames : null);
     if (combos.length === 0) throw new Error('No playable groups for selected brands.');
 
     const limit = Math.ceil(count * 3);
@@ -3014,7 +3141,7 @@ const server = http.createServer(async (req, res) => {
     // and HLS.js XHR loaders cannot send custom headers — only fetch() can,
     // and native browser media loading bypasses the patched window.fetch.
     // POST/DELETE endpoints still require the token for mutation protection.
-    const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download']);
+    const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download', '/api/remote/state', '/api/remote/command']);
     const isMediaGet = req.method === 'GET' && (
         pathname.startsWith('/api/proxy/') ||
         pathname.startsWith('/api/files/') ||
@@ -3870,19 +3997,31 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // Concurrent proxy limit (shared with HLS proxy)
+        if (_activeProxyRequests >= MAX_CONCURRENT_PROXY) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end('{"error":"Proxy overloaded"}');
+            return;
+        }
+        _activeProxyRequests++;
+
         const extraHeaders = {};
         if (req.headers.range) extraHeaders['Range'] = req.headers.range;
 
-        // fetchUrl handles redirects (up to 5) and timeout internally
+        // 8s timeout — dead URLs must fail fast, not block server
         fetchUrl(targetUrl, (err, proxyRes) => {
+            _activeProxyRequests--;
             if (err) {
-                console.error(`[Server] Video proxy error: ${err.message}`);
+                if (err.message !== 'Request timeout') console.error(`[Server] Video proxy error: ${err.message}`);
                 if (!res.headersSent) {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
                 }
                 return;
             }
+
+            // Connection succeeded — disable socket timeout so streaming continues indefinitely
+            if (proxyRes.socket) proxyRes.socket.setTimeout(0);
 
             const outHeaders = {
                 'Content-Type': proxyRes.headers['content-type'] || 'video/mp4',
@@ -3896,7 +4035,7 @@ const server = http.createServer(async (req, res) => {
             proxyRes.on('error', () => { if (!res.writableEnded) res.end(); });
             // Abort upstream fetch when client disconnects (prevents wasted bandwidth)
             res.on('close', () => { proxyRes.destroy(); });
-        }, 0, extraHeaders);
+        }, 0, extraHeaders, 8000);
         return;
     }
 
@@ -3908,10 +4047,20 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
-        // 8s timeout for HLS (segments are small, expired URLs shouldn't block connections for 30s)
+        // Limit concurrent outbound proxy requests — expired URLs queue up 8s timeouts
+        // that saturate the event loop and starve all other requests
+        if (_activeProxyRequests >= MAX_CONCURRENT_PROXY) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end('{"error":"Proxy overloaded"}');
+            return;
+        }
+        _activeProxyRequests++;
+
+        // 5s timeout for HLS — expired signed URLs must fail fast
         fetchUrl(targetUrl, (err, proxyRes) => {
+            _activeProxyRequests--;
             if (err) {
-                console.error(`[Server] HLS proxy error: ${err.message}`);
+                if (err.message !== 'Request timeout') console.error(`[Server] HLS proxy error: ${err.message}`);
                 if (!res.headersSent) {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: 'Proxy fetch failed', details: err.message }));
@@ -3968,7 +4117,7 @@ const server = http.createServer(async (req, res) => {
                 res.writeHead(200, outHeaders);
                 proxyRes.pipe(res);
             }
-        }, 0, {}, 8000);
+        }, 0, {}, 5000);
         return;
     }
 
@@ -4214,6 +4363,36 @@ const server = http.createServer(async (req, res) => {
                 jsonError(res, 400, 'Invalid JSON');
             }
         });
+        return;
+    }
+
+    // GET /api/moments/thumbs — Batch-serve all thumbnails as {id: base64, ...}
+    // Single request replaces 2000+ individual thumb.jpg fetches
+    if (pathname === '/api/moments/thumbs' && req.method === 'GET') {
+        let files;
+        try {
+            files = fs.readdirSync(MOMENTS_THUMBS).filter(f => f.endsWith('.jpg'));
+        } catch (e) {
+            jsonOk(res, {});
+            return;
+        }
+        // Stream JSON to avoid building a huge string in memory
+        res.writeHead(200, {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache'
+        });
+        res.write('{');
+        let first = true;
+        for (let i = 0; i < files.length; i++) {
+            const id = files[i].slice(0, -4); // strip .jpg
+            try {
+                const data = fs.readFileSync(path.join(MOMENTS_THUMBS, files[i]));
+                const b64 = data.toString('base64');
+                res.write((first ? '' : ',') + JSON.stringify(id) + ':' + JSON.stringify(b64));
+                first = false;
+            } catch (_) { /* skip unreadable files */ }
+        }
+        res.end('}');
         return;
     }
 
@@ -4845,24 +5024,34 @@ const server = http.createServer(async (req, res) => {
             }
         }
         // Build response with Network first, then tag categories, then Stash Studios last
-        // Network = only our configured Aylo sites + Stash umbrella (not individual studios)
+        // Network = ALL Aylo groups + sites + Stash + Reptyle, with playable flag
+        // Uses CACHED state only — no live auth probing (that would block the server)
         const networkTags = [];
         const seen = new Set();
+        const playableGroupIds = new Set();
         for (const groups of Object.values(_playableGroups)) {
-            for (const g of groups) {
-                if (!seen.has(g.groupId)) {
-                    seen.add(g.groupId);
-                    networkTags.push({ id: g.tagId, name: g.name });
-                }
+            for (const g of groups) playableGroupIds.add(g.groupId);
+        }
+        // Sites with any playable groups have working auth
+        const authedSites = new Set(Object.keys(_playableGroups).filter(s => (_playableGroups[s] || []).length > 0));
+        // Reptyle: check cached token (no network call)
+        const reptyleOk = !!_reptyleAccessToken && !isJwtExpired(_reptyleAccessToken);
+        // Stash: check cached connection state from last background refresh
+        const stashOk = !!_stashConnected;
+
+        // All Aylo brand groups
+        for (const [name, g] of Object.entries(AYLO_GROUPS)) {
+            if (!seen.has(g.groupId)) {
+                seen.add(g.groupId);
+                networkTags.push({ id: -g.groupId, name, playable: playableGroupIds.has(g.groupId) });
             }
         }
-        if (networkTags.length === 0) {
-            for (const [name, g] of Object.entries(AYLO_GROUPS)) {
-                networkTags.push({ id: -g.groupId, name });
-            }
+        // Aylo sites that aren't brand groups (SpiceVids, SpiceVids Gay)
+        for (const [site, cfg] of Object.entries(AYLO_SITE_NETWORK_IDS)) {
+            networkTags.push({ id: cfg.tagId, name: cfg.name, playable: authedSites.has(site) || !!_refreshedTokens[AYLO_SITES[site]?.cookieHost] });
         }
-        networkTags.push({ id: STASH_STUDIO_OFFSET, name: 'Stash' });
-        networkTags.push({ id: REPTYLE_NETWORK_ID, name: 'Reptyle' });
+        networkTags.push({ id: STASH_STUDIO_OFFSET, name: 'Stash', playable: stashOk });
+        networkTags.push({ id: REPTYLE_NETWORK_ID, name: 'Reptyle', playable: reptyleOk });
         networkTags.sort((a, b) => a.name.localeCompare(b.name));
 
         // Stash studios as a separate category at the end
@@ -4983,7 +5172,8 @@ const server = http.createServer(async (req, res) => {
         //   Stash tags: >= STASH_TAG_OFFSET (100000) && < REPTYLE_TAG_OFFSET
         //   Stash performers: >= STASH_PERFORMER_OFFSET (100000) && < REPTYLE_ACTOR_OFFSET
         //   Stash studios: <= STASH_STUDIO_OFFSET (-1000) && > REPTYLE_NETWORK_ID
-        //   Aylo site filters: -1 to -99 (negative but above -1000)
+        //   Aylo group filters: -1 to -99 (negative groupIds)
+        //   Aylo site filters: -100 to -199 (SpiceVids=-100, SpiceVidsGay=-101)
         //   Aylo tags: positive < 100000
         const reptyleTagIds = tagIdList.filter(id => id >= REPTYLE_TAG_OFFSET || id === REPTYLE_NETWORK_ID);
         const stashTagIds = tagIdList.filter(id => id >= STASH_TAG_OFFSET && id < REPTYLE_TAG_OFFSET);

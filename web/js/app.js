@@ -971,8 +971,37 @@ const PlexdApp = (function() {
         return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
     }
 
-    /** Return the thumbnail URL for a moment (data URL or server endpoint) */
+    /** Batch thumbnail cache — loaded once, replaces 2000+ individual HTTP requests */
+    var _thumbCache = {};
+    var _thumbCacheReady = false;
+    var _thumbCachePromise = null;
+
+    function loadThumbCache() {
+        if (_thumbCacheReady) return Promise.resolve();
+        if (_thumbCachePromise) return _thumbCachePromise;
+        _thumbCachePromise = fetch('/api/moments/thumbs')
+            .then(function(res) {
+                if (!res.ok) throw new Error('Thumb batch: ' + res.status);
+                return res.json();
+            })
+            .then(function(data) {
+                var keys = Object.keys(data);
+                for (var i = 0; i < keys.length; i++) {
+                    _thumbCache[keys[i]] = 'data:image/jpeg;base64,' + data[keys[i]];
+                }
+                _thumbCacheReady = true;
+                console.log('[Moments] Loaded ' + keys.length + ' thumbnails into cache');
+            })
+            .catch(function(e) {
+                _thumbCachePromise = null;
+                console.warn('[Moments] Thumb cache load failed:', e.message);
+            });
+        return _thumbCachePromise;
+    }
+
+    /** Return the thumbnail URL for a moment (cache → data URL → server endpoint) */
     function momentThumbUrl(mom) {
+        if (_thumbCache[mom.id]) return _thumbCache[mom.id];
         return mom.thumbnailDataUrl || ('/api/moments/' + mom.id + '/thumb.jpg');
     }
 
@@ -1083,7 +1112,7 @@ const PlexdApp = (function() {
         var momentTags = [];
         if (stream.site) momentTags.push(stream.site);
         if (stream.category) momentTags.push(stream.category);
-        return PlexdMoments.createMoment({
+        var mom = PlexdMoments.createMoment({
             sourceUrl: srcUrl,
             sourceFileId: extractServerFileId(srcUrl),
             sourceTitle: stream.title || stream.fileName || stream.url,
@@ -1098,6 +1127,9 @@ const PlexdApp = (function() {
             performers: stream.actors || [],
             aiTags: stream.aiTags || []
         });
+        // Add to thumb cache so browser shows it instantly
+        if (mom && mom.thumbnailDataUrl) _thumbCache[mom.id] = mom.thumbnailDataUrl;
+        return mom;
     }
 
     /**
@@ -1874,6 +1906,9 @@ const PlexdApp = (function() {
             addStreamSilent(dedupedSavedStreams[i], i >= IMMEDIATE ? { deferred: true } : undefined);
         }
         updateLayout();
+        // Reapply ratings and favorites from localStorage to restored streams
+        PlexdStream.syncRatingStatus();
+        PlexdStream.syncFavoriteStatus();
         var deferred = PlexdStream.getAllStreams().filter(function(s) { return !s.video.src && !s.hls; });
         if (deferred.length) staggerActivate(deferred);
         if (ephemeralCount > 0) {
@@ -2041,6 +2076,11 @@ const PlexdApp = (function() {
      */
     // ── Tag Browser ──────────────────────────────────────
     var _tagCache = JSON.parse(localStorage.getItem('plexd_tagCache') || 'null');
+    // Invalidate stale cache missing playable flags on Network entries
+    if (_tagCache && _tagCache.Network && _tagCache.Network.length > 0 && !('playable' in _tagCache.Network[0])) {
+        _tagCache = null;
+        try { localStorage.removeItem('plexd_tagCache'); } catch(e) {}
+    }
     var _selectedTagIds = new Set(
         JSON.parse(localStorage.getItem('plexd_selectedTags') || '[]')
     );
@@ -2058,8 +2098,18 @@ const PlexdApp = (function() {
         return _tagCache;
     }
 
+    // Background-refresh tag cache after streams are loaded (don't compete with stream loading)
+    setTimeout(function() {
+        plexdFetch('/api/demo/tags').then(function(r) { return r.json(); }).then(function(data) {
+            if (data.tags) {
+                _tagCache = data.tags;
+                try { localStorage.setItem('plexd_tagCache', JSON.stringify(_tagCache)); } catch(e) {}
+            }
+        }).catch(function() {});
+    }, 15000);
+
     // Determine which tag categories to show based on selected Network tags.
-    // Network ID ranges: Reptyle = -2000, Stash = -1000, Aylo = -1 to -99.
+    // Network ID ranges: Reptyle = -2000, Stash = -1000, Aylo groups = -1 to -99, Aylo sites = -100 to -199.
     // Source categories: 'Stash'/'Stash Studios' = Stash, 'Reptyle' = Reptyle, rest = Aylo.
     function _getVisibleCategories(tags) {
         var allCats = Object.keys(tags);
@@ -2090,6 +2140,42 @@ const PlexdApp = (function() {
             if (sourceCount === 1) return false;
             return true; // Multiple sources — show all
         });
+    }
+
+    // Map network tag IDs to site names for tag/performer filtering.
+    // Network IDs: -1 to -99 = Aylo groupId (maps to sites via _playableGroups on server, but
+    //   all Aylo sites share tags so we map to all Aylo site names), -100=spicevids, -101=spicevidsgay,
+    //   -1000=stash, -2000=reptyle
+    var _networkIdToSites = {
+        '-100': ['spicevids'], '-101': ['spicevidsgay'],
+        '-1000': ['stash'], '-2000': ['reptyle']
+    };
+    // Aylo group IDs (-1 to -99) map to all Aylo sites (tags are shared across brands)
+    var _ayloSites = ['brazzers', 'mofos', 'spicevids', 'spicevidsgay'];
+
+    function _getSelectedSiteNames() {
+        var networkChips = (_tagCache && _tagCache['Network']) || [];
+        var sites = new Set();
+        for (var i = 0; i < networkChips.length; i++) {
+            if (!_selectedTagIds.has(networkChips[i].id)) continue;
+            var id = String(networkChips[i].id);
+            if (_networkIdToSites[id]) {
+                _networkIdToSites[id].forEach(function(s) { sites.add(s); });
+            } else if (networkChips[i].id > -1000 && networkChips[i].id < 0) {
+                // Aylo group — tags are shared, so include all Aylo sites
+                _ayloSites.forEach(function(s) { sites.add(s); });
+            }
+        }
+        return sites.size > 0 ? sites : null; // null = no filter
+    }
+
+    function _tagMatchesSites(tag, siteFilter) {
+        if (!siteFilter) return true; // No filter — show all
+        if (!tag.sites || tag.sites.length === 0) return true; // No provenance — show (legacy)
+        for (var i = 0; i < tag.sites.length; i++) {
+            if (siteFilter.has(tag.sites[i])) return true;
+        }
+        return false;
     }
 
     function renderTagsPanel(tags) {
@@ -2143,14 +2229,18 @@ const PlexdApp = (function() {
         var categories = visible.sort();
         var networkIdx = categories.indexOf('Network');
         if (networkIdx > 0) { categories.splice(networkIdx, 1); categories.unshift('Network'); }
+        var siteFilter = _getSelectedSiteNames(); // null = no filter, Set = filter to these sites
         for (var i = 0; i < categories.length; i++) {
             var cat = categories[i];
             var chips = tags[cat];
+            // Filter tags by selected network's sites (Network category always shows all)
+            var filteredChips = cat === 'Network' ? chips : (siteFilter ? chips.filter(function(t) { return _tagMatchesSites(t, siteFilter); }) : chips);
+            if (filteredChips.length === 0) continue; // Skip empty categories
             var catDiv = document.createElement('div');
             catDiv.className = 'plexd-tag-category';
             var label = document.createElement('div');
             label.className = 'plexd-tag-category-label';
-            label.textContent = cat;
+            label.textContent = cat + (siteFilter && cat !== 'Network' ? ' (' + filteredChips.length + ')' : '');
             // Click category label to toggle-select all chips in that category
             label.style.cursor = 'pointer';
             label.onclick = (function(catChips) { return function() {
@@ -2163,16 +2253,20 @@ const PlexdApp = (function() {
                 updateTagCountBadge();
                 localStorage.setItem('plexd_selectedTags', JSON.stringify(Array.from(_selectedTagIds)));
                 renderTagsPanel(_tagCache);
-            }; })(chips);
+            }; })(filteredChips);
             catDiv.appendChild(label);
             var chipsDiv = document.createElement('div');
             chipsDiv.className = 'plexd-tag-chips';
-            for (var j = 0; j < chips.length; j++) {
-                var t = chips[j];
+            for (var j = 0; j < filteredChips.length; j++) {
+                var t = filteredChips[j];
                 var chip = document.createElement('span');
-                chip.className = 'plexd-tag-chip' + (_selectedTagIds.has(t.id) ? ' selected' : '');
+                var isUnplayable = cat === 'Network' && t.playable === false;
+                chip.className = 'plexd-tag-chip' + (_selectedTagIds.has(t.id) ? ' selected' : '') + (isUnplayable ? ' unplayable' : '');
                 chip.setAttribute('data-tag-id', t.id);
                 chip.textContent = t.name;
+                if (isUnplayable) {
+                    chip.title = t.name + ' — not available with current subscriptions';
+                }
                 chip.onclick = (function(id) { return function() { toggleTag(id); }; })(t.id);
                 chipsDiv.appendChild(chip);
             }
@@ -2466,26 +2560,30 @@ const PlexdApp = (function() {
             for (var n = 0; n < _tagCache['Network'].length; n++) {
                 var nt = _tagCache['Network'][n];
                 var nchip = document.createElement('span');
-                nchip.className = 'plexd-tag-chip' + (_selectedTagIds.has(nt.id) ? ' selected' : '');
+                var ntUnplayable = nt.playable === false;
+                nchip.className = 'plexd-tag-chip' + (_selectedTagIds.has(nt.id) ? ' selected' : '') + (ntUnplayable ? ' unplayable' : '');
                 nchip.setAttribute('data-tag-id', nt.id);
                 nchip.textContent = nt.name;
+                if (ntUnplayable) nchip.title = nt.name + ' — not available with current subscriptions';
                 nchip.onclick = (function(id) { return function() { toggleTag(id); }; })(nt.id);
                 netChips.appendChild(nchip);
             }
             netDiv.appendChild(netChips);
             container.appendChild(netDiv);
         }
-        // Performers section (wrapped in .plexd-tag-category for search filter hide/show)
+        // Performers section — filtered by selected network sites
+        var perfSiteFilter = _getSelectedSiteNames();
+        var filteredActors = perfSiteFilter ? actors.filter(function(a) { return _tagMatchesSites(a, perfSiteFilter); }) : actors;
         var perfDiv = document.createElement('div');
         perfDiv.className = 'plexd-tag-category';
         var perfLabel = document.createElement('div');
         perfLabel.className = 'plexd-tag-category-label';
-        perfLabel.textContent = 'Performers';
+        perfLabel.textContent = 'Performers' + (perfSiteFilter ? ' (' + filteredActors.length + ')' : '');
         perfDiv.appendChild(perfLabel);
         var chipsDiv = document.createElement('div');
         chipsDiv.className = 'plexd-tag-chips';
-        for (var i = 0; i < actors.length; i++) {
-            var a = actors[i];
+        for (var i = 0; i < filteredActors.length; i++) {
+            var a = filteredActors[i];
             var chip = document.createElement('span');
             chip.className = 'plexd-tag-chip' + (_selectedPerformerIds.has(a.id) ? ' selected' : '');
             chip.setAttribute('data-performer-id', a.id);
@@ -2755,10 +2853,12 @@ const PlexdApp = (function() {
             var data = await resp.json();
 
             if (!data.streams || data.streams.length === 0) {
-                showMessage(
-                    data.error || 'No demo streams found. Try again?',
-                    'error'
-                );
+                var msg = data.error || 'No demo streams found';
+                // Check auth status for better error message
+                if (!data.error || msg.indexOf('login') >= 0 || msg.indexOf('Login') >= 0) {
+                    checkAuthStatus(); // refresh auth indicator
+                }
+                showMessage(msg, 'error');
                 return;
             }
 
@@ -2806,6 +2906,51 @@ const PlexdApp = (function() {
             if (btn) btn.textContent = 'xfill';
         }
     }
+
+    // ── Auth Status Monitor ──────────────────────────────────────────────────
+    // Periodically check auth status and warn when logins expire
+    var _lastAuthStatus = null;
+    var AUTH_CHECK_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
+    function checkAuthStatus() {
+        plexdFetch('/api/demo/auth-status').then(function(r) { return r.json(); }).then(function(data) {
+            var aylo = data.aylo || {};
+            var reptyle = data.reptyle || {};
+            var warnings = [];
+
+            for (var site in aylo) {
+                if (aylo[site] && !aylo[site].loggedIn && _lastAuthStatus && _lastAuthStatus[site] && _lastAuthStatus[site].loggedIn) {
+                    warnings.push(site + ' login expired');
+                }
+            }
+            if (reptyle && !reptyle.loggedIn && _lastAuthStatus && _lastAuthStatus._reptyle && _lastAuthStatus._reptyle.loggedIn) {
+                warnings.push('Reptyle login expired');
+            }
+
+            // Save current state
+            _lastAuthStatus = {};
+            for (var s in aylo) _lastAuthStatus[s] = aylo[s];
+            _lastAuthStatus._reptyle = reptyle;
+
+            if (warnings.length > 0) {
+                showMessage('Auth: ' + warnings.join(', ') + ' — re-login in Chrome', 'warning');
+            }
+
+            // Update xfill button visual if auth is down
+            var anyLoggedIn = false;
+            for (var k in aylo) { if (aylo[k] && aylo[k].loggedIn) anyLoggedIn = true; }
+            if (reptyle && reptyle.loggedIn) anyLoggedIn = true;
+            var btn = document.getElementById('xfill-btn');
+            if (btn) {
+                btn.style.opacity = anyLoggedIn ? '' : '0.5';
+                btn.title = anyLoggedIn ? 'Load random streams' : 'No authenticated sources — login in Chrome';
+            }
+        }).catch(function() { /* offline or server down */ });
+    }
+
+    // Initial check after 30s (don't compete with stream loading), then every 10 minutes
+    setTimeout(checkAuthStatus, 30000);
+    setInterval(checkAuthStatus, AUTH_CHECK_INTERVAL);
 
     // Update stream info overlay with Brazzers metadata (title, actors, category, tags)
     function updateStreamInfoOverlay(stream) {
@@ -3544,6 +3689,14 @@ const PlexdApp = (function() {
     /**
      * Set view mode (all, favorites, or 1-9 for star ratings)
      */
+    function toggleFavoritesView() {
+        if (viewMode === 'favorites') {
+            setViewMode('all');
+        } else {
+            setViewMode('favorites');
+        }
+    }
+
     function setViewMode(mode) {
         viewMode = mode;
         window._plexdViewMode = mode;
@@ -4787,8 +4940,18 @@ const PlexdApp = (function() {
         }
 
         momentBrowserState.open = true;
-        momentBrowserState.selectedIndex = 0;
         momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+        // Preserve selectedIndex across close/reopen — clamp to valid range
+        if (momentBrowserState.selectedIndex >= momentBrowserState.filteredMoments.length) {
+            momentBrowserState.selectedIndex = Math.max(0, momentBrowserState.filteredMoments.length - 1);
+        }
+
+        // Batch-load all thumbnails on first browser open (1 request replaces 2000+)
+        if (!_thumbCacheReady) {
+            loadThumbCache().then(function() {
+                if (momentBrowserState.open) renderCurrentBrowserMode();
+            });
+        }
 
         // Repair thumbnails for moments from streams that are now loaded with CORS
         setTimeout(repairMissingThumbnails, 100);
@@ -5030,6 +5193,14 @@ const PlexdApp = (function() {
 
         updateMomentBrowserTitle();
         renderCurrentBrowserMode();
+
+        // Restore scroll position from previous session
+        if (momentBrowserState._savedScrollTop) {
+            setTimeout(function() {
+                var c = document.getElementById('moment-browser-content');
+                if (c) c.scrollTop = momentBrowserState._savedScrollTop;
+            }, 50);
+        }
     }
 
     function updateMomentBrowserTitle() {
@@ -5061,6 +5232,18 @@ const PlexdApp = (function() {
             el.classList.remove('flash');
             void el.offsetWidth;
             el.classList.add('flash');
+        }
+        // Also update popup player info bar if open
+        var popupInfo = document.querySelector('.moment-popup-info');
+        if (popupInfo && momentBrowserState.popupOpen) {
+            var title = mom.sourceTitle ? mom.sourceTitle.slice(0, 30) : '';
+            var performers = (mom.performers || []).join(', ');
+            var dur = (mom.end - mom.start).toFixed(1) + 's';
+            var rating = mom.rating > 0 ? ' \u2605' + mom.rating : '';
+            var loved = mom.loved ? ' \u2665' : '';
+            var infoText = performers || title;
+            if (performers && title) infoText = performers + ' \u2014 ' + title;
+            popupInfo.textContent = (infoText ? infoText + ' \u2014 ' : '') + dur + rating + loved;
         }
         // Tags bar: full-width row showing AI tags
         if (tagsBar) {
@@ -7200,25 +7383,38 @@ const PlexdApp = (function() {
             case 'X':
                 e.preventDefault();
                 if (moments.length > 0 && moments[idx]) {
-                    var wasPopupOpen = momentBrowserState.popupOpen;
-                    var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
-                    if (wasPopupOpen) closeMomentPopupPlayer();
-                    PlexdMoments.deleteMoment(moments[idx].id);
-                    momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
-                    if (momentBrowserState.selectedIndex >= momentBrowserState.filteredMoments.length) {
-                        momentBrowserState.selectedIndex = Math.max(0, momentBrowserState.filteredMoments.length - 1);
-                    }
-                    renderCurrentBrowserMode();
-                    updateMomentBrowserTitle();
-                    showMessage('Moment deleted', 'info');
-                    // Re-open popup with next clip if it was open
-                    if (wasPopupOpen && momentBrowserState.filteredMoments.length > 0) {
-                        showMomentPopupPlayer(momentBrowserState.filteredMoments[momentBrowserState.selectedIndex]);
-                        if (wasFullscreen) {
-                            var panel = document.querySelector('.moment-popup-panel');
-                            if (panel) panel.classList.add('fullscreen');
+                    var momToDelete = moments[idx];
+                    // Show confirmation — Enter to delete from disk, Escape to cancel
+                    showMessage('Delete "' + (momToDelete.sourceTitle || momToDelete.id).slice(0, 40) + '"? [Enter=delete from disk, Esc=cancel]', 'warning');
+                    var _deleteHandler = function(ev) {
+                        document.removeEventListener('keydown', _deleteHandler, true);
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            var wasPopupOpen = momentBrowserState.popupOpen;
+                            var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
+                            if (wasPopupOpen) closeMomentPopupPlayer();
+                            delete _thumbCache[momToDelete.id];
+                            PlexdMoments.deleteMoment(momToDelete.id);
+                            momentBrowserState.filteredMoments = getFilteredAndSortedMoments();
+                            if (momentBrowserState.selectedIndex >= momentBrowserState.filteredMoments.length) {
+                                momentBrowserState.selectedIndex = Math.max(0, momentBrowserState.filteredMoments.length - 1);
+                            }
+                            renderCurrentBrowserMode();
+                            updateMomentBrowserTitle();
+                            showMessage('Moment deleted', 'info');
+                            if (wasPopupOpen && momentBrowserState.filteredMoments.length > 0) {
+                                showMomentPopupPlayer(momentBrowserState.filteredMoments[momentBrowserState.selectedIndex]);
+                                if (wasFullscreen) {
+                                    var panel = document.querySelector('.moment-popup-panel');
+                                    if (panel) panel.classList.add('fullscreen');
+                                }
+                            }
+                        } else {
+                            showMessage('Delete cancelled', 'info');
                         }
-                    }
+                    };
+                    document.addEventListener('keydown', _deleteHandler, true);
                 }
                 return true;
 
@@ -7391,6 +7587,9 @@ const PlexdApp = (function() {
     }
 
     function closeMomentBrowser() {
+        // Save scroll position for restore on reopen
+        var content = document.getElementById('moment-browser-content');
+        if (content) momentBrowserState._savedScrollTop = content.scrollTop;
         momentBrowserState.open = false;
         wallEditMode = false;
         momentBrowserState.popupHistory = [];
@@ -8790,7 +8989,8 @@ const PlexdApp = (function() {
         }
 
         // Ignore only when typing into text-entry controls (not sliders/buttons).
-        if (isTypingTarget(e.target)) return;
+        // Escape always passes through — closes panels even when search input has focus.
+        if (isTypingTarget(e.target) && e.key !== 'Escape') return;
 
         // Tab toggles panel search: first Tab = focus search, second Tab = close panel
         if (e.key === 'Tab') {
@@ -9422,14 +9622,20 @@ const PlexdApp = (function() {
                         showMessage('Select a stream first', 'warning');
                     }
                 }, function() {
-                    var fullscreenMode = PlexdStream.getFullscreenMode();
-                    if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
-                        PlexdStream.exitFocusedMode();
-                    }
-                    var count = PlexdStream.getFavoriteCount();
-                    setViewMode('favorites');
-                    if (count === 0) {
-                        showMessage('No favorites yet — press Q to star streams', 'info');
+                    // QQ toggles favorites view on/off
+                    if (viewMode === 'favorites') {
+                        setViewMode('all');
+                    } else {
+                        var fullscreenMode = PlexdStream.getFullscreenMode();
+                        if (fullscreenMode === 'true-focused' || fullscreenMode === 'browser-fill') {
+                            PlexdStream.exitFocusedMode();
+                        }
+                        var count = PlexdStream.getFavoriteCount();
+                        if (count === 0) {
+                            showMessage('No favorites yet — press Q to star streams', 'info');
+                        } else {
+                            setViewMode('favorites');
+                        }
                     }
                 });
                 break;
@@ -9821,8 +10027,17 @@ const PlexdApp = (function() {
         const fullscreenStream = PlexdStream.getFullscreenStream();
         if (!fullscreenStream) return;
 
-        const nextId = PlexdStream.getSpatialNeighborStreamId(fullscreenStream.id, direction);
-        if (!nextId || nextId === fullscreenStream.id) return;
+        // In focused mode only one stream is visible, so spatial nav fails.
+        // Use filtered stream list (respects view mode) with linear cycling.
+        // Left/Up = previous, Right/Down = next.
+        var filtered = getFilteredStreams();
+        if (filtered.length <= 1) return;
+        var idx = filtered.findIndex(function(s) { return s.id === fullscreenStream.id; });
+        if (idx === -1) idx = 0;
+        var delta = (direction === 'right' || direction === 'down') ? 1 : -1;
+        var nextIdx = (idx + delta + filtered.length) % filtered.length;
+        var nextId = filtered[nextIdx].id;
+        if (nextId === fullscreenStream.id) return;
 
         const mode = PlexdStream.getFullscreenMode();
         PlexdStream.enterFocusedMode(nextId);
@@ -13989,6 +14204,7 @@ const PlexdApp = (function() {
         showAllStreams,
         // View modes
         setViewMode,
+        toggleFavoritesView,
         cycleViewMode,
         // Layout modes
         toggleTetrisMode,

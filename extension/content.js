@@ -1,312 +1,135 @@
 /**
- * Plexd Extension - Content Script
+ * Plexd Extension - Content Script (ISOLATED world)
  *
- * Runs on every page to detect video elements and their sources.
- * Intercepts network requests to find HLS/DASH stream URLs.
- * Responds to requests from the popup to list available videos.
+ * Receives intercepted URLs from intercept.js (MAIN world) via postMessage.
+ * Scans DOM for <video> elements on request from popup.
+ * Reports detection count to background for badge updates.
  */
-
 (function() {
     'use strict';
 
-    // Store intercepted stream URLs
     const interceptedStreams = new Set();
 
-    // Receive URLs from MAIN world interceptor (intercept.js) via postMessage
+    // Receive URLs from MAIN world interceptor (intercept.js)
     window.addEventListener('message', (event) => {
-        if (event.source === window && event.data && event.data.type === '__plexd_url' && typeof event.data.url === 'string') {
-            checkForStreamUrl(event.data.url);
+        if (event.source !== window || !event.data || event.data.type !== '__plexd_url') return;
+        var url = event.data.url;
+        if (typeof url !== 'string') return;
+        if (isStreamUrl(url)) {
+            var fullUrl = url.startsWith('http') ? url : tryResolveUrl(url);
+            if (fullUrl && !interceptedStreams.has(fullUrl)) {
+                interceptedStreams.add(fullUrl);
+                saveInterceptedStreams();
+                chrome.runtime.sendMessage({ action: 'streamIntercepted', url: fullUrl }).catch(() => {});
+            }
         }
     });
 
-    /**
-     * Intercept fetch to capture .m3u8 and video URLs (ISOLATED world - backup)
-     */
-    const originalFetch = window.fetch;
-    window.fetch = async function(...args) {
-        const url = args[0]?.url || args[0];
-        if (typeof url === 'string') {
-            checkForStreamUrl(url);
-        }
-        return originalFetch.apply(this, args);
-    };
-
-    /**
-     * Intercept XMLHttpRequest to capture stream URLs
-     */
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-        if (typeof url === 'string') {
-            checkForStreamUrl(url);
-        }
-        return originalXHROpen.call(this, method, url, ...rest);
-    };
-
-    /**
-     * Check if URL is a stream and save it
-     */
-    function checkForStreamUrl(url) {
-        try {
-            const urlLower = url.toLowerCase();
-            let isStream = false;
-
-            // Check for HLS/DASH streams
-            if (urlLower.includes('.m3u8') ||
-                urlLower.includes('.mpd') ||
-                urlLower.includes('/manifest') ||
-                urlLower.includes('/hls/') ||
-                urlLower.includes('/dash/')) {
-                isStream = true;
-            }
-            // Check for direct video files
-            else if (urlLower.match(/\.(mp4|webm|m4v|mov|avi|mkv|flv|wmv|ts)(\?|$)/)) {
-                // Skip small files (likely thumbnails) and ads
-                if (!urlLower.includes('thumb') && !urlLower.includes('preview') && !urlLower.includes('/ad')) {
-                    isStream = true;
-                }
-            }
-
-            if (isStream) {
-                const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).href;
-                interceptedStreams.add(fullUrl);
-                console.log('[Plexd] Intercepted:', fullUrl);
-
-                // Save to chrome.storage for popup access
-                saveInterceptedStreams();
-            }
-        } catch (e) {
-            // Ignore URL parsing errors
-        }
+    function isStreamUrl(url) {
+        var lower = url.toLowerCase();
+        return lower.includes('.m3u8') || lower.includes('.mpd');
     }
 
-    /**
-     * Save intercepted streams to chrome.storage for popup access
-     */
-    let saveTimeout = null;
+    function tryResolveUrl(url) {
+        try { return new URL(url, window.location.href).href; } catch (e) { return null; }
+    }
+
+    // Debounced save to chrome.storage
+    var saveTimer = null;
     function saveInterceptedStreams() {
-        // Debounce to avoid too many writes
-        if (saveTimeout) clearTimeout(saveTimeout);
-        saveTimeout = setTimeout(() => {
-            const pageKey = 'streams_' + window.location.hostname + window.location.pathname;
-            const data = {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(function() {
+            var pageKey = 'streams_' + window.location.hostname + window.location.pathname;
+            chrome.storage.local.set({
                 [pageKey]: {
                     streams: Array.from(interceptedStreams),
                     title: document.title,
                     url: window.location.href,
                     timestamp: Date.now()
                 }
-            };
-            chrome.storage.local.set(data).catch(() => {});
+            }).catch(function() {});
         }, 500);
     }
 
     /**
      * Find all video sources on the current page
-     * @returns {Array} Array of video source objects
      */
     function findVideoSources() {
-        const sources = [];
-        const seen = new Set();
+        var sources = [];
+        var seen = new Set();
 
-        // 0. First, add intercepted stream URLs (highest priority - these actually work!)
-        interceptedStreams.forEach(url => {
+        // Intercepted streams first (highest priority)
+        interceptedStreams.forEach(function(url) {
             if (!seen.has(url)) {
                 seen.add(url);
-                sources.push({
-                    type: 'stream',
-                    url: url,
-                    title: document.title + ' (HLS Stream)',
-                    intercepted: true
-                });
+                sources.push({ type: 'stream', url: url, title: document.title, intercepted: true });
             }
         });
 
-        // 1. Find <video> elements with src attribute
-        document.querySelectorAll('video[src]').forEach(video => {
-            const src = video.src;
-            if (src && !seen.has(src) && isValidVideoUrl(src)) {
-                seen.add(src);
-                sources.push({
-                    type: 'video',
-                    url: src,
-                    title: getVideoTitle(video),
-                    duration: video.duration || null,
-                    playing: !video.paused
-                });
-            }
-        });
-
-        // 2. Find <video> elements with <source> children
-        document.querySelectorAll('video').forEach(video => {
-            video.querySelectorAll('source[src]').forEach(source => {
-                const src = source.src;
-                if (src && !seen.has(src) && isValidVideoUrl(src)) {
+        // <video> elements
+        document.querySelectorAll('video').forEach(function(video) {
+            [video.src, video.currentSrc].forEach(function(src) {
+                if (src && !src.startsWith('blob:') && !src.startsWith('data:') && !seen.has(src)) {
+                    try { new URL(src); } catch (e) { return; }
                     seen.add(src);
-                    sources.push({
-                        type: 'source',
-                        url: src,
-                        title: getVideoTitle(video),
-                        mimeType: source.type || null
-                    });
+                    sources.push({ type: 'video', url: src, title: getVideoTitle(video) });
                 }
             });
-
-            // Also check currentSrc (the actually playing source)
-            if (video.currentSrc && !seen.has(video.currentSrc)) {
-                seen.add(video.currentSrc);
-                sources.push({
-                    type: 'currentSrc',
-                    url: video.currentSrc,
-                    title: getVideoTitle(video),
-                    duration: video.duration || null,
-                    playing: !video.paused
-                });
-            }
-        });
-
-        // 3. Find iframes that might contain videos (YouTube, Vimeo embeds)
-        document.querySelectorAll('iframe').forEach(iframe => {
-            const src = iframe.src;
-            if (src && !seen.has(src)) {
-                const embedInfo = parseEmbedUrl(src);
-                if (embedInfo) {
+            video.querySelectorAll('source[src]').forEach(function(source) {
+                var src = source.src;
+                if (src && !src.startsWith('blob:') && !src.startsWith('data:') && !seen.has(src)) {
+                    try { new URL(src); } catch (e) { return; }
                     seen.add(src);
-                    sources.push({
-                        type: 'embed',
-                        url: src,
-                        embedType: embedInfo.type,
-                        videoId: embedInfo.id,
-                        title: iframe.title || embedInfo.type + ' video'
-                    });
+                    sources.push({ type: 'video', url: src, title: getVideoTitle(video) });
                 }
-            }
+            });
         });
 
-        // 4. Look for video URLs in data attributes
-        document.querySelectorAll('[data-video-url], [data-src], [data-video]').forEach(el => {
-            const url = el.dataset.videoUrl || el.dataset.src || el.dataset.video;
-            if (url && !seen.has(url) && isValidVideoUrl(url)) {
+        // Data attributes
+        document.querySelectorAll('[data-video-url], [data-src], [data-video]').forEach(function(el) {
+            var url = el.dataset.videoUrl || el.dataset.src || el.dataset.video;
+            if (url && !url.startsWith('blob:') && !url.startsWith('data:') && !seen.has(url)) {
+                try { new URL(url); } catch (e) { return; }
                 seen.add(url);
-                sources.push({
-                    type: 'data-attr',
-                    url: url,
-                    title: el.title || el.getAttribute('aria-label') || 'Video'
-                });
+                sources.push({ type: 'video', url: url, title: el.title || 'Video' });
             }
         });
 
         return sources;
     }
 
-    /**
-     * Check if URL looks like a valid video source
-     */
-    function isValidVideoUrl(url) {
-        if (!url || url.startsWith('blob:') || url.startsWith('data:')) {
-            return false;
-        }
-        try {
-            new URL(url);
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    /**
-     * Try to get a title for the video
-     */
     function getVideoTitle(video) {
-        // Check various attributes
         if (video.title) return video.title;
         if (video.getAttribute('aria-label')) return video.getAttribute('aria-label');
-
-        // Check parent elements for titles
-        let parent = video.parentElement;
-        for (let i = 0; i < 3 && parent; i++) {
-            if (parent.title) return parent.title;
-            const heading = parent.querySelector('h1, h2, h3, h4, [class*="title"]');
-            if (heading && heading.textContent) {
-                return heading.textContent.trim().slice(0, 100);
-            }
+        var parent = video.parentElement;
+        for (var i = 0; i < 3 && parent; i++) {
+            var heading = parent.querySelector('h1, h2, h3');
+            if (heading && heading.textContent) return heading.textContent.trim().slice(0, 80);
             parent = parent.parentElement;
         }
-
-        // Fall back to page title or URL
         return document.title || 'Video';
     }
 
-    /**
-     * Parse embed URLs (YouTube, Vimeo, etc.)
-     */
-    function parseEmbedUrl(url) {
-        try {
-            const parsed = new URL(url);
-
-            // YouTube
-            if (parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtube-nocookie.com')) {
-                const match = parsed.pathname.match(/\/embed\/([^/?]+)/);
-                if (match) {
-                    return { type: 'youtube', id: match[1] };
-                }
-            }
-
-            // Vimeo
-            if (parsed.hostname.includes('player.vimeo.com')) {
-                const match = parsed.pathname.match(/\/video\/(\d+)/);
-                if (match) {
-                    return { type: 'vimeo', id: match[1] };
-                }
-            }
-
-            // Dailymotion
-            if (parsed.hostname.includes('dailymotion.com')) {
-                const match = parsed.pathname.match(/\/embed\/video\/([^/?]+)/);
-                if (match) {
-                    return { type: 'dailymotion', id: match[1] };
-                }
-            }
-        } catch {
-            // Invalid URL
-        }
-        return null;
-    }
-
-    /**
-     * Listen for messages from popup
-     */
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Respond to popup requests
+    chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         if (request.action === 'getVideos') {
-            const videos = findVideoSources();
-            sendResponse({ videos, pageUrl: window.location.href, pageTitle: document.title });
+            sendResponse({ videos: findVideoSources(), pageUrl: window.location.href });
         }
-        return true; // Keep channel open for async response
+        return true;
     });
 
-    /**
-     * Notify background script about detected videos (after DOM ready)
-     */
-    function notifyVideosDetected() {
-        const videos = findVideoSources();
-        if (videos.length > 0) {
-            chrome.runtime.sendMessage({
-                action: 'videosDetected',
-                count: videos.length,
-                pageUrl: window.location.href
-            }).catch(() => {
-                // Extension context may not be available
-            });
+    // Notify background of video count for badge
+    function notifyCount() {
+        var count = findVideoSources().length;
+        if (count > 0) {
+            chrome.runtime.sendMessage({ action: 'videosDetected', count: count }).catch(function() {});
         }
     }
 
-    // Wait for DOM to be ready before scanning for video elements
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', notifyVideosDetected);
+        document.addEventListener('DOMContentLoaded', notifyCount);
     } else {
-        notifyVideosDetected();
+        notifyCount();
     }
-
-    // Also re-scan after a delay to catch dynamically loaded videos
-    setTimeout(notifyVideosDetected, 2000);
-
+    setTimeout(notifyCount, 3000);
 })();

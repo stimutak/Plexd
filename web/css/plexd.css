@@ -1539,6 +1539,19 @@ body {
 .plexd-tag-chip.selected::before {
     content: '\2713 ';
 }
+.plexd-tag-chip.unplayable {
+    opacity: 0.35;
+    font-style: italic;
+}
+.plexd-tag-chip.unplayable:hover {
+    opacity: 0.6;
+}
+.plexd-tag-chip.unplayable.selected {
+    opacity: 0.6;
+    background: #665;
+    border-color: #665;
+    box-shadow: none;
+}
 
 /* Selected group at top of filter panels */
 .plexd-selected-group {

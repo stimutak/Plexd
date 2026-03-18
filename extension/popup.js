@@ -1,248 +1,208 @@
 /**
- * Plexd Extension - Popup Script
+ * Plexd Extension - Popup v2
  *
- * Handles the extension popup UI, video selection, and sending to Plexd.
+ * Clean rewrite: health check, deduplication, batch send.
  */
-
 (function() {
     'use strict';
 
-    // DOM elements
-    const contentEl = document.getElementById('content');
-    const statusEl = document.getElementById('status');
-    const sendBtn = document.getElementById('sendBtn');
-    const queueBtn = document.getElementById('queueBtn');
-    const openPlexdBtn = document.getElementById('openPlexdBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const plexdUrlInput = document.getElementById('plexdUrl');
-    const autoQueueToggle = document.getElementById('autoQueueToggle');
+    var contentEl = document.getElementById('content');
+    var statusBar = document.getElementById('statusBar');
+    var statusDot = document.getElementById('statusDot');
+    var headerStatus = document.getElementById('headerStatus');
+    var sendBtn = document.getElementById('sendBtn');
+    var openBtn = document.getElementById('openBtn');
 
-    // State
-    let videos = [];
-    let selectedVideos = new Set();
-    let autoQueueEnabled = false;
+    var videos = [];
+    var selectedSet = new Set(); // indices
+    var plexdUrl = 'http://localhost:8080';
+    var plexdReachable = false;
 
-    // Default Plexd URL
-    const DEFAULT_PLEXD_URL = 'http://localhost:8080';
+    // ── Init ────────────────────────────────────────────────────────────────
 
-    /**
-     * Ensure URL has a protocol prefix
-     */
-    function normalizeUrl(url) {
-        if (!url) return DEFAULT_PLEXD_URL;
-        url = url.trim();
-        if (url.startsWith('file://') || url.startsWith('http://') || url.startsWith('https://')) return url;
-        return 'http://' + url;
-    }
-
-    /**
-     * Check if a host is localhost or local network
-     */
-    function isLocalHost(host) {
-        if (!host) return false;
-        return ['localhost', '127.0.0.1', '[::1]', '[::]'].includes(host) ||
-               host.startsWith('192.168.') || host.startsWith('10.');
-    }
-
-    /**
-     * Find existing Plexd tab that matches the configured URL
-     */
-    async function findPlexdTab(plexdUrl) {
-        const tabs = await chrome.tabs.query({});
-
-        // Handle file:// URLs specially
-        if (plexdUrl.startsWith('file://')) {
-            // For file URLs, match the file path (ignoring query string)
-            const plexdPath = plexdUrl.split('?')[0];
-            return tabs.find(t => t.url && t.url.startsWith('file://') && t.url.split('?')[0] === plexdPath);
-        }
-
-        // For http/https URLs
-        try {
-            const plexdUrlObj = new URL(plexdUrl);
-
-            return tabs.find(t => {
-                if (!t.url) return false;
-                try {
-                    const tabUrl = new URL(t.url);
-
-                    // Both must be http/https
-                    if (!tabUrl.protocol.startsWith('http')) return false;
-
-                    // For localhost URLs, match on port
-                    if (isLocalHost(plexdUrlObj.hostname) && isLocalHost(tabUrl.hostname)) {
-                        return tabUrl.port === plexdUrlObj.port;
-                    }
-
-                    // For other URLs, match on origin
-                    return tabUrl.origin === plexdUrlObj.origin;
-                } catch {
-                    return false;
-                }
-            });
-        } catch {
-            return null;
-        }
-    }
-
-    /**
-     * Initialize popup
-     */
     async function init() {
+        var stored = await chrome.storage.local.get(['plexdUrl']);
+        if (stored.plexdUrl) plexdUrl = stored.plexdUrl;
+
+        sendBtn.addEventListener('click', sendSelected);
+        openBtn.addEventListener('click', openPlexd);
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !sendBtn.disabled) sendSelected();
+            if (e.key === 'a' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); selectAll(); }
+        });
+
+        // Health check and scan in parallel
+        await Promise.all([checkHealth(), scanForVideos()]);
+    }
+
+    // ── Health Check ────────────────────────────────────────────────────────
+
+    async function checkHealth() {
         try {
-            // Load saved settings
-            const stored = await chrome.storage.local.get(['plexdUrl', 'autoQueue']);
-            if (plexdUrlInput) {
-                plexdUrlInput.value = normalizeUrl(stored.plexdUrl || DEFAULT_PLEXD_URL);
-
-                // Save URL when changed
-                plexdUrlInput.addEventListener('change', () => {
-                    plexdUrlInput.value = normalizeUrl(plexdUrlInput.value);
-                    chrome.storage.local.set({ plexdUrl: plexdUrlInput.value });
-                });
+            var controller = new AbortController();
+            var timeout = setTimeout(function() { controller.abort(); }, 3000);
+            var resp = await fetch(plexdUrl + '/api/remote/state', { signal: controller.signal });
+            clearTimeout(timeout);
+            if (resp.ok) {
+                plexdReachable = true;
+                statusDot.className = 'status-dot ok';
+                headerStatus.textContent = 'Connected';
+                headerStatus.style.color = '#4ade80';
+            } else {
+                setOffline();
             }
-
-            // Load auto-queue state
-            autoQueueEnabled = stored.autoQueue || false;
-            if (autoQueueToggle) {
-                autoQueueToggle.checked = autoQueueEnabled;
-                autoQueueToggle.addEventListener('change', () => {
-                    autoQueueEnabled = autoQueueToggle.checked;
-                    chrome.storage.local.set({ autoQueue: autoQueueEnabled });
-                    showStatus(autoQueueEnabled ? 'Auto-queue enabled' : 'Auto-queue disabled');
-                });
-            }
-
-            // Button handlers
-            if (sendBtn) sendBtn.addEventListener('click', sendToPlexd);
-            if (queueBtn) queueBtn.addEventListener('click', queueSelected);
-            if (openPlexdBtn) openPlexdBtn.addEventListener('click', openPlexd);
-            if (clearBtn) clearBtn.addEventListener('click', clearAllStreams);
-
-            // Scan current tab for videos
-            await scanForVideos();
-        } catch (err) {
-            console.error('Popup init error:', err);
-            if (contentEl) {
-                contentEl.innerHTML = '<div class="empty-state"><h3>Error</h3><p>' + escapeHtml(err.message) + '</p></div>';
-            }
+        } catch (e) {
+            setOffline();
         }
     }
 
-    /**
-     * Scan current tab for videos
-     */
+    function setOffline() {
+        plexdReachable = false;
+        statusDot.className = 'status-dot err';
+        headerStatus.textContent = 'Not running';
+        headerStatus.style.color = '#f87171';
+    }
+
+    // ── Video Scanning ──────────────────────────────────────────────────────
+
+    function normalizeUrl(url) {
+        // Strip tracking/signed URL params for dedup
+        try {
+            var u = new URL(url);
+            var dominated = ['validto', 'hash', 'ip', 'nva', 'nvb', 'token', 'sig', 'expires', 'hdnts'];
+            dominated.forEach(function(p) { u.searchParams.delete(p); });
+            // Normalize HLS paths: strip everything after last directory to group
+            // master.m3u8, index-v1.m3u8, index-a1.m3u8 etc. as same stream
+            var path = u.pathname;
+            if (path.match(/\.(m3u8|mpd)$/i)) {
+                // Keep up to the parent directory as the dedup key
+                var dir = path.replace(/\/[^/]+$/, '');
+                u.pathname = dir + '/__stream__';
+            }
+            return u.href;
+        } catch (e) {
+            return url;
+        }
+    }
+
+    // Is this a sub-manifest (variant/audio playlist) rather than a master?
+    // Sub-manifests: index-v1.m3u8, index-a1.m3u8, chunklist*.m3u8, etc.
+    // Masters: master.m3u8, m.m3u8, playlist.m3u8, or just path/video.m3u8
+    function isMasterManifest(url) {
+        try {
+            var filename = new URL(url).pathname.split('/').pop().toLowerCase();
+            // Obvious sub-manifests
+            if (filename.match(/^(index-[va]\d|chunklist|media_)/)) return false;
+            // Obvious masters
+            if (filename.match(/^(master|m|playlist|manifest)\./)) return true;
+            // Default: treat as master (better to show than hide)
+            return true;
+        } catch (e) {
+            return true;
+        }
+    }
+
     async function scanForVideos() {
         try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
+            var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            var tab = tabs[0];
             if (!tab || !tab.id || !tab.url) {
                 showEmpty('No active tab');
                 return;
             }
 
-            // PRIMARY: Read stream URLs from page's Performance API
-            // Runs in MAIN world so it sees ALL resources the page actually loaded
-            // Works even if extension was just reloaded (performance entries persist until page reload)
-            let interceptedVideos = [];
+            var allFound = [];
+            var seen = new Set();
+
+            function addVideo(v) {
+                var key = normalizeUrl(v.url);
+                if (seen.has(key)) {
+                    // If we already have a sub-manifest, replace with master
+                    if (isMasterManifest(v.url)) {
+                        var existIdx = allFound.findIndex(function(f) { return normalizeUrl(f.url) === key; });
+                        if (existIdx >= 0 && !isMasterManifest(allFound[existIdx].url)) {
+                            allFound[existIdx] = v;
+                        }
+                    }
+                    return;
+                }
+                // Skip sub-manifests if we already have the master
+                if (v.url.match(/\.m3u8/i) && !isMasterManifest(v.url)) {
+                    // Check if master already exists for this stream
+                    if (seen.has(key)) return;
+                }
+                seen.add(key);
+                allFound.push(v);
+            }
+
+            // 1. Performance API — most reliable, reads what browser actually loaded
             try {
-                const perfResults = await chrome.scripting.executeScript({
+                var perfResults = await chrome.scripting.executeScript({
                     target: { tabId: tab.id, allFrames: true },
                     world: 'MAIN',
-                    func: () => {
-                        const urls = [];
-                        const seen = new Set();
-                        performance.getEntriesByType('resource').forEach(entry => {
-                            const lower = entry.name.toLowerCase();
-                            if ((lower.includes('.m3u8') || lower.includes('.mpd')) && !seen.has(entry.name)) {
-                                seen.add(entry.name);
+                    func: function() {
+                        var urls = [];
+                        var seen = {};
+                        performance.getEntriesByType('resource').forEach(function(entry) {
+                            var lower = entry.name.toLowerCase();
+                            if ((lower.includes('.m3u8') || lower.includes('.mpd')) && !seen[entry.name]) {
+                                seen[entry.name] = true;
                                 urls.push(entry.name);
                             }
                         });
                         return urls;
                     }
                 });
-                const seen = new Set();
-                for (const r of (perfResults || [])) {
-                    if (r && r.result) {
-                        for (const url of r.result) {
-                            if (!seen.has(url)) {
-                                seen.add(url);
-                                interceptedVideos.push({
-                                    type: 'stream',
-                                    url: url,
-                                    title: tab.title + ' (Stream)',
-                                    intercepted: true
-                                });
-                            }
+                for (var r = 0; r < (perfResults || []).length; r++) {
+                    var result = perfResults[r];
+                    if (result && result.result) {
+                        for (var i = 0; i < result.result.length; i++) {
+                            addVideo({ type: 'stream', url: result.result[i], title: tab.title, intercepted: true });
                         }
                     }
                 }
-            } catch (e) {
-                console.log('[Plexd] Performance API scan failed:', e);
-            }
+            } catch (e) { /* restricted page */ }
 
-            // FALLBACK: Check background webRequest storage
-            if (interceptedVideos.length === 0) {
-                try {
-                    const stored = await chrome.storage.local.get(['intercepted_' + tab.id]);
-                    const streams = stored['intercepted_' + tab.id];
-                    if (streams && streams.length > 0) {
-                        interceptedVideos = streams.map(url => ({
-                            type: 'stream',
-                            url: url,
-                            title: tab.title + ' (Stream)',
-                            intercepted: true
-                        }));
-                    }
-                } catch {}
-            }
-
-            // FALLBACK 2: Check content.js storage
-            if (interceptedVideos.length === 0) {
-                try {
-                    const tabUrl = new URL(tab.url);
-                    const pageKey = 'streams_' + tabUrl.hostname + tabUrl.pathname;
-                    const stored = await chrome.storage.local.get([pageKey]);
-                    const storedData = stored[pageKey];
-                    if (storedData && storedData.streams && storedData.streams.length > 0) {
-                        interceptedVideos = storedData.streams.map(url => ({
-                            type: 'stream',
-                            url: url,
-                            title: (storedData.title || tab.title) + ' (Stream)',
-                            intercepted: true
-                        }));
-                    }
-                } catch {}
-            }
-
-            // Ask content script for video list (with timeout so popup never hangs)
-            let contentVideos = [];
+            // 2. Content script intercepted streams (from intercept.js via postMessage)
             try {
-                const response = await Promise.race([
+                var response = await Promise.race([
                     chrome.tabs.sendMessage(tab.id, { action: 'getVideos' }),
-                    new Promise((_, reject) => setTimeout(() => reject('timeout'), 1500))
+                    new Promise(function(_, reject) { setTimeout(function() { reject('timeout'); }, 2000); })
                 ]);
                 if (response && response.videos) {
-                    contentVideos = response.videos;
+                    for (var j = 0; j < response.videos.length; j++) {
+                        addVideo(response.videos[j]);
+                    }
                 }
-            } catch {}
+            } catch (e) { /* content script not ready */ }
 
-            // Also scan ALL frames via executeScript for <video> elements
-            // (catches videos in iframes that the main frame content script can't see)
-            let domVideos = [];
-            const seen = new Set(contentVideos.map(v => v.url));
+            // 3. Content script storage fallback
             try {
-                const scriptResults = await chrome.scripting.executeScript({
+                var tabUrl = new URL(tab.url);
+                var pageKey = 'streams_' + tabUrl.hostname + tabUrl.pathname;
+                var stored = await chrome.storage.local.get([pageKey]);
+                var storedData = stored[pageKey];
+                if (storedData && storedData.streams) {
+                    for (var k = 0; k < storedData.streams.length; k++) {
+                        addVideo({ type: 'stream', url: storedData.streams[k], title: storedData.title || tab.title, intercepted: true });
+                    }
+                }
+            } catch (e) {}
+
+            // 4. DOM <video> element scan
+            try {
+                var domResults = await chrome.scripting.executeScript({
                     target: { tabId: tab.id, allFrames: true },
-                    func: () => {
-                        const sources = [];
-                        const seen = new Set();
-                        document.querySelectorAll('video').forEach(video => {
-                            [video.src, video.currentSrc].forEach(src => {
-                                if (src && !src.startsWith('blob:') && !src.startsWith('data:') && !seen.has(src)) {
-                                    try { new URL(src); } catch { return; }
-                                    seen.add(src);
+                    func: function() {
+                        var sources = [];
+                        var seen = {};
+                        document.querySelectorAll('video').forEach(function(video) {
+                            [video.src, video.currentSrc].forEach(function(src) {
+                                if (src && !src.startsWith('blob:') && !src.startsWith('data:') && !seen[src]) {
+                                    try { new URL(src); } catch(e) { return; }
+                                    seen[src] = true;
                                     sources.push({ type: 'video', url: src, title: video.title || document.title || 'Video' });
                                 }
                             });
@@ -250,392 +210,257 @@
                         return sources;
                     }
                 });
-                for (const r of scriptResults) {
-                    if (r && r.result) {
-                        for (const v of r.result) {
-                            if (!seen.has(v.url)) {
-                                seen.add(v.url);
-                                domVideos.push(v);
-                            }
+                for (var d = 0; d < (domResults || []).length; d++) {
+                    if (domResults[d] && domResults[d].result) {
+                        for (var e2 = 0; e2 < domResults[d].result.length; e2++) {
+                            addVideo(domResults[d].result[e2]);
                         }
                     }
                 }
-            } catch {
-                // allFrames can fail on restricted frames, try main frame only
-                try {
-                    const scriptResults = await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        func: () => {
-                            const sources = [];
-                            document.querySelectorAll('video').forEach(video => {
-                                [video.src, video.currentSrc].forEach(src => {
-                                    if (src && !src.startsWith('blob:') && !src.startsWith('data:')) {
-                                        try { new URL(src); } catch { return; }
-                                        sources.push({ type: 'video', url: src, title: document.title || 'Video' });
-                                    }
-                                });
-                            });
-                            return sources;
-                        }
-                    });
-                    if (scriptResults && scriptResults[0] && scriptResults[0].result) {
-                        for (const v of scriptResults[0].result) {
-                            if (!seen.has(v.url)) {
-                                seen.add(v.url);
-                                domVideos.push(v);
-                            }
-                        }
-                    }
-                } catch {}
-            }
+            } catch (e) { /* restricted frames */ }
 
-            // Combine: intercepted first, then content script, then iframe DOM
-            const allVideos = [...interceptedVideos, ...contentVideos, ...domVideos];
-
-            if (allVideos.length > 0) {
-                videos = allVideos;
-                renderVideoList(tab.title);
+            if (allFound.length > 0) {
+                videos = allFound;
+                // Auto-select all streams (the ones users usually want)
+                for (var s = 0; s < videos.length; s++) {
+                    if (videos[s].intercepted) selectedSet.add(s);
+                }
+                renderVideoList();
             } else {
-                showEmpty('No videos found. Play a video first, then reopen this popup.');
+                showEmpty('No videos found on this page.\nPlay a video first, then reopen.');
             }
         } catch (err) {
-            console.error('Scan error:', err);
-            showEmpty('Could not scan page. Try refreshing.');
+            showEmpty('Could not scan page.');
         }
     }
 
-    /**
-     * Render the video list
-     */
-    function renderVideoList(pageTitle) {
-        // Separate intercepted streams from other videos
-        const intercepted = [];
-        const other = [];
-        videos.forEach((video, index) => {
-            if (video.intercepted || video.type === 'stream') {
-                intercepted.push({ video, index });
+    // ── Rendering ───────────────────────────────────────────────────────────
+
+    function renderVideoList() {
+        contentEl.innerHTML = '';
+
+        var streams = [];
+        var other = [];
+        for (var i = 0; i < videos.length; i++) {
+            if (videos[i].intercepted || videos[i].type === 'stream') {
+                streams.push(i);
             } else {
-                other.push({ video, index });
+                other.push(i);
             }
-        });
-
-        let html = '';
-
-        // Show intercepted streams first (these are the good ones!)
-        if (intercepted.length > 0) {
-            html += `<div class="section-title" style="color: #4ade80;">&#9733; Captured Streams (Best)</div>
-                     <ul class="video-list" id="streamList"></ul>`;
         }
 
-        // Show other detected videos
+        if (streams.length > 0) {
+            var label = document.createElement('div');
+            label.className = 'section-label streams';
+            label.textContent = 'Streams (' + streams.length + ')';
+            contentEl.appendChild(label);
+            for (var s = 0; s < streams.length; s++) {
+                contentEl.appendChild(createItem(streams[s]));
+            }
+        }
+
         if (other.length > 0) {
-            html += `<div class="section-title" style="margin-top: 12px;">Other Videos on Page</div>
-                     <ul class="video-list" id="otherList"></ul>`;
+            var label2 = document.createElement('div');
+            label2.className = 'section-label';
+            label2.textContent = 'Videos (' + other.length + ')';
+            if (streams.length > 0) label2.style.marginTop = '8px';
+            contentEl.appendChild(label2);
+            for (var o = 0; o < other.length; o++) {
+                contentEl.appendChild(createItem(other[o]));
+            }
         }
 
-        if (intercepted.length === 0 && other.length === 0) {
-            html = '<div class="empty-state"><h3>No Videos</h3><p>Play a video on this page first</p></div>';
-        }
-
-        contentEl.innerHTML = html;
-
-        // Render intercepted streams
-        if (intercepted.length > 0) {
-            const streamList = document.getElementById('streamList');
-            intercepted.forEach(({ video, index }) => {
-                const li = createVideoItem(video, index, true);
-                streamList.appendChild(li);
-            });
-        }
-
-        // Render other videos
-        if (other.length > 0) {
-            const otherList = document.getElementById('otherList');
-            other.forEach(({ video, index }) => {
-                const li = createVideoItem(video, index, false);
-                otherList.appendChild(li);
-            });
-        }
+        updateSendBtn();
     }
 
-    /**
-     * Create a video list item with copy button
-     */
-    function createVideoItem(video, index, isStream) {
-        // Create wrapper div
-        const wrapper = document.createElement('div');
-        wrapper.className = 'video-item-wrapper';
+    function createItem(idx) {
+        var v = videos[idx];
+        var item = document.createElement('div');
+        item.className = 'video-item' + (selectedSet.has(idx) ? ' selected' : '');
+        item.dataset.idx = idx;
 
-        // Create the video item
-        const li = document.createElement('div');
-        li.className = 'video-item' + (isStream ? ' stream-item' : '');
-        li.dataset.index = index;
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedSet.has(idx);
 
-        const typeLabel = getTypeLabel(video);
-        const urlShort = shortenUrl(video.url);
+        var info = document.createElement('div');
+        info.className = 'video-info';
 
-        li.innerHTML = `
-            <div class="video-title">${escapeHtml(video.title || 'Untitled')}</div>
-            <div class="video-meta">
-                <span class="video-type" style="${isStream ? 'background: #166534; color: #4ade80;' : ''}">${typeLabel}</span>
-                <span>${urlShort}</span>
-            </div>
-        `;
+        var title = document.createElement('div');
+        title.className = 'video-title';
+        title.textContent = v.title || 'Untitled';
 
-        li.addEventListener('click', () => toggleSelection(index, li));
+        var meta = document.createElement('div');
+        meta.className = 'video-meta';
 
-        // Create actions row
-        const actionsRow = document.createElement('div');
-        actionsRow.className = 'video-item-actions';
+        var badge = document.createElement('span');
+        badge.className = 'badge-type ' + getBadgeClass(v);
+        badge.textContent = getTypeLabel(v);
+        meta.appendChild(badge);
 
-        // Create copy button
-        const copyBtn = document.createElement('button');
+        var urlSpan = document.createElement('span');
+        urlSpan.textContent = shortenUrl(v.url);
+        meta.appendChild(urlSpan);
+
+        info.appendChild(title);
+        info.appendChild(meta);
+
+        var copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
-        copyBtn.title = 'Copy stream URL';
-        copyBtn.innerHTML = '&#128203; Copy URL'; // Clipboard icon with text
-        copyBtn.addEventListener('click', (e) => {
+        copyBtn.innerHTML = '&#x1F4CB;';
+        copyBtn.title = 'Copy URL';
+        copyBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-            copyStreamUrl(video.url, copyBtn);
+            navigator.clipboard.writeText(v.url).then(function() {
+                copyBtn.innerHTML = '&#x2713;';
+                copyBtn.classList.add('copied');
+                setTimeout(function() { copyBtn.innerHTML = '&#x1F4CB;'; copyBtn.classList.remove('copied'); }, 1500);
+            });
         });
 
-        actionsRow.appendChild(copyBtn);
-        wrapper.appendChild(li);
-        wrapper.appendChild(actionsRow);
-        return wrapper;
-    }
+        item.appendChild(cb);
+        item.appendChild(info);
+        item.appendChild(copyBtn);
 
-    /**
-     * Copy stream URL to clipboard
-     */
-    async function copyStreamUrl(url, button) {
-        try {
-            await navigator.clipboard.writeText(url);
-            button.classList.add('copied');
-            button.innerHTML = '&#10003; Copied!'; // Checkmark with text
-            showStatus('URL copied to clipboard');
-            setTimeout(() => {
-                button.classList.remove('copied');
-                button.innerHTML = '&#128203; Copy URL';
-            }, 2000);
-        } catch (err) {
-            console.error('Copy failed:', err);
-            showStatus('Failed to copy URL', true);
-        }
-    }
-
-    /**
-     * Toggle video selection
-     */
-    function toggleSelection(index, element) {
-        if (selectedVideos.has(index)) {
-            selectedVideos.delete(index);
-            element.classList.remove('selected');
-        } else {
-            selectedVideos.add(index);
-            element.classList.add('selected');
-        }
-        updateSendButton();
-    }
-
-    /**
-     * Update send button state
-     */
-    function updateSendButton() {
-        const count = selectedVideos.size;
-        sendBtn.disabled = count === 0;
-        sendBtn.textContent = count > 0 ? `Send ${count} Video${count > 1 ? 's' : ''}` : 'Send Selected';
-        if (queueBtn) {
-            queueBtn.disabled = count === 0;
-            queueBtn.textContent = count > 0 ? `Queue ${count}` : 'Queue';
-        }
-    }
-
-    /**
-     * Send a command to Plexd via the server API
-     */
-    async function sendCommand(action, payload = {}) {
-        const plexdUrl = normalizeUrl(plexdUrlInput.value).replace(/\/$/, '');
-        const resp = await fetch(`${plexdUrl}/api/remote/command`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, payload, timestamp: Date.now() })
-        });
-        if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-        return resp.json();
-    }
-
-    /**
-     * Send selected videos to Plexd
-     */
-    async function sendToPlexd() {
-        if (selectedVideos.size === 0) return;
-
-        const selectedList = Array.from(selectedVideos).map(i => videos[i]);
-        const plexdUrl = normalizeUrl(plexdUrlInput.value);
-
-        if (!plexdUrl) {
-            showStatus('Please set Plexd URL first', true);
-            return;
-        }
-
-        try {
-            const newUrls = selectedList.map(v => v.url);
-            console.log('[Plexd Popup] Sending:', newUrls);
-
-            for (const url of newUrls) {
-                await sendCommand('addStream', { url });
-            }
-
-            showStatus(`Sent ${selectedList.length} video(s) to Plexd`);
-
-            // Clear selection
-            selectedVideos.clear();
-            document.querySelectorAll('.video-item.selected').forEach(el => {
-                el.classList.remove('selected');
-            });
-            updateSendButton();
-
-        } catch (err) {
-            console.error('Send error:', err);
-            showStatus('Failed to send. Is Plexd running?', true);
-        }
-    }
-
-    /**
-     * Queue selected videos (add to Plexd queue instead of playing)
-     */
-    async function queueSelected() {
-        if (selectedVideos.size === 0) return;
-
-        const selectedList = Array.from(selectedVideos).map(i => videos[i]);
-        const plexdUrl = normalizeUrl(plexdUrlInput.value);
-
-        if (!plexdUrl) {
-            showStatus('Please set Plexd URL first', true);
-            return;
-        }
-
-        try {
-            const newUrls = selectedList.map(v => v.url);
-            console.log('[Plexd Popup] Queueing:', newUrls);
-
-            for (const url of newUrls) {
-                await sendCommand('queueStream', { url });
-            }
-
-            showStatus(`Queued ${selectedList.length} video(s)`);
-
-            // Clear selection
-            selectedVideos.clear();
-            document.querySelectorAll('.video-item.selected').forEach(el => {
-                el.classList.remove('selected');
-            });
-            updateSendButton();
-
-        } catch (err) {
-            console.error('Queue error:', err);
-            showStatus('Failed to queue. Is Plexd open?', true);
-        }
-    }
-
-    /**
-     * Open Plexd - finds existing tab or creates new one
-     */
-    async function openPlexd() {
-        const plexdUrl = normalizeUrl(plexdUrlInput.value);
-
-        if (!plexdUrl) {
-            showStatus('Please set Plexd URL first', true);
-            return;
-        }
-
-        try {
-            // Find existing Plexd tab or create new one
-            const plexdTab = await findPlexdTab(plexdUrl);
-
-            if (plexdTab) {
-                // Activate existing tab
-                await chrome.tabs.update(plexdTab.id, { active: true });
-                await chrome.windows.update(plexdTab.windowId, { focused: true });
-                showStatus('Switched to Plexd tab');
+        item.addEventListener('click', function() {
+            if (selectedSet.has(idx)) {
+                selectedSet.delete(idx);
+                item.classList.remove('selected');
+                cb.checked = false;
             } else {
-                // Create new tab
+                selectedSet.add(idx);
+                item.classList.add('selected');
+                cb.checked = true;
+            }
+            updateSendBtn();
+        });
+
+        return item;
+    }
+
+    function selectAll() {
+        for (var i = 0; i < videos.length; i++) selectedSet.add(i);
+        renderVideoList();
+    }
+
+    function updateSendBtn() {
+        var n = selectedSet.size;
+        sendBtn.disabled = n === 0 || !plexdReachable;
+        if (n === 0) {
+            sendBtn.textContent = 'Send All';
+        } else if (n === videos.length) {
+            sendBtn.textContent = 'Send All (' + n + ')';
+        } else {
+            sendBtn.textContent = 'Send ' + n + ' Video' + (n > 1 ? 's' : '');
+        }
+    }
+
+    // ── Sending ─────────────────────────────────────────────────────────────
+
+    async function sendSelected() {
+        if (selectedSet.size === 0) return;
+        if (!plexdReachable) {
+            showStatusBar('Plexd not running', true);
+            return;
+        }
+
+        var urls = [];
+        selectedSet.forEach(function(idx) {
+            if (videos[idx]) urls.push(videos[idx].url);
+        });
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending...';
+
+        try {
+            // Send all in parallel (server queues them)
+            var promises = urls.map(function(url) {
+                return fetch(plexdUrl + '/api/remote/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'addStream', payload: { url: url }, timestamp: Date.now() })
+                });
+            });
+            await Promise.all(promises);
+
+            showStatusBar('Sent ' + urls.length + ' video' + (urls.length > 1 ? 's' : '') + ' to Plexd');
+            selectedSet.clear();
+            renderVideoList();
+        } catch (err) {
+            showStatusBar('Failed to send — is Plexd running?', true);
+        }
+
+        updateSendBtn();
+    }
+
+    // ── Open Plexd ──────────────────────────────────────────────────────────
+
+    async function openPlexd() {
+        try {
+            var tabs = await chrome.tabs.query({});
+            var existing = tabs.find(function(t) {
+                if (!t.url) return false;
+                try {
+                    var u = new URL(t.url);
+                    return u.hostname === 'localhost' && u.port === '8080';
+                } catch (e) { return false; }
+            });
+            if (existing) {
+                await chrome.tabs.update(existing.id, { active: true });
+                await chrome.windows.update(existing.windowId, { focused: true });
+            } else {
                 await chrome.tabs.create({ url: plexdUrl });
             }
-        } catch (err) {
-            console.error('Open Plexd error:', err);
-            // Fallback: just create a new tab
+        } catch (e) {
             await chrome.tabs.create({ url: plexdUrl });
         }
     }
 
-    /**
-     * Clear all accumulated streams
-     */
-    async function clearAllStreams() {
-        await chrome.storage.local.remove(['plexd_all_streams']);
-        showStatus('Cleared all streams');
-    }
+    // ── UI Helpers ──────────────────────────────────────────────────────────
 
-    /**
-     * Show empty state
-     */
     function showEmpty(message) {
-        contentEl.innerHTML = `
-            <div class="empty-state">
-                <h3>No Videos</h3>
-                <p>${escapeHtml(message)}</p>
-            </div>
-        `;
+        contentEl.innerHTML = '';
+        var div = document.createElement('div');
+        div.className = 'empty-state';
+        var h = document.createElement('h3');
+        h.textContent = 'No Videos';
+        var p = document.createElement('p');
+        p.textContent = message;
+        div.appendChild(h);
+        div.appendChild(p);
+        contentEl.appendChild(div);
     }
 
-    /**
-     * Show status message
-     */
-    function showStatus(message, isError = false) {
-        statusEl.textContent = message;
-        statusEl.className = 'status visible' + (isError ? ' error' : '');
-
-        setTimeout(() => {
-            statusEl.classList.remove('visible');
-        }, 3000);
+    function showStatusBar(message, isError) {
+        statusBar.textContent = message;
+        statusBar.className = 'status-bar ' + (isError ? 'err' : 'ok');
+        setTimeout(function() { statusBar.className = 'status-bar'; }, 4000);
     }
 
-    /**
-     * Get type label for video
-     */
-    function getTypeLabel(video) {
-        if (video.type === 'embed') {
-            return video.embedType || 'embed';
-        }
-        if (video.url.includes('.m3u8')) return 'HLS';
-        if (video.url.includes('.mpd')) return 'DASH';
-        return video.type || 'video';
+    function getTypeLabel(v) {
+        if (v.url.includes('.m3u8')) return 'HLS';
+        if (v.url.includes('.mpd')) return 'DASH';
+        if (v.url.match(/\.(mp4|webm|m4v|mov)(\?|$)/i)) return 'MP4';
+        return 'video';
     }
 
-    /**
-     * Shorten URL for display
-     */
+    function getBadgeClass(v) {
+        if (v.url.includes('.m3u8')) return 'badge-hls';
+        if (v.url.includes('.mpd')) return 'badge-dash';
+        return 'badge-mp4';
+    }
+
     function shortenUrl(url) {
         try {
-            const parsed = new URL(url);
-            const path = parsed.pathname.split('/').pop() || parsed.hostname;
-            return path.length > 30 ? path.slice(0, 27) + '...' : path;
-        } catch {
-            return url.slice(0, 30);
+            var p = new URL(url);
+            var name = p.pathname.split('/').pop() || p.hostname;
+            return name.length > 35 ? name.slice(0, 32) + '...' : name;
+        } catch (e) {
+            return url.slice(0, 35);
         }
     }
 
-    /**
-     * Escape HTML
-     */
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    // Initialize
+    // ── Go ──────────────────────────────────────────────────────────────────
     init();
 
 })();

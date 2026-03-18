@@ -9,6 +9,10 @@
 
     <title>Plexd - Multiplex Video Streams</title>
 
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" href="assets/icon-32.png" sizes="32x32">
+    <link rel="icon" type="image/png" href="assets/icon-16.png" sizes="16x16">
+    <link rel="apple-touch-icon" href="assets/icon-180.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -62,7 +66,7 @@
 
                 <!-- View Toggle (Favorites / All / Star Ratings) -->
                 <div class="plexd-view-toggle">
-                    <button id="view-favorites-btn" class="plexd-view-btn view-favorites" onclick="PlexdApp.setViewMode('favorites')" title="Show favorites only [`]">★ <span id="favorites-count" class="badge"></span></button>
+                    <button id="view-favorites-btn" class="plexd-view-btn view-favorites" onclick="PlexdApp.toggleFavoritesView()" title="Toggle favorites view [QQ]">★ <span id="favorites-count" class="badge"></span></button>
                     <button id="view-all-btn" class="plexd-view-btn active" onclick="PlexdApp.setViewMode('all')" title="Show all streams [0] [V to cycle]">All</button>
                     <button id="view-1-btn" class="plexd-view-btn rating-1" onclick="PlexdApp.setViewMode(1)" title="Slot 1 [double-tap 1]">1 <span id="rating-1-count" class="badge"></span></button>
                     <button id="view-2-btn" class="plexd-view-btn rating-2" onclick="PlexdApp.setViewMode(2)" title="Slot 2 [double-tap 2]">2 <span id="rating-2-count" class="badge"></span></button>
@@ -266,9 +270,9 @@
 
     <!-- Scripts -->
     <script src="js/grid.js?v=104"></script>
-    <script src="js/stream.js?v=114"></script>
+    <script src="js/stream.js?v=118"></script>
     <script src="js/moments.js?v=105"></script>
     <script src="js/cast.js?v=105"></script>
-    <script src="js/app.js?v=121"></script>
+    <script src="js/app.js?v=128"></script>
 </body>
 </html>

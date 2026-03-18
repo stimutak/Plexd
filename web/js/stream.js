@@ -58,9 +58,9 @@ const PlexdStream = (function() {
 
     // ===== STREAM RECOVERY CONFIGURATION =====
     const RECOVERY_CONFIG = {
-        maxRetries: 5,                    // Maximum auto-recovery attempts
-        baseRetryDelay: 1000,             // Base delay (1 second)
-        maxRetryDelay: 30000,             // Max delay (30 seconds)
+        maxRetries: 2,                    // Maximum auto-recovery attempts (keep low — expired URLs shouldn't churn)
+        baseRetryDelay: 2000,             // Base delay (2 seconds)
+        maxRetryDelay: 10000,             // Max delay (10 seconds, was 30 — give up faster)
         watchdogInterval: 5000,           // Check streams every 5 seconds
         stallTimeout: 6000,               // Consider stalled after 6s no progress
         bufferEmptyTimeout: 10000,        // Timeout for empty buffer
@@ -68,6 +68,85 @@ const PlexdStream = (function() {
         enableAutoRecovery: true,         // Master switch for auto-recovery
         stablePlaybackThreshold: 10000    // Must play 10s before retryCount resets
     };
+
+    // ===== BANDWIDTH MANAGER =====
+    // Only N streams actively download segments at once. Selected stream always active.
+    // Uses hls.stopLoad()/startLoad() — zero-cost, preserves buffer and playback position.
+    const MAX_ACTIVE_STREAMS = 4;       // Max streams actively downloading
+    let _bwManagerInterval = null;
+    let _bwManagerEnabled = true;
+
+    function _bwActivate(stream) {
+        if (stream._bwActive || !stream.hls) return;
+        stream._bwActive = true;
+        stream.hls.startLoad(-1);
+        if (stream.video && stream.video.paused && !stream._userPaused) {
+            stream.video.play().catch(() => {});
+        }
+    }
+
+    function _bwDeactivate(stream) {
+        if (!stream._bwActive || !stream.hls) return;
+        stream._bwActive = false;
+        stream.hls.stopLoad();
+        // Don't pause — let existing buffer play out, video stalls naturally when empty
+    }
+
+    function _bwManagerTick() {
+        if (!_bwManagerEnabled) return;
+        if (streams.size <= MAX_ACTIVE_STREAMS) {
+            // Few streams — all active, no management needed
+            streams.forEach(s => { if (!s._bwActive && s.hls) _bwActivate(s); });
+            return;
+        }
+
+        // Priority: selected/fullscreen > low buffer > playing > rest
+        const selected = getSelectedStream();
+        const fullscreen = getFullscreenStream();
+        const priority = fullscreen || selected;
+
+        const scored = [];
+        streams.forEach(s => {
+            if (!s.hls || s.error || s.suspended) return;
+            let score = 0;
+            if (s === priority) score += 1000;
+            if (s.video && !s.video.paused) score += 100;
+            if (s.video && s.video.buffered.length > 0) {
+                const end = s.video.buffered.end(s.video.buffered.length - 1);
+                const ahead = end - s.video.currentTime;
+                if (ahead < 3) score += 50;       // Buffer low — needs data urgently
+                else if (ahead > 10) score -= 20;  // Plenty buffered — can wait
+            } else {
+                score += 30;                        // No buffer — needs data
+            }
+            if (s._bwActive) score += 10;           // Avoid thrashing
+            scored.push({ stream: s, score });
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+
+        for (let i = 0; i < scored.length; i++) {
+            if (i < MAX_ACTIVE_STREAMS) {
+                _bwActivate(scored[i].stream);
+            } else {
+                _bwDeactivate(scored[i].stream);
+            }
+        }
+    }
+
+    function startBandwidthManager() {
+        if (_bwManagerInterval) return;
+        _bwManagerInterval = setInterval(_bwManagerTick, 2000);
+        _bwManagerTick();
+    }
+
+    function stopBandwidthManager() {
+        if (_bwManagerInterval) {
+            clearInterval(_bwManagerInterval);
+            _bwManagerInterval = null;
+        }
+        streams.forEach(s => { if (s.hls && !s._bwActive) _bwActivate(s); });
+    }
 
     // Health monitoring state
     let healthCheckInterval = null;
@@ -339,6 +418,10 @@ const PlexdStream = (function() {
      * Get proxy URL for cross-origin streams.
      * Routes external HLS through /api/proxy/hls, other video through /api/proxy/video.
      */
+    // CDN domains that use IP-bound signed URLs — proxy gets 406 because its IP differs.
+    // These must load directly from the browser (same IP that signed the URL).
+    const DIRECT_LOAD_DOMAINS = ['mux.project1content.com'];
+
     function getProxiedHlsUrl(url) {
         // Skip non-http URLs and already-proxied paths early
         if (url.startsWith('/api/proxy/') || url.startsWith('blob:') || url.startsWith('data:')) return url;
@@ -350,6 +433,10 @@ const PlexdStream = (function() {
                 urlObj.hostname === '127.0.0.1' ||
                 urlObj.hostname === '[::1]' ||
                 urlObj.hostname === window.location.hostname) {
+                return url;
+            }
+            // Don't proxy CDNs with IP-bound signed URLs
+            if (DIRECT_LOAD_DOMAINS.some(d => urlObj.hostname === d || urlObj.hostname.endsWith('.' + d))) {
                 return url;
             }
         } catch {
@@ -452,6 +539,7 @@ const PlexdStream = (function() {
         const config = getAdaptiveHlsConfig();
         const hls = new Hls(config);
         const video = stream.video;
+        stream._bwActive = true; // New streams start active; bandwidth manager will throttle if needed
 
         hls.loadSource(url);
         hls.attachMedia(video);
@@ -687,12 +775,18 @@ const PlexdStream = (function() {
                 // Safety timeout: release slot if playing event never fires (source offline)
                 setTimeout(() => {
                     if (stream.recovery.isRecovering && stream.state === 'recovering') {
-                        console.log(`[${stream.id}] HLS recovery timed out after 15s, releasing slot`);
+                        console.log(`[${stream.id}] HLS recovery timed out after 8s, releasing slot`);
                         stream.recovery.isRecovering = false;
                         releaseRecoverySlot();
                         delete stream.wrapper.dataset.recovering;
+                        // If this was the last retry, mark as error immediately
+                        if (stream.recovery.retryCount >= RECOVERY_CONFIG.maxRetries) {
+                            stream.state = 'error';
+                            stream.error = 'Stream failed — URL may have expired';
+                            showStreamError(stream);
+                        }
                     }
-                }, 15000);
+                }, 8000);
                 return;
             } catch (e) {
                 console.log(`[${stream.id}] HLS recovery failed (${stream.recovery.lastReason}), doing full reload`);
@@ -3269,6 +3363,9 @@ const PlexdStream = (function() {
             if (streamId && streamId !== previousStreamId && isProjectorOpen()) {
                 updateProjectorStream(streamId);
             }
+
+            // Bandwidth manager: ensure selected stream is always active
+            if (streamId !== previousStreamId) _bwManagerTick();
         }
     }
 
@@ -4728,9 +4825,12 @@ const PlexdStream = (function() {
         const inGracePeriod = (now - monitoringStartedAt) < LOAD_GRACE_PERIOD;
 
         streams.forEach((stream) => {
-            // Skip if already in error/recovering/loading/idle state, mid-random-seek, or paused for a peer's seek
+            // Skip if already in error/recovering/loading/idle, or exhausted retries
             if (stream.state === 'error' || stream.state === 'loading' || stream.state === 'idle' || stream.recovery.isRecovering) {
                 return;
+            }
+            if (stream.recovery.retryCount >= RECOVERY_CONFIG.maxRetries) {
+                return; // Already hit max retries — don't re-trigger
             }
 
             // Skip if paused (user intended)
@@ -4796,6 +4896,7 @@ const PlexdStream = (function() {
         }
         monitoringStartedAt = Date.now();
         healthCheckInterval = setInterval(runHealthCheck, RECOVERY_CONFIG.watchdogInterval);
+        startBandwidthManager();
         console.log('Stream health monitoring started');
     }
 
@@ -5207,6 +5308,8 @@ const PlexdStream = (function() {
         setRecoveryConfig,
         startHealthMonitoring,
         stopHealthMonitoring,
+        startBandwidthManager,
+        stopBandwidthManager,
         // Local file detection
         isLocalFile,
         // Video frame capture for remote thumbnails

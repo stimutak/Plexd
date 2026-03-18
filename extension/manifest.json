@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Plexd - Send Video",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Send videos from any webpage to Plexd multiplex viewer",
   "permissions": [
     "activeTab",
     "tabs",
     "scripting",
-    "storage",
-    "webRequest"
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"

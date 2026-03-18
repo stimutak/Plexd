@@ -5,15 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Plexd</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
-            width: 320px;
-            max-height: 580px;
+            width: 340px;
             display: flex;
             flex-direction: column;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -22,322 +17,173 @@
             color: #fff;
         }
 
+        /* Header */
         .header {
-            padding: 12px 16px;
+            padding: 10px 14px;
             background: #0a0a0a;
             border-bottom: 1px solid #333;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-        }
-
-        .logo {
-            font-size: 16px;
-            font-weight: 700;
-        }
-
-        .logo span {
-            color: #6366f1;
-        }
-
-        .settings-btn {
-            background: none;
-            border: none;
-            color: #888;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        .settings-btn:hover {
-            color: #fff;
-        }
-
-        .content {
-            padding: 12px;
-            flex: 1;
-            min-height: 100px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .section-title {
-            font-size: 11px;
-            text-transform: uppercase;
-            color: #888;
-            margin-bottom: 8px;
-            letter-spacing: 0.5px;
-        }
-
-        .video-list {
-            list-style: none;
-        }
-
-        .video-item {
-            padding: 10px 12px;
-            background: #252525;
-            border-radius: 6px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-
-        .video-item:hover {
-            background: #333;
-        }
-
-        .video-item.selected {
-            background: #3730a3;
-        }
-
-        .video-title {
-            font-weight: 500;
-            margin-bottom: 4px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .video-meta {
-            font-size: 11px;
-            color: #888;
-            display: flex;
-            gap: 8px;
-        }
-
-        .video-type {
-            background: #333;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-        }
-
-        .video-item.selected .video-type {
-            background: #4f46e5;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 24px 16px;
-            color: #888;
-        }
-
-        .empty-state h3 {
-            margin-bottom: 8px;
-            color: #aaa;
-        }
-
-        .actions {
-            padding: 12px;
-            border-top: 1px solid #333;
-            display: flex;
-            gap: 8px;
+            gap: 10px;
             flex-shrink: 0;
         }
-
-        .btn {
-            flex: 1;
-            padding: 10px 12px;
-            border: none;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .btn-primary {
-            background: #6366f1;
-            color: #fff;
-        }
-
-        .btn-primary:hover {
-            background: #5558e3;
-        }
-
-        .btn-primary:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
-        }
-
-        .btn-secondary {
-            background: #333;
-            color: #fff;
-        }
-
-        .btn-secondary:hover {
-            background: #444;
-        }
-
-        .plexd-url {
-            padding: 12px;
-            border-top: 1px solid #333;
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #555;
             flex-shrink: 0;
+            transition: background 0.3s;
         }
+        .status-dot.ok { background: #4ade80; }
+        .status-dot.err { background: #f87171; }
+        .logo { font-size: 15px; font-weight: 700; flex: 1; }
+        .logo span { color: #6366f1; }
+        .header-status { font-size: 11px; color: #666; }
 
-        .plexd-url input {
-            width: 100%;
-            padding: 8px 10px;
-            background: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 4px;
-            color: #fff;
-            font-size: 12px;
-        }
-
-        .plexd-url input:focus {
-            outline: none;
-            border-color: #6366f1;
-        }
-
-        .plexd-url label {
-            display: block;
-            font-size: 11px;
-            color: #888;
-            margin-bottom: 6px;
-        }
-
-        .status {
-            padding: 8px 12px;
-            background: #1e3a2f;
-            color: #4ade80;
+        /* Status bar */
+        .status-bar {
+            padding: 6px 14px;
             font-size: 12px;
             text-align: center;
             display: none;
-        }
-
-        .status.error {
-            background: #3b1c1c;
-            color: #f87171;
-        }
-
-        .status.visible {
-            display: block;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 24px;
-            color: #888;
-        }
-
-        .auto-queue-section {
-            padding: 10px 12px;
-            border-top: 1px solid #333;
-            background: #1a1a1a;
             flex-shrink: 0;
         }
+        .status-bar.ok { display: block; background: #1e3a2f; color: #4ade80; }
+        .status-bar.err { display: block; background: #3b1c1c; color: #f87171; }
 
-        .toggle-label {
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            cursor: pointer;
-        }
-
-        .toggle-label input[type="checkbox"] {
-            width: 16px;
-            height: 16px;
-            margin-top: 2px;
-            accent-color: #6366f1;
-            cursor: pointer;
-        }
-
-        .toggle-text {
-            font-size: 11px;
-            color: #aaa;
-            line-height: 1.4;
-        }
-
-        .btn-queue {
-            background: #166534;
-            color: #4ade80;
-        }
-
-        .btn-queue:hover {
-            background: #15803d;
-        }
-
-        .video-item-wrapper {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            margin-bottom: 8px;
-        }
-
-        .video-item-wrapper .video-item {
+        /* Content */
+        .content {
+            padding: 10px;
             flex: 1;
-            margin-bottom: 0;
+            max-height: 360px;
+            overflow-y: auto;
         }
 
-        .video-item-actions {
-            display: flex;
-            gap: 4px;
+        .section-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            padding: 4px 4px 6px;
         }
+        .section-label.streams { color: #4ade80; }
 
-        .copy-btn {
-            flex: 1;
+        /* Video items */
+        .video-item {
             display: flex;
             align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 6px 8px;
+            gap: 10px;
+            padding: 8px 10px;
             background: #252525;
-            border: none;
             border-radius: 6px;
-            color: #888;
+            margin-bottom: 6px;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: background 0.15s;
+        }
+        .video-item:hover { background: #333; }
+        .video-item.selected { background: #3730a3; }
+
+        .video-item input[type="checkbox"] {
+            width: 15px; height: 15px;
+            accent-color: #6366f1;
+            flex-shrink: 0;
+            pointer-events: none;
+        }
+        .video-info { flex: 1; min-width: 0; }
+        .video-title {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             font-size: 12px;
         }
+        .video-meta {
+            font-size: 10px;
+            color: #888;
+            margin-top: 2px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .badge-type {
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-hls { background: #166534; color: #4ade80; }
+        .badge-dash { background: #1e3a5f; color: #60a5fa; }
+        .badge-mp4 { background: #333; color: #aaa; }
 
-        .copy-btn:hover {
-            background: #333;
+        .copy-btn {
+            background: #333; border: none;
+            color: #aaa; cursor: pointer;
+            font-size: 13px; padding: 4px 8px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .copy-btn:hover { background: #444; color: #fff; }
+        .copy-btn.copied { background: #166534; color: #4ade80; }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 30px 16px;
+            color: #666;
+        }
+        .empty-state h3 { color: #888; margin-bottom: 6px; font-size: 14px; }
+
+        .loading { text-align: center; padding: 30px; color: #666; }
+
+        /* Actions */
+        .actions {
+            padding: 10px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .btn {
+            flex: 1;
+            padding: 9px 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-send {
+            background: #6366f1;
             color: #fff;
         }
-
-        .copy-btn.copied {
-            background: #166534;
-            color: #4ade80;
+        .btn-send:hover { background: #5558e3; }
+        .btn-send:disabled { background: #333; color: #555; cursor: not-allowed; }
+        .btn-open {
+            background: #333;
+            color: #ccc;
         }
-
-        .header {
-            flex-shrink: 0;
-        }
-
-        .status {
-            flex-shrink: 0;
-        }
+        .btn-open:hover { background: #444; }
     </style>
 </head>
 <body>
     <div class="header">
+        <div class="status-dot" id="statusDot"></div>
         <div class="logo">Plex<span>d</span></div>
-        <button class="settings-btn" id="settingsBtn" title="Settings">&#9881;</button>
+        <div class="header-status" id="headerStatus">Checking...</div>
     </div>
 
-    <div id="status" class="status"></div>
+    <div class="status-bar" id="statusBar"></div>
 
     <div class="content" id="content">
         <div class="loading">Scanning for videos...</div>
     </div>
 
-    <div class="plexd-url" id="plexdUrlSection">
-        <label for="plexdUrl">Plexd URL (where to send videos)</label>
-        <input type="url" id="plexdUrl" placeholder="http://localhost:8080 or file path">
-    </div>
-
-    <div class="auto-queue-section">
-        <label class="toggle-label">
-            <input type="checkbox" id="autoQueueToggle">
-            <span class="toggle-text">Auto-Queue: Add detected videos to queue automatically</span>
-        </label>
-    </div>
-
     <div class="actions">
-        <button class="btn btn-secondary" id="openPlexdBtn">Open Plexd</button>
-        <button class="btn btn-queue" id="queueBtn" title="Add to queue instead of playing" disabled>Queue</button>
-        <button class="btn btn-primary" id="sendBtn" disabled>Send Selected</button>
+        <button class="btn btn-open" id="openBtn">Open Plexd</button>
+        <button class="btn btn-send" id="sendBtn" disabled>Send All</button>
     </div>
 
     <script src="popup.js"></script>

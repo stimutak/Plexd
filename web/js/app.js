@@ -4930,12 +4930,21 @@ const PlexdApp = (function() {
             '| Extracted:', extractedCount,
             '| IDs:', allMoments.slice(0, 3).map(function(m) { return m.id; }));
         if (allMoments.length === 0) {
-            showMessage('No moments yet — press K to capture moments', 'info');
-            if (theaterMode) {
-                _setTheaterScene(encorePreviousScene || 'casting');
-                applyTheaterScene();
-                updateModeIndicator();
-            }
+            // Server load may not have completed yet — wait and retry once
+            showMessage('Loading moments...', 'info');
+            PlexdMoments.loadFromServer().then(function() {
+                var retry = PlexdMoments.getAllMoments();
+                if (retry.length > 0) {
+                    showMomentBrowser(); // Retry with loaded data
+                } else {
+                    showMessage('No moments yet — press K to capture moments', 'info');
+                    if (theaterMode) {
+                        _setTheaterScene(encorePreviousScene || 'casting');
+                        applyTheaterScene();
+                        updateModeIndicator();
+                    }
+                }
+            });
             return;
         }
 

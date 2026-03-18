@@ -418,9 +418,10 @@ const PlexdStream = (function() {
      * Get proxy URL for cross-origin streams.
      * Routes external HLS through /api/proxy/hls, other video through /api/proxy/video.
      */
-    // CDN domains that use IP-bound signed URLs — proxy gets 406 because its IP differs.
-    // These must load directly from the browser (same IP that signed the URL).
-    const DIRECT_LOAD_DOMAINS = ['mux.project1content.com'];
+    // CDN domains that use IP-bound signed URLs — proxy gets 406 and direct gets CORS blocked.
+    // These URLs only work in the browser tab that created them (same origin + same IP).
+    // Extension-sent URLs from these domains will NOT work in Plexd — use xfill instead.
+    const DIRECT_LOAD_DOMAINS = [];
 
     function getProxiedHlsUrl(url) {
         // Skip non-http URLs and already-proxied paths early

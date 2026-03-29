@@ -228,6 +228,40 @@ body {
     box-shadow: 0 0 0 2px var(--accent);
 }
 
+/* Header Groups (redesign: clustered buttons with dividers) */
+.plexd-header-groups {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--text-sub);
+}
+
+.plexd-header-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.plexd-header-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--line-up);
+    flex-shrink: 0;
+    margin: 0 2px;
+}
+
+.plexd-group-label {
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-right: 4px;
+    user-select: none;
+}
+
 /* Stats */
 .plexd-stats {
     display: flex;

@@ -22,7 +22,7 @@ body {
     font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
     color: var(--text);
-    line-height: 1.5;
+    line-height: var(--leading-normal);
 }
 
 :root {
@@ -50,6 +50,51 @@ body {
     --line-up: rgba(237, 232, 224, 0.14);
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
     --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* Rating scale */
+    --rated-1: #e85555;
+    --rated-2: #e87a55;
+    --rated-3: #e8a855;
+    --rated-4: #b8d455;
+    --rated-5: #55d46a;
+    --rated-6: #55d4b0;
+    --rated-7: #55b8d4;
+    --rated-8: #9088e8;
+    --rated-9: #d478c0;
+
+    /* Border radius */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+    --radius-full: 9999px;
+
+    /* Elevation shadows */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
+    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.6);
+
+    /* Animation durations */
+    --duration-fast: 0.1s;
+    --duration-normal: 0.2s;
+    --duration-slow: 0.4s;
+
+    /* Line heights */
+    --leading-tight: 1.2;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.8;
+
+    /* Z-index layers */
+    --z-base: 0;
+    --z-raised: 10;
+    --z-controls: 30;
+    --z-panel: 100;
+    --z-header: 200;
+    --z-overlay: 1000;
+    --z-modal: 2000;
+    --z-toast: 3000;
+    --z-top: 9999;
 }
 
 /* ========================================
@@ -133,7 +178,7 @@ body {
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--duration-normal);
 }
 
 .plexd-button-primary {
@@ -168,6 +213,19 @@ body {
     background: var(--accent);
     color: #fff;
     border-color: var(--accent);
+}
+
+/* Keyboard focus styles */
+.plexd-button:focus-visible,
+.plexd-btn:focus-visible,
+.plexd-view-btn:focus-visible,
+.plexd-tag-chip:focus-visible,
+.plexd-stream-item:focus-visible,
+.plexd-set-btn:focus-visible,
+.plexd-rating-btn:focus-visible,
+.plexd-input:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* Stats */
@@ -238,7 +296,7 @@ body {
     position: absolute;
     background: #0a090e;
     overflow: hidden;
-    transition: all 0.3s ease;
+    transition: all var(--duration-normal) ease;
     border: 1px solid rgba(237, 232, 224, 0.06);
     border-radius: 4px;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
@@ -456,7 +514,7 @@ body {
     left: 50%;
     transform: translateX(-50%);
     padding: 10px 20px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     font-size: 14px;
     font-weight: 500;
     z-index: 200000;
@@ -567,7 +625,7 @@ body {
     padding: 8px 16px;
     background: rgba(19, 17, 26, 0.95);
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     font-size: 12px;
     color: var(--text-sub);
     z-index: 100;
@@ -586,7 +644,7 @@ body {
     display: inline-block;
     padding: 2px 6px;
     background: var(--subtle);
-    border-radius: 3px;
+    border-radius: 4px;
     font-family: 'Outfit', monospace;
     color: var(--text);
     margin-right: 4px;
@@ -602,7 +660,7 @@ body {
     color: var(--text-sub);
     font-size: 11px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--duration-normal) ease;
 }
 
 .plexd-shortcuts-more:hover {
@@ -645,7 +703,7 @@ body {
     min-width: 20px;
     padding: 2px 6px;
     background: var(--subtle);
-    border-radius: 3px;
+    border-radius: 4px;
     font-family: 'Outfit', monospace;
     font-size: 11px;
     color: var(--text);
@@ -918,7 +976,7 @@ body {
     left: 50%;
     top: 8px;
     padding: 3px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.8px;
@@ -1004,7 +1062,7 @@ body {
 
 .plexd-info-chip {
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: 4px;
     padding: 0 3px;
     transition: color 0.15s, background 0.15s;
 }
@@ -1129,7 +1187,7 @@ body {
     padding: 3px 6px;
     font-size: 10px;
     border: none;
-    border-radius: 3px;
+    border-radius: 4px;
     cursor: pointer;
 }
 
@@ -1285,7 +1343,7 @@ body {
     background: var(--elevated);
     color: var(--text-sub);
     border: 1px solid var(--line);
-    border-radius: 3px;
+    border-radius: 4px;
     cursor: pointer;
     white-space: nowrap;
 }
@@ -1394,7 +1452,7 @@ body {
     gap: 6px;
     padding: 4px 6px;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 .plexd-history-row:hover {
     background: var(--hover);
@@ -1412,7 +1470,7 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.3px;
     padding: 1px 4px;
-    border-radius: 3px;
+    border-radius: 4px;
     color: #fff;
     flex-shrink: 0;
     min-width: 28px;
@@ -1515,7 +1573,7 @@ body {
 .plexd-tag-chip {
     padding: 3px 8px;
     font-size: 11px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     cursor: pointer;
     background: var(--hover);
     color: var(--text-sub);
@@ -1575,7 +1633,7 @@ body {
 }
 .plexd-preset-chip {
     padding: 3px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: rgba(255,255,255,0.08);
     color: rgba(255,255,255,0.7);
     font-size: 0.75rem;
@@ -1669,7 +1727,7 @@ body {
     color: var(--text-dim);
     background: var(--surface);
     padding: 1px 5px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     flex-shrink: 0;
 }
 
@@ -1683,7 +1741,7 @@ body {
     font-size: 9px;
     font-weight: 600;
     padding: 2px 5px;
-    border-radius: 3px;
+    border-radius: 4px;
     cursor: pointer;
     color: var(--text-dim);
     background: var(--surface);
@@ -1719,7 +1777,7 @@ body {
     font-size: 10px;
     background: var(--accent);
     color: var(--bg);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1px 5px;
     margin-left: 4px;
 }
@@ -1745,7 +1803,7 @@ body {
     font-size: 10px;
     background: var(--accent);
     color: var(--bg);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1px 5px;
     margin-left: 4px;
 }
@@ -1849,15 +1907,15 @@ body {
     margin-left: 4px;
 }
 
-.plexd-stream-rating.rated-1 { color: #e85555; }
-.plexd-stream-rating.rated-2 { color: #e87a55; }
-.plexd-stream-rating.rated-3 { color: #e8a855; }
-.plexd-stream-rating.rated-4 { color: #b8d455; }
-.plexd-stream-rating.rated-5 { color: #55d46a; }
-.plexd-stream-rating.rated-6 { color: #55d4b0; }
-.plexd-stream-rating.rated-7 { color: #55b8d4; }
-.plexd-stream-rating.rated-8 { color: #9088e8; }
-.plexd-stream-rating.rated-9 { color: #d478c0; }
+.plexd-stream-rating.rated-1 { color: var(--rated-1); }
+.plexd-stream-rating.rated-2 { color: var(--rated-2); }
+.plexd-stream-rating.rated-3 { color: var(--rated-3); }
+.plexd-stream-rating.rated-4 { color: var(--rated-4); }
+.plexd-stream-rating.rated-5 { color: var(--rated-5); }
+.plexd-stream-rating.rated-6 { color: var(--rated-6); }
+.plexd-stream-rating.rated-7 { color: var(--rated-7); }
+.plexd-stream-rating.rated-8 { color: var(--rated-8); }
+.plexd-stream-rating.rated-9 { color: var(--rated-9); }
 
 .plexd-stream-actions {
     display: flex;
@@ -1910,7 +1968,7 @@ body {
 .plexd-stream-type {
     font-size: 9px;
     padding: 1px 4px;
-    border-radius: 3px;
+    border-radius: 4px;
     margin-right: 6px;
     flex-shrink: 0;
 }
@@ -1986,7 +2044,7 @@ body {
 .plexd-modal {
     background: rgba(19, 17, 26, 0.95);
     border: 1px solid rgba(201, 86, 109, 0.12);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     padding: 24px;
     max-width: 400px;
     width: 90%;
@@ -2011,7 +2069,7 @@ body {
 
 .plexd-domain-list {
     background: var(--void);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 8px;
     margin-bottom: 16px;
 }
@@ -2055,7 +2113,7 @@ body {
 
 .plexd-local-files-list {
     background: var(--void);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 8px;
     margin-bottom: 16px;
     max-height: 200px;
@@ -2104,11 +2162,11 @@ body {
 
 .plexd-local-files-drop {
     border: 2px dashed var(--line-up);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 24px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all var(--duration-normal) ease;
     margin-bottom: 16px;
 }
 
@@ -2134,7 +2192,7 @@ body {
     max-height: 400px;
     overflow-y: auto;
     background: var(--void);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 8px;
     margin-bottom: 16px;
 }
@@ -2209,7 +2267,7 @@ body {
     min-width: 65px;
     text-align: center;
     padding: 2px 6px;
-    border-radius: 3px;
+    border-radius: 4px;
     background: rgba(237, 232, 224, 0.05);
 }
 
@@ -2255,14 +2313,14 @@ body {
     right: 12px;
     width: 36px;
     height: 36px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: rgba(12, 11, 16, 0.9);
     border: 1px solid rgba(201, 86, 109, 0.12);
     color: var(--text-sub);
     font-size: 18px;
     cursor: pointer;
     z-index: 10002;
-    transition: all 0.2s ease;
+    transition: all var(--duration-normal) ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2443,7 +2501,7 @@ body {
     font-size: 20px;
     padding: 0 14px;
     background: rgba(0, 0, 0, 0.85);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -2475,15 +2533,15 @@ body {
 }
 
 /* Rating colors by level - vibrant with glows */
-.plexd-rating-indicator.rated-1 { color: #e85555; border-color: rgba(232, 85, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 85, 85, 0.2); }
-.plexd-rating-indicator.rated-2 { color: #e87a55; border-color: rgba(232, 122, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 122, 85, 0.2); }
-.plexd-rating-indicator.rated-3 { color: #e8a855; border-color: rgba(232, 168, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 168, 85, 0.2); }
-.plexd-rating-indicator.rated-4 { color: #b8d455; border-color: rgba(184, 212, 85, 0.3); box-shadow: 0 2px 12px rgba(184, 212, 85, 0.2); }
-.plexd-rating-indicator.rated-5 { color: #55d46a; border-color: rgba(85, 212, 106, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 106, 0.2); }
-.plexd-rating-indicator.rated-6 { color: #55d4b0; border-color: rgba(85, 212, 176, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 176, 0.2); }
-.plexd-rating-indicator.rated-7 { color: #55b8d4; border-color: rgba(85, 184, 212, 0.3); box-shadow: 0 2px 12px rgba(85, 184, 212, 0.2); }
-.plexd-rating-indicator.rated-8 { color: #9088e8; border-color: rgba(144, 136, 232, 0.3); box-shadow: 0 2px 12px rgba(144, 136, 232, 0.2); }
-.plexd-rating-indicator.rated-9 { color: #d478c0; border-color: rgba(212, 120, 192, 0.3); box-shadow: 0 2px 12px rgba(212, 120, 192, 0.2); }
+.plexd-rating-indicator.rated-1 { color: var(--rated-1); border-color: rgba(232, 85, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 85, 85, 0.2); }
+.plexd-rating-indicator.rated-2 { color: var(--rated-2); border-color: rgba(232, 122, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 122, 85, 0.2); }
+.plexd-rating-indicator.rated-3 { color: var(--rated-3); border-color: rgba(232, 168, 85, 0.3); box-shadow: 0 2px 12px rgba(232, 168, 85, 0.2); }
+.plexd-rating-indicator.rated-4 { color: var(--rated-4); border-color: rgba(184, 212, 85, 0.3); box-shadow: 0 2px 12px rgba(184, 212, 85, 0.2); }
+.plexd-rating-indicator.rated-5 { color: var(--rated-5); border-color: rgba(85, 212, 106, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 106, 0.2); }
+.plexd-rating-indicator.rated-6 { color: var(--rated-6); border-color: rgba(85, 212, 176, 0.3); box-shadow: 0 2px 12px rgba(85, 212, 176, 0.2); }
+.plexd-rating-indicator.rated-7 { color: var(--rated-7); border-color: rgba(85, 184, 212, 0.3); box-shadow: 0 2px 12px rgba(85, 184, 212, 0.2); }
+.plexd-rating-indicator.rated-8 { color: var(--rated-8); border-color: rgba(144, 136, 232, 0.3); box-shadow: 0 2px 12px rgba(144, 136, 232, 0.2); }
+.plexd-rating-indicator.rated-9 { color: var(--rated-9); border-color: rgba(212, 120, 192, 0.3); box-shadow: 0 2px 12px rgba(212, 120, 192, 0.2); }
 
 /* ========================================
    Favorites System
@@ -2504,7 +2562,7 @@ body {
     font-weight: 600;
     background: rgba(0, 0, 0, 0.6);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     opacity: 0.5;
     z-index: 20;
     pointer-events: auto;
@@ -2542,7 +2600,7 @@ body {
     font-size: 24px;
     padding: 0 14px;
     background: rgba(0, 0, 0, 0.85);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -2606,7 +2664,7 @@ body {
     font-weight: 700;
     color: var(--void);
     background: var(--gold);
-    border-radius: 11px;
+    border-radius: var(--radius-lg);
     z-index: 5;
     pointer-events: none;
     opacity: 0;
@@ -2627,15 +2685,15 @@ body {
     color: var(--gold);
 }
 
-.plexd-btn.plexd-rating-btn.rated-1 { color: #e85555; }
-.plexd-btn.plexd-rating-btn.rated-2 { color: #e87a55; }
-.plexd-btn.plexd-rating-btn.rated-3 { color: #e8a855; }
-.plexd-btn.plexd-rating-btn.rated-4 { color: #b8d455; }
-.plexd-btn.plexd-rating-btn.rated-5 { color: #55d46a; }
-.plexd-btn.plexd-rating-btn.rated-6 { color: #55d4b0; }
-.plexd-btn.plexd-rating-btn.rated-7 { color: #55b8d4; }
-.plexd-btn.plexd-rating-btn.rated-8 { color: #9088e8; }
-.plexd-btn.plexd-rating-btn.rated-9 { color: #d478c0; }
+.plexd-btn.plexd-rating-btn.rated-1 { color: var(--rated-1); }
+.plexd-btn.plexd-rating-btn.rated-2 { color: var(--rated-2); }
+.plexd-btn.plexd-rating-btn.rated-3 { color: var(--rated-3); }
+.plexd-btn.plexd-rating-btn.rated-4 { color: var(--rated-4); }
+.plexd-btn.plexd-rating-btn.rated-5 { color: var(--rated-5); }
+.plexd-btn.plexd-rating-btn.rated-6 { color: var(--rated-6); }
+.plexd-btn.plexd-rating-btn.rated-7 { color: var(--rated-7); }
+.plexd-btn.plexd-rating-btn.rated-8 { color: var(--rated-8); }
+.plexd-btn.plexd-rating-btn.rated-9 { color: var(--rated-9); }
 
 /* View toggle buttons in header */
 .plexd-view-toggle {
@@ -2653,7 +2711,7 @@ body {
     color: var(--text-dim);
     border-radius: 4px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all var(--duration-fast);
 }
 
 .plexd-view-btn:hover {
@@ -2679,21 +2737,21 @@ body {
 }
 
 /* Rating-specific view button colors when active */
-.plexd-view-btn.rating-1.active { background: rgba(232, 85, 85, 0.2); border-color: rgba(232, 85, 85, 0.35); color: #e85555; box-shadow: 0 0 8px rgba(232, 85, 85, 0.15); }
-.plexd-view-btn.rating-2.active { background: rgba(232, 122, 85, 0.2); border-color: rgba(232, 122, 85, 0.35); color: #e87a55; box-shadow: 0 0 8px rgba(232, 122, 85, 0.15); }
-.plexd-view-btn.rating-3.active { background: rgba(232, 168, 85, 0.2); border-color: rgba(232, 168, 85, 0.35); color: #e8a855; box-shadow: 0 0 8px rgba(232, 168, 85, 0.15); }
-.plexd-view-btn.rating-4.active { background: rgba(184, 212, 85, 0.2); border-color: rgba(184, 212, 85, 0.35); color: #b8d455; box-shadow: 0 0 8px rgba(184, 212, 85, 0.15); }
-.plexd-view-btn.rating-5.active { background: rgba(85, 212, 106, 0.2); border-color: rgba(85, 212, 106, 0.35); color: #55d46a; box-shadow: 0 0 8px rgba(85, 212, 106, 0.15); }
-.plexd-view-btn.rating-6.active { background: rgba(85, 212, 176, 0.2); border-color: rgba(85, 212, 176, 0.35); color: #55d4b0; box-shadow: 0 0 8px rgba(85, 212, 176, 0.15); }
-.plexd-view-btn.rating-7.active { background: rgba(85, 184, 212, 0.2); border-color: rgba(85, 184, 212, 0.35); color: #55b8d4; box-shadow: 0 0 8px rgba(85, 184, 212, 0.15); }
-.plexd-view-btn.rating-8.active { background: rgba(144, 136, 232, 0.2); border-color: rgba(144, 136, 232, 0.35); color: #9088e8; box-shadow: 0 0 8px rgba(144, 136, 232, 0.15); }
-.plexd-view-btn.rating-9.active { background: rgba(212, 120, 192, 0.2); border-color: rgba(212, 120, 192, 0.35); color: #d478c0; box-shadow: 0 0 8px rgba(212, 120, 192, 0.15); }
+.plexd-view-btn.rating-1.active { background: rgba(232, 85, 85, 0.2); border-color: rgba(232, 85, 85, 0.35); color: var(--rated-1); box-shadow: 0 0 8px rgba(232, 85, 85, 0.15); }
+.plexd-view-btn.rating-2.active { background: rgba(232, 122, 85, 0.2); border-color: rgba(232, 122, 85, 0.35); color: var(--rated-2); box-shadow: 0 0 8px rgba(232, 122, 85, 0.15); }
+.plexd-view-btn.rating-3.active { background: rgba(232, 168, 85, 0.2); border-color: rgba(232, 168, 85, 0.35); color: var(--rated-3); box-shadow: 0 0 8px rgba(232, 168, 85, 0.15); }
+.plexd-view-btn.rating-4.active { background: rgba(184, 212, 85, 0.2); border-color: rgba(184, 212, 85, 0.35); color: var(--rated-4); box-shadow: 0 0 8px rgba(184, 212, 85, 0.15); }
+.plexd-view-btn.rating-5.active { background: rgba(85, 212, 106, 0.2); border-color: rgba(85, 212, 106, 0.35); color: var(--rated-5); box-shadow: 0 0 8px rgba(85, 212, 106, 0.15); }
+.plexd-view-btn.rating-6.active { background: rgba(85, 212, 176, 0.2); border-color: rgba(85, 212, 176, 0.35); color: var(--rated-6); box-shadow: 0 0 8px rgba(85, 212, 176, 0.15); }
+.plexd-view-btn.rating-7.active { background: rgba(85, 184, 212, 0.2); border-color: rgba(85, 184, 212, 0.35); color: var(--rated-7); box-shadow: 0 0 8px rgba(85, 184, 212, 0.15); }
+.plexd-view-btn.rating-8.active { background: rgba(144, 136, 232, 0.2); border-color: rgba(144, 136, 232, 0.35); color: var(--rated-8); box-shadow: 0 0 8px rgba(144, 136, 232, 0.15); }
+.plexd-view-btn.rating-9.active { background: rgba(212, 120, 192, 0.2); border-color: rgba(212, 120, 192, 0.35); color: var(--rated-9); box-shadow: 0 0 8px rgba(212, 120, 192, 0.15); }
 
 .plexd-view-btn .badge {
     display: inline-block;
     background: rgba(237, 232, 224, 0.15);
     padding: 1px 4px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     font-size: 9px;
     margin-left: 2px;
     letter-spacing: 0;
@@ -2753,7 +2811,7 @@ body {
     background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 50;
@@ -2773,7 +2831,7 @@ body {
 
 /* Tetris mode stream styling - clean edges, tight packing */
 .plexd-app.tetris-mode .plexd-stream {
-    transition: all 0.3s ease;
+    transition: all var(--duration-normal) ease;
     border-radius: 2px;
     overflow: hidden;
 }
@@ -2834,7 +2892,7 @@ body {
     background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 200;
@@ -2861,7 +2919,7 @@ body {
                 opacity 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94),
                 box-shadow 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     transform-style: preserve-3d;
     backface-visibility: hidden;
 }
@@ -2882,7 +2940,7 @@ body {
     content: '';
     position: absolute;
     inset: -4px;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: linear-gradient(135deg, rgba(139, 92, 246, 0.5), rgba(236, 72, 153, 0.5));
     z-index: -1;
     animation: selectedGlow 2s ease-in-out infinite;
@@ -2916,7 +2974,7 @@ body {
     background: rgba(0, 0, 0, 0.7);
     color: rgba(237, 232, 224, 0.8);
     padding: 6px 16px;
-    border-radius: 20px;
+    border-radius: var(--radius-xl);
     font-size: 12px;
     font-weight: 500;
     z-index: 200;
@@ -2936,7 +2994,7 @@ body {
     position: absolute;
     inset: 0;
     border: 1px solid rgba(139, 92, 246, 0.2);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     pointer-events: none;
 }
 
@@ -2976,7 +3034,7 @@ body {
 
 /* Content Visible streams - show complete content */
 .plexd-app.tetris-content-visible .plexd-stream {
-    transition: all 0.4s ease;
+    transition: all var(--duration-slow) ease;
     border-radius: 4px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
 }
@@ -3020,7 +3078,7 @@ body {
     background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 50;
@@ -3064,7 +3122,7 @@ body {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 50;
@@ -3108,7 +3166,7 @@ body {
     background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
     color: #000;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 50;
@@ -3163,7 +3221,7 @@ body {
     padding: 48px 64px;
     background: rgba(92, 201, 142, 0.12);
     border: 3px dashed rgba(92, 201, 142, 0.5);
-    border-radius: 24px;
+    border-radius: var(--radius-xl);
     transform: scale(0.9);
     transition: transform 0.2s ease;
 }
@@ -3199,7 +3257,7 @@ body {
     left: 24px;
     padding: 10px 16px;
     background: rgba(201, 85, 85, 0.9);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     font-size: 12px;
     color: #fff;
     z-index: 200000;
@@ -3268,7 +3326,7 @@ body {
     align-items: center;
     justify-content: center;
     pointer-events: auto;
-    transition: all 0.2s;
+    transition: all var(--duration-normal);
 }
 
 .plexd-bugeye-close:hover {
@@ -3279,7 +3337,7 @@ body {
 
 .plexd-bugeye-cell {
     position: absolute;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(237, 232, 224, 0.1);
@@ -3314,7 +3372,7 @@ body {
     background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 200000;
@@ -3368,7 +3426,7 @@ body {
     background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
     color: #fff;
     padding: 4px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     font-size: 11px;
     font-weight: 700;
     z-index: 200000;
@@ -3392,7 +3450,7 @@ body {
 .plexd-mode-indicator:empty { display: none; }
 .plexd-mode-indicator .badge {
     padding: 2px 6px;
-    border-radius: 3px;
+    border-radius: 4px;
     background: rgba(0, 0, 0, 0.6);
     color: rgba(237, 232, 224, 0.8);
     backdrop-filter: blur(4px);
@@ -3678,7 +3736,7 @@ body {
 .moment-rating-btn {
     width: 22px;
     height: 22px;
-    border-radius: 3px;
+    border-radius: 4px;
     border: 1px solid rgba(237, 232, 224, 0.08);
     background: rgba(237, 232, 224, 0.03);
     color: var(--text-dim);
@@ -3765,7 +3823,7 @@ body {
 .moment-card {
     position: relative;
     aspect-ratio: 16/9;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     cursor: pointer;
     border: 2px solid transparent;
@@ -3986,7 +4044,7 @@ body {
     background: rgba(0, 0, 0, 0.7);
     color: var(--text);
     border: 1px solid rgba(201, 163, 85, 0.5);
-    border-radius: 3px;
+    border-radius: 4px;
     outline: none;
 }
 .wall-edit-tags-input:focus {
@@ -4214,7 +4272,7 @@ body {
     position: relative;
     background: rgba(15, 12, 24, 0.95);
     border: 1px solid rgba(201, 163, 85, 0.25);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     width: min(95vw, 1600px);
     height: 90vh;
     max-height: 95vh;

@@ -351,7 +351,7 @@ body {
     object-fit: contain !important;
 }
 
-/* Stream Controls Overlay */
+/* Stream Controls Overlay — persistent bar (title+seek always visible) */
 .plexd-controls {
     position: absolute;
     bottom: 0;
@@ -363,13 +363,23 @@ body {
     background: linear-gradient(transparent 0%, rgba(6, 5, 10, 0.6) 40%, rgba(6, 5, 10, 0.95) 100%);
     backdrop-filter: blur(12px) saturate(1.3);
     -webkit-backdrop-filter: blur(12px) saturate(1.3);
-    opacity: 0;
+    opacity: 0.35;
     transition: opacity 0.2s;
     z-index: 30; /* ensure controls stay clickable above overlays */
     pointer-events: auto;
 }
 
+/* Button row hidden at idle — only title+seek visible */
+.plexd-controls .plexd-btn-row {
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
 .plexd-stream:hover .plexd-controls {
+    opacity: 1;
+}
+
+.plexd-stream:hover .plexd-controls .plexd-btn-row {
     opacity: 1;
 }
 
@@ -499,9 +509,24 @@ body {
 
 .plexd-btn-row {
     display: flex;
-    gap: 6px;
-    justify-content: center;
+    gap: 4px;
+    justify-content: flex-start;
     flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Dividers between button clusters (transport | display | actions) */
+.plexd-btn-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(237, 232, 224, 0.12);
+    flex-shrink: 0;
+    margin: 0 2px;
+}
+
+/* Spacer pushes remove button to far right */
+.plexd-btn-spacer {
+    flex: 1;
 }
 
 .plexd-skip-btn {
@@ -1312,8 +1337,8 @@ body {
 .plexd-panel {
     position: fixed;
     top: 44px;
-    right: -280px;
-    width: 260px;
+    right: -320px;
+    width: 300px;
     height: calc(100vh - 44px);
     background: rgba(19, 17, 26, 0.92);
     border-left: 1px solid rgba(201, 86, 109, 0.1);
@@ -1394,6 +1419,67 @@ body {
 .plexd-save-favorites-btn:hover {
     background: rgba(201, 163, 85, 0.2);
     color: var(--gold);
+}
+
+/* Primary small button (filled accent) for Save */
+.plexd-button-primary-small {
+    background: var(--accent) !important;
+    color: #fff !important;
+    border-color: var(--accent) !important;
+}
+
+.plexd-button-primary-small:hover {
+    background: var(--accent-up) !important;
+}
+
+/* Overflow menu (⋮) for Sets panel secondary actions */
+.plexd-overflow-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.plexd-overflow-btn {
+    font-size: 13px;
+    padding: 2px 4px;
+    line-height: 1;
+}
+
+.plexd-overflow-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    min-width: 130px;
+    background: var(--elevated);
+    border: 1px solid var(--line-up);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    z-index: 200;
+    padding: 4px;
+}
+
+.plexd-overflow-wrap.open .plexd-overflow-menu {
+    display: flex;
+    flex-direction: column;
+}
+
+.plexd-overflow-menu button {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 11px;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text-sub);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.plexd-overflow-menu button:hover {
+    background: var(--hover);
+    color: var(--text);
 }
 
 .plexd-panel-content {
@@ -2486,7 +2572,7 @@ body {
    Rating System
    ======================================== */
 
-/* Rating indicator on stream - tappable */
+/* Rating indicator on stream - tappable, always faintly visible for discoverability */
 .plexd-rating-indicator {
     position: absolute;
     top: 8px;
@@ -2503,7 +2589,7 @@ body {
     font-size: 14px;
     font-weight: 600;
     z-index: 5;
-    opacity: 0;
+    opacity: 0.25;
     transition: opacity 0.2s, transform 0.1s, box-shadow 0.2s;
     color: var(--gold);
     cursor: pointer;

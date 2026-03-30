@@ -204,12 +204,17 @@
             <div class="plexd-panel-header">
                 <h3>Sets</h3>
                 <div class="plexd-panel-actions">
-                    <button id="save-combo-btn" class="plexd-button-small" title="Save current streams to browser">Save</button>
+                    <button id="save-combo-btn" class="plexd-button-small plexd-button-primary-small" title="Save current streams">Save</button>
                     <button onclick="PlexdApp.saveFavorites()" class="plexd-button-small plexd-save-favorites-btn" title="Save favorites as a set">★Fav</button>
-                    <button onclick="PlexdApp.exportCombinations()" class="plexd-button-small" title="Export to file">Exp</button>
-                    <button onclick="PlexdApp.importCombinations()" class="plexd-button-small" title="Import from file">Imp</button>
-                    <button onclick="PlexdApp.showManageStoredFilesModal()" class="plexd-button-small" title="Manage stored local files">Files</button>
-                    <button onclick="window.open('/hls-manager.html', '_blank')" class="plexd-button-small" title="Manage HLS transcodes">HLS</button>
+                    <div class="plexd-overflow-wrap">
+                        <button class="plexd-button-small plexd-overflow-btn" onclick="this.parentElement.classList.toggle('open')" title="More actions">⋮</button>
+                        <div class="plexd-overflow-menu">
+                            <button onclick="PlexdApp.exportCombinations(); this.closest('.plexd-overflow-wrap').classList.remove('open')">Export…</button>
+                            <button onclick="PlexdApp.importCombinations(); this.closest('.plexd-overflow-wrap').classList.remove('open')">Import…</button>
+                            <button onclick="PlexdApp.showManageStoredFilesModal(); this.closest('.plexd-overflow-wrap').classList.remove('open')">Manage Files</button>
+                            <button onclick="window.open('/hls-manager.html', '_blank'); this.closest('.plexd-overflow-wrap').classList.remove('open')">HLS Manager</button>
+                        </div>
+                    </div>
                     <button onclick="PlexdApp.togglePanel('saved-panel')" class="plexd-panel-close">&times;</button>
                 </div>
             </div>

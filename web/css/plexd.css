@@ -1606,19 +1606,19 @@ body {
 }
 .plexd-tag-chip.unplayable.selected {
     opacity: 0.6;
-    background: #665;
-    border-color: #665;
+    background: var(--subtle);
+    border-color: var(--subtle);
     box-shadow: none;
 }
 
 /* Selected group at top of filter panels */
 .plexd-selected-group {
-    border-left: 2px solid rgba(232, 197, 71, 0.5);
+    border-left: 2px solid var(--gold-glow);
     padding-left: 8px;
     margin-bottom: 8px;
 }
 .plexd-selected-group .plexd-tag-category-label {
-    color: #e8c547;
+    color: var(--gold);
     font-size: 0.7rem;
 }
 
@@ -1641,7 +1641,7 @@ body {
     white-space: nowrap;
 }
 .plexd-preset-chip:hover { background: rgba(255,255,255,0.15); }
-.plexd-preset-chip.active { background: rgba(232, 197, 71, 0.25); color: #e8c547; }
+.plexd-preset-chip.active { background: rgba(201, 163, 85, 0.25); color: var(--gold); }
 .plexd-preset-add {
     background: rgba(255,255,255,0.04);
     border: 1px dashed rgba(255,255,255,0.15);

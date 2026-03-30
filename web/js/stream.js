@@ -1124,18 +1124,37 @@ const PlexdStream = (function() {
             removeStreamAndFocusNext(streamId);
         };
 
+        // Group buttons into clusters with dividers (mirrors header redesign)
+        function btnDivider() {
+            var d = document.createElement('div');
+            d.className = 'plexd-btn-divider';
+            return d;
+        }
+
+        // Transport cluster
         buttonRow.appendChild(skipBackBtn);
         buttonRow.appendChild(muteBtn);
         buttonRow.appendChild(skipFwdBtn);
         buttonRow.appendChild(randomSeekBtn);
+        buttonRow.appendChild(btnDivider());
+
+        // Display cluster
         buttonRow.appendChild(ratingBtn);
         buttonRow.appendChild(pipBtn);
         buttonRow.appendChild(popoutBtn);
         buttonRow.appendChild(fullscreenBtn);
+        buttonRow.appendChild(btnDivider());
+
+        // Actions cluster
         buttonRow.appendChild(downloadBtn);
         buttonRow.appendChild(infoBtn);
         buttonRow.appendChild(copyBtn);
         buttonRow.appendChild(reloadBtn);
+
+        // Remove (isolated at far end)
+        var removeSpacer = document.createElement('div');
+        removeSpacer.className = 'plexd-btn-spacer';
+        buttonRow.appendChild(removeSpacer);
         buttonRow.appendChild(removeBtn);
 
         controls.appendChild(seekContainer);

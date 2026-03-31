@@ -4723,20 +4723,14 @@ const PlexdApp = (function() {
             var sUrl = all[i].serverUrl || all[i].url;
             if (sUrl === mom.sourceUrl && isVideoUsable(all[i].video)) return all[i];
         }
-        // 3. Try local clip — but respect the video element limit
-        var clipUrl = '/api/moments/' + mom.id + '/clip.mp4';
-        var tempMom = { id: mom.id, extractedPath: clipUrl };
-        var source = _makeExtractedVideoSource(tempMom);
-        if (!source) return null; // Limit reached — caller shows thumbnail
-        // If clip 404s, queue extraction (download once from Stash, save locally)
-        source.video.addEventListener('error', function() {
-            if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
-                mom._extractionQueued = true;
-                console.log('[Moments] Clip missing for', mom.id, '— queuing extraction');
-                queueMomentExtraction(mom, null);
-            }
-        }, { once: true });
-        return source;
+        // No source available — caller shows static thumbnail.
+        // DO NOT speculatively create video elements for /clip.mp4 here.
+        // That path burned a pool slot (MAX_EXTRACTED_VIDEOS=3) per moment,
+        // and clips almost never exist for non-extracted moments.
+        // Wall/Collage init many cells at once → pool fills at 3 → everything
+        // after that shows "unavailable". This was the root cause of the
+        // recurring 3-clips-then-dead bug (fixed in 36567a5, 2d8ddd3, b4838d5).
+        return null;
     }
 
     // Repair missing thumbnails: scan moments without thumbnails, try to capture from loaded streams
@@ -6204,8 +6198,6 @@ const PlexdApp = (function() {
             showEmptyBrowserState(container);
             return;
         }
-        // Clear stale _unplayable flags — sources may have changed since last attempt
-        moments.forEach(function(m) { delete m._unplayable; });
         if (momentBrowserState.selectedIndex >= moments.length) {
             momentBrowserState.selectedIndex = 0;
         }
@@ -6268,16 +6260,9 @@ const PlexdApp = (function() {
     function _reelAutoAdvance() {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length === 0) return;
-        // Find next playable moment (skip _unplayable ones, max full-circle check)
-        var startIdx = momentBrowserState.selectedIndex;
-        for (var tries = 0; tries < moments.length; tries++) {
-            var next = (startIdx + 1 + tries) % moments.length;
-            if (!moments[next]._unplayable) {
-                momentBrowserState.selectedIndex = next;
-                loadReelMoment();
-                return;
-            }
-        }
+        var next = (momentBrowserState.selectedIndex + 1) % moments.length;
+        momentBrowserState.selectedIndex = next;
+        loadReelMoment();
     }
 
     function loadReelMoment(skipHistory) {
@@ -6356,16 +6341,9 @@ const PlexdApp = (function() {
             clearTimeout(_reelLoadTimer);
             if (reelMirror.generation !== gen) return;
             console.warn('[Player] Moment load failed:', mom.id, reason);
-            mom._unplayable = true;
-            // Draw "unavailable" text on canvas
-            if (canvas) {
-                var failCtx = canvas.getContext('2d');
-                failCtx.fillStyle = '#666';
-                failCtx.font = '16px Outfit, sans-serif';
-                failCtx.textAlign = 'center';
-                failCtx.fillText('Clip unavailable', canvas.width / 2, canvas.height / 2);
-            }
-            // Auto-advance after brief pause
+            // Don't set _unplayable — source might become available later
+            // (e.g., user loads the stream set that contains this moment's source)
+            // Auto-advance after brief pause (thumbnail stays visible)
             setTimeout(function() {
                 if (reelMirror.generation === gen && momentBrowserState.open && momentBrowserState.mode === 2) {
                     _reelAutoAdvance();

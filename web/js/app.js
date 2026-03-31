@@ -6376,7 +6376,7 @@ const PlexdApp = (function() {
             if (reelMirror.generation === gen && (!reelMirror.sourceVid || reelMirror.sourceVid.readyState < 2)) {
                 onReelLoadFail('timeout');
             }
-        }, 8000);
+        }, 20000);
 
         var loadedStream = resolveMomentStream(mom);
         if (loadedStream && loadedStream.video) {

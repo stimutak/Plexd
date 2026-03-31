@@ -14256,6 +14256,14 @@ const PlexdApp = (function() {
         // Help
         showShortcutsModal,
         jumpToRandomMoment,
+        // Moment browser (for remote control)
+        showMomentBrowser,
+        closeMomentBrowser,
+        isMomentBrowserOpen: function() { return momentBrowserState.open; },
+        getMomentBrowserMode: function() { return momentBrowserState.mode; },
+        getMomentBrowserSelectedIndex: function() { return momentBrowserState.selectedIndex; },
+        getMomentBrowserCount: function() { return momentBrowserState.filteredMoments.length; },
+        getMomentBrowserSelectedMoment: function() { return momentBrowserState.filteredMoments[momentBrowserState.selectedIndex] || null; },
         // Demo
         xfill,
         // Tags
@@ -14616,6 +14624,82 @@ const PlexdRemote = (function() {
                 PlexdApp.jumpToRandomMoment();
                 sendState();
                 break;
+            case 'moment-browser-toggle':
+                if (momentBrowserState.open) {
+                    closeMomentBrowser();
+                } else {
+                    showMomentBrowser();
+                }
+                sendState();
+                break;
+            case 'moment-browser-open':
+                if (!momentBrowserState.open) showMomentBrowser();
+                sendState();
+                break;
+            case 'moment-browser-close':
+                if (momentBrowserState.open) closeMomentBrowser();
+                sendState();
+                break;
+            case 'moment-browser-navigate': {
+                // Navigate within moment browser: { direction: 'left'|'right'|'up'|'down'|'random' }
+                if (!momentBrowserState.open) break;
+                var dir = payload.direction || 'right';
+                var keyMap = { left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp', down: 'ArrowDown' };
+                if (dir === 'random') {
+                    // Dispatch / key for random
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+                } else if (keyMap[dir]) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: keyMap[dir], bubbles: true }));
+                }
+                sendState();
+                break;
+            }
+            case 'moment-browser-select':
+                // Select/activate current moment (Enter key equivalent)
+                if (momentBrowserState.open) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                }
+                sendState();
+                break;
+            case 'moment-browser-cycle-mode': {
+                // Cycle browser mode: { direction: 1 or -1 }
+                if (!momentBrowserState.open) break;
+                var shift = payload.direction === -1;
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', shiftKey: shift, bubbles: true }));
+                sendState();
+                break;
+            }
+            case 'moment-browser-rate': {
+                // Rate selected moment: { rating: 0-9 }
+                if (!momentBrowserState.open) break;
+                var rKey = String(payload.rating);
+                if (rKey >= '0' && rKey <= '9') {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: rKey, bubbles: true }));
+                }
+                sendState();
+                break;
+            }
+            case 'moment-browser-love':
+                // Toggle loved on selected moment (L key)
+                if (momentBrowserState.open) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', bubbles: true }));
+                }
+                sendState();
+                break;
+            case 'moment-browser-delete':
+                // Delete selected moment (Delete/Backspace key)
+                if (momentBrowserState.open) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }));
+                }
+                sendState();
+                break;
+            case 'moment-browser-escape':
+                // Escape within moment browser (close popup, close browser)
+                if (momentBrowserState.open) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+                }
+                sendState();
+                break;
 
             // Crop toggle — cycle wall mode (W key equivalent)
             case 'toggleCrop':
@@ -14734,6 +14818,17 @@ const PlexdRemote = (function() {
             // Moment count
             momentCount: (typeof PlexdMoments !== 'undefined' && PlexdMoments.getAllMoments)
                 ? PlexdMoments.getAllMoments().length : 0,
+            // Moment browser state (for remote control)
+            momentBrowserOpen: momentBrowserState.open,
+            momentBrowserMode: momentBrowserState.mode,
+            momentBrowserSelectedIndex: momentBrowserState.selectedIndex,
+            momentBrowserFilteredCount: momentBrowserState.filteredMoments.length,
+            momentBrowserSelectedMoment: momentBrowserState.open
+                ? (function() {
+                    var m = momentBrowserState.filteredMoments[momentBrowserState.selectedIndex];
+                    return m ? { id: m.id, title: m.title || '', rating: m.rating || 0, loved: !!m.loved, duration: (m.end && m.start) ? m.end - m.start : 0 } : null;
+                })()
+                : null,
             timestamp: Date.now()
         };
     }

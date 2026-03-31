@@ -50,6 +50,7 @@ const PlexdRemote = (function() {
     let momentsAutoAdvance = true;
     let momentsFilteredList = [];
     let momentPlayerHls = null;
+    let desktopMomentsActive = false;
 
     const COMMAND_KEY = 'plexd_remote_command';
     const STATE_KEY = 'plexd_remote_state';
@@ -158,8 +159,16 @@ const PlexdRemote = (function() {
         el.btnMomentCapture = $('btn-moment-capture');
         el.btnMomentCaptureAll = $('btn-moment-capture-all');
         el.btnMomentBrowse = $('btn-moment-browse');
+        el.btnMomentDesktop = $('btn-moment-desktop');
         el.btnMomentPlay = $('btn-moment-play');
         el.momentCountBadge = $('moment-count-badge');
+
+        // Desktop moments control
+        el.desktopMomentsControl = $('desktop-moments-control');
+        el.desktopMomentsStatus = $('desktop-moments-status');
+        el.desktopMomentsInfo = $('desktop-moments-info');
+        el.desktopMomentsClose = $('desktop-moments-close');
+        el.desktopMomentsRating = $('desktop-moments-rating');
 
         // More panel buttons
         el.btnMuteAll = $('btn-mute-all');
@@ -728,6 +737,16 @@ const PlexdRemote = (function() {
         const hasStreams = state.streams && state.streams.length > 0;
         if (el.btnMomentCapture) el.btnMomentCapture.classList.toggle('disabled', !hasStreams);
         if (el.btnMomentCaptureAll) el.btnMomentCaptureAll.classList.toggle('disabled', !hasStreams);
+
+        // Update desktop moments control UI if active
+        if (desktopMomentsActive) {
+            updateDesktopMomentsUI();
+        }
+
+        // Highlight desktop button when desktop browser is open
+        if (el.btnMomentDesktop) {
+            el.btnMomentDesktop.classList.toggle('active', !!state.momentBrowserOpen);
+        }
     }
 
     function renderHero() {
@@ -1069,14 +1088,14 @@ const PlexdRemote = (function() {
             haptic.medium();
         });
 
+        el.btnMomentDesktop?.addEventListener('click', () => {
+            toggleDesktopMomentsControl();
+            haptic.medium();
+        });
+
         el.btnMomentPlay?.addEventListener('click', () => {
-            // Fetch moments and play a random one
-            fetchMoments().then(() => {
-                if (momentsFilteredList.length > 0) {
-                    const idx = Math.floor(Math.random() * momentsFilteredList.length);
-                    openMomentsPlayer(idx);
-                }
-            });
+            // Play random moment on desktop
+            send('moment-play');
             haptic.medium();
         });
 
@@ -1625,6 +1644,134 @@ const PlexdRemote = (function() {
     function resumeHeroVideo() {
         // updateHeroVideo() will re-create HLS on next state poll
         currentVideoUrl = null;
+    }
+
+    // ============================================
+    // Desktop Moments Control
+    // ============================================
+    const MOMENT_MODE_NAMES = ['Grid', 'Wall', 'Player', 'Collage'];
+
+    function toggleDesktopMomentsControl() {
+        desktopMomentsActive = !desktopMomentsActive;
+        if (el.desktopMomentsControl) {
+            el.desktopMomentsControl.classList.toggle('hidden', !desktopMomentsActive);
+        }
+        if (desktopMomentsActive) {
+            // Open the desktop browser if not already open
+            if (state && !state.momentBrowserOpen) {
+                send('moment-browser-open');
+            }
+            updateDesktopMomentsUI();
+            setupDesktopMomentsEvents();
+        }
+    }
+
+    function closeDesktopMomentsControl() {
+        desktopMomentsActive = false;
+        if (el.desktopMomentsControl) {
+            el.desktopMomentsControl.classList.add('hidden');
+        }
+    }
+
+    function updateDesktopMomentsUI() {
+        if (!state || !el.desktopMomentsStatus) return;
+
+        var isOpen = state.momentBrowserOpen;
+        var modeName = MOMENT_MODE_NAMES[state.momentBrowserMode] || '?';
+        var idx = (state.momentBrowserSelectedIndex || 0) + 1;
+        var total = state.momentBrowserFilteredCount || 0;
+
+        el.desktopMomentsStatus.textContent = isOpen
+            ? modeName + ' \u2022 ' + idx + '/' + total
+            : 'Desktop Browser: Closed';
+
+        // Show selected moment info
+        if (el.desktopMomentsInfo) {
+            var m = state.momentBrowserSelectedMoment;
+            if (m && isOpen) {
+                var parts = [];
+                if (m.title) parts.push(m.title.length > 30 ? m.title.substring(0, 27) + '...' : m.title);
+                if (m.loved) parts.push('\u2665');
+                if (m.rating > 0) parts.push('\u2605' + m.rating);
+                if (m.duration > 0) parts.push(formatTime(m.duration));
+                el.desktopMomentsInfo.textContent = parts.join(' \u2022 ');
+            } else {
+                el.desktopMomentsInfo.textContent = '';
+            }
+        }
+
+        // Highlight active rating button
+        if (el.desktopMomentsRating) {
+            var rm = state.momentBrowserSelectedMoment;
+            var curRating = rm ? (rm.rating || 0) : -1;
+            el.desktopMomentsRating.querySelectorAll('.dm-rate-btn').forEach(function(btn) {
+                var r = parseInt(btn.dataset.rating, 10);
+                btn.classList.toggle('active', r === curRating);
+            });
+        }
+    }
+
+    var _desktopMomentsEventsSetup = false;
+    function setupDesktopMomentsEvents() {
+        if (_desktopMomentsEventsSetup) return;
+        _desktopMomentsEventsSetup = true;
+
+        // Close button
+        el.desktopMomentsClose?.addEventListener('click', function() {
+            closeDesktopMomentsControl();
+            haptic.light();
+        });
+
+        // Navigation
+        $('dm-prev')?.addEventListener('click', function() {
+            send('moment-browser-navigate', { direction: 'left' });
+            haptic.light();
+        });
+        $('dm-next')?.addEventListener('click', function() {
+            send('moment-browser-navigate', { direction: 'right' });
+            haptic.light();
+        });
+        $('dm-up')?.addEventListener('click', function() {
+            send('moment-browser-navigate', { direction: 'up' });
+            haptic.light();
+        });
+        $('dm-down')?.addEventListener('click', function() {
+            send('moment-browser-navigate', { direction: 'down' });
+            haptic.light();
+        });
+        $('dm-select')?.addEventListener('click', function() {
+            send('moment-browser-select');
+            haptic.medium();
+        });
+
+        // Actions
+        $('dm-mode-prev')?.addEventListener('click', function() {
+            send('moment-browser-cycle-mode', { direction: -1 });
+            haptic.medium();
+        });
+        $('dm-mode-next')?.addEventListener('click', function() {
+            send('moment-browser-cycle-mode', { direction: 1 });
+            haptic.medium();
+        });
+        $('dm-random')?.addEventListener('click', function() {
+            send('moment-browser-navigate', { direction: 'random' });
+            haptic.medium();
+        });
+        $('dm-love')?.addEventListener('click', function() {
+            send('moment-browser-love');
+            haptic.success();
+        });
+
+        // Rating buttons
+        el.desktopMomentsRating?.querySelectorAll('.dm-rate-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var r = parseInt(btn.dataset.rating, 10);
+                if (!isNaN(r)) {
+                    send('moment-browser-rate', { rating: r });
+                    haptic.success();
+                }
+            });
+        });
     }
 
     function openMomentsBrowser() {

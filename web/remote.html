@@ -15,7 +15,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/remote.css?v=101">
+    <link rel="stylesheet" href="css/remote.css?v=102">
 
     <!-- HLS.js for streaming -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
@@ -259,14 +259,76 @@
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L12 15.45 7.77 18l1.12-4.81-3.73-3.23 4.92-.42L12 5l1.92 4.53 4.92.42-3.73 3.23L16.23 18z"/></svg>
                             <span>All</span>
                         </button>
-                        <button class="toolbar-btn" id="btn-moment-browse" aria-label="Browse moments">
+                        <button class="toolbar-btn" id="btn-moment-browse" aria-label="Browse moments on phone">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
-                            <span>Browse</span>
+                            <span>Phone</span>
                         </button>
-                        <button class="toolbar-btn" id="btn-moment-play" aria-label="Play random moment">
+                        <button class="toolbar-btn" id="btn-moment-desktop" aria-label="Control desktop moment browser">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+                            <span>Desktop</span>
+                        </button>
+                        <button class="toolbar-btn" id="btn-moment-play" aria-label="Play random moment on desktop">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
                             <span>Play</span>
                         </button>
+                    </div>
+
+                    <!-- Desktop Moment Browser Control (hidden by default, shown when active) -->
+                    <div class="desktop-moments-control hidden" id="desktop-moments-control">
+                        <div class="desktop-moments-header">
+                            <span class="desktop-moments-status" id="desktop-moments-status">Desktop Browser: Closed</span>
+                            <button class="desktop-moments-close-btn" id="desktop-moments-close" aria-label="Close remote control">&#x2715;</button>
+                        </div>
+                        <div class="desktop-moments-info" id="desktop-moments-info"></div>
+                        <div class="desktop-moments-nav">
+                            <button class="dm-btn" id="dm-prev" aria-label="Previous">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                            </button>
+                            <button class="dm-btn" id="dm-up" aria-label="Up">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+                            </button>
+                            <button class="dm-btn dm-btn-select" id="dm-select" aria-label="Select">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                            </button>
+                            <button class="dm-btn" id="dm-down" aria-label="Down">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+                            </button>
+                            <button class="dm-btn" id="dm-next" aria-label="Next">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                            </button>
+                        </div>
+                        <div class="desktop-moments-actions">
+                            <button class="dm-action-btn" id="dm-mode-prev" aria-label="Previous mode">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                                <span>Mode</span>
+                            </button>
+                            <button class="dm-action-btn" id="dm-random" aria-label="Random moment">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+                                <span>Random</span>
+                            </button>
+                            <button class="dm-action-btn" id="dm-love" aria-label="Toggle love">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                                <span>Love</span>
+                            </button>
+                            <button class="dm-action-btn" id="dm-mode-next" aria-label="Next mode">
+                                <span>Mode</span>
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                            </button>
+                        </div>
+                        <div class="desktop-moments-rating" id="desktop-moments-rating">
+                            <button class="dm-rate-btn" data-rating="0" aria-label="Clear">
+                                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </button>
+                            <button class="dm-rate-btn" data-rating="1">1</button>
+                            <button class="dm-rate-btn" data-rating="2">2</button>
+                            <button class="dm-rate-btn" data-rating="3">3</button>
+                            <button class="dm-rate-btn" data-rating="4">4</button>
+                            <button class="dm-rate-btn" data-rating="5">5</button>
+                            <button class="dm-rate-btn" data-rating="6">6</button>
+                            <button class="dm-rate-btn" data-rating="7">7</button>
+                            <button class="dm-rate-btn" data-rating="8">8</button>
+                            <button class="dm-rate-btn" data-rating="9">9</button>
+                        </div>
                     </div>
 
                     <!-- More Panel -->

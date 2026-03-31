@@ -4884,14 +4884,37 @@ const PlexdApp = (function() {
         // Suspend grid streams — stop timeout retries from saturating connections.
         // With 22 streams all timing out and retrying, they eat all 6 HTTP/1.1
         // connections to localhost, starving local clip video loads.
-        // Canvas mirrors won't work (streams are dead anyway from timeouts),
-        // so wall/collage modes use local extracted clips instead.
+        // CRITICAL: Keep streams alive if they're sources for non-extracted moments,
+        // otherwise canvas mirrors can't resolve and moments show "Clip unavailable".
         // CRITICAL: Stop health watchdog FIRST — otherwise it detects suspended
         // streams as "stalled" and triggers recovery, re-saturating connections.
         PlexdStream.stopHealthMonitoring();
+        // Build set of source URLs/streamIds needed by non-extracted moments
+        var momentSourceUrls = new Set();
+        var momentStreamIds = new Set();
+        PlexdMoments.getAllMoments().forEach(function(m) {
+            if (m.extracted && m.extractedPath) return; // has local clip, no stream needed
+            if (m.sourceUrl) momentSourceUrls.add(m.sourceUrl);
+            if (m.streamId) momentStreamIds.add(m.streamId);
+        });
         momentBrowserState._suspendedStreams = [];
+        momentBrowserState._keptAliveStreams = []; // moment-source streams: muted but not suspended
         PlexdStream.getAllStreams().forEach(function(s) {
             if (!s.video) return;
+            // Keep streams that are moment sources — canvas mirrors need them
+            var sUrl = s.serverUrl || s.url;
+            if (momentStreamIds.has(s.id) || momentSourceUrls.has(sUrl)) {
+                momentBrowserState._keptAliveStreams.push({ id: s.id, wasMuted: s.video.muted });
+                // Mute but keep src loaded so readyState stays valid for canvas mirrors
+                s.video.muted = true;
+                // Cancel recovery timers to stop connection churn
+                if (s.recovery && s.recovery.retryTimer) {
+                    clearTimeout(s.recovery.retryTimer);
+                    s.recovery.retryTimer = null;
+                    s.recovery.isRecovering = false;
+                }
+                return;
+            }
             var info = {
                 id: s.id,
                 wasPaused: s.video.paused,
@@ -6181,6 +6204,8 @@ const PlexdApp = (function() {
             showEmptyBrowserState(container);
             return;
         }
+        // Clear stale _unplayable flags — sources may have changed since last attempt
+        moments.forEach(function(m) { delete m._unplayable; });
         if (momentBrowserState.selectedIndex >= moments.length) {
             momentBrowserState.selectedIndex = 0;
         }
@@ -6271,13 +6296,14 @@ const PlexdApp = (function() {
             momentBrowserState.playerHistoryPos = -1; // at head
         }
 
-        // Stop previous mirror and release its extracted video slot
-        // (Player only uses one video at a time — keeping old ones fills the
-        //  MAX_EXTRACTED_VIDEOS=3 pool and forces later moments to thumbnail)
-        if (reelMirror._extractedMomId && reelMirror._extractedMomId !== mom.id) {
-            _releaseExtractedVideo(reelMirror._extractedMomId);
-            reelMirror._extractedMomId = null;
-        }
+        // Release ALL extracted video slots except the one we're about to load.
+        // Player only uses one video at a time — stale slots from failed loads
+        // or previous moments fill the MAX_EXTRACTED_VIDEOS=3 pool, causing
+        // subsequent moments to fail with "no video source".
+        Object.keys(_extractedVideos).forEach(function(mid) {
+            if (mid !== mom.id) _releaseExtractedVideo(mid);
+        });
+        reelMirror._extractedMomId = null;
         stopReelMirror();
         // Generation counter: async callbacks check this to skip stale completions
         var gen = ++reelMirror.generation;
@@ -7643,9 +7669,17 @@ const PlexdApp = (function() {
                 }
             });
             momentBrowserState._suspendedStreams = null;
-            // Restart health watchdog now that streams have sources again
-            PlexdStream.startHealthMonitoring();
         }
+        // Restore mute state for moment-source streams that were kept alive
+        if (momentBrowserState._keptAliveStreams) {
+            momentBrowserState._keptAliveStreams.forEach(function(info) {
+                var stream = PlexdStream.getStream(info.id);
+                if (stream && stream.video) stream.video.muted = info.wasMuted;
+            });
+            momentBrowserState._keptAliveStreams = null;
+        }
+        // Restart health watchdog now that streams have sources again
+        PlexdStream.startHealthMonitoring();
         // Resume remote control polling
         if (typeof PlexdRemote !== 'undefined') PlexdRemote.resumePolling();
     }

@@ -22,6 +22,16 @@
     <script>
     (function() {
         window.plexdFetch = function(url, opts) {
+            var token = document.querySelector('meta[name="plexd-api-token"]');
+            if (token && token.content && url.startsWith('/api/')) {
+                opts = opts || {};
+                opts.headers = opts.headers || {};
+                if (opts.headers instanceof Headers) {
+                    opts.headers.set('X-Plexd-Token', token.content);
+                } else {
+                    opts.headers['X-Plexd-Token'] = token.content;
+                }
+            }
             return fetch(url, opts);
         };
     })();

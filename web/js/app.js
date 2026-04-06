@@ -1888,22 +1888,35 @@ const PlexdApp = (function() {
      */
     function _restoreSavedStreams(savedStreams, savedKeys, dedupedSavedStreams) {
         var ephemeralCount = 0;
+        var metadataByUrl = {};
         savedStreams.forEach(function(entry) {
             if (!entry) return;
-            if (typeof entry === 'object' && entry.url && entry.site) {
+            var isObj = typeof entry === 'object';
+            // Ephemeral streams (signed URLs that expire) — count for re-fetch
+            if (isObj && entry.url && entry.site && (entry.site === 'Reptyle' || entry.site === 'Brazzers' || entry.site === 'Aylo')) {
                 ephemeralCount++;
                 return;
             }
-            var url = typeof entry === 'string' ? entry : entry.url;
+            var url = isObj ? entry.url : entry;
             if (!url || !isValidUrl(url)) return;
             var key = urlEqualityKey(url);
             if (savedKeys.has(key)) return;
             savedKeys.add(key);
             dedupedSavedStreams.push(url);
+            if (isObj) metadataByUrl[url] = entry;
         });
         var IMMEDIATE = 6;
         for (var i = 0; i < dedupedSavedStreams.length; i++) {
-            addStreamSilent(dedupedSavedStreams[i], i >= IMMEDIATE ? { deferred: true } : undefined);
+            var stream = addStreamSilent(dedupedSavedStreams[i], i >= IMMEDIATE ? { deferred: true } : undefined);
+            var meta = metadataByUrl[dedupedSavedStreams[i]];
+            if (stream && meta) {
+                if (meta.title) stream.title = meta.title;
+                if (meta.site) stream.site = meta.site;
+                if (meta.category) stream.category = meta.category;
+                if (meta.aiTags) stream.aiTags = meta.aiTags;
+                if (meta.actors) stream.actors = meta.actors;
+                updateStreamInfoOverlay(stream);
+            }
         }
         updateLayout();
         // Reapply ratings and favorites from localStorage to restored streams
@@ -1928,7 +1941,7 @@ const PlexdApp = (function() {
             var actorIds = Array.from(_selectedPerformerIds);
             if (tagIds.length > 0) queryStr += '&tagIds=' + tagIds.join(',');
             if (actorIds.length > 0) queryStr += '&actorIds=' + actorIds.join(',');
-            var resp = await fetch(queryStr);
+            var resp = await plexdFetch(queryStr);
             var data = await resp.json();
             if (!data.streams || data.streams.length === 0) {
                 showMessage('Session had ' + count + ' premium streams — xfill to reload', 'info');
@@ -2708,6 +2721,10 @@ const PlexdApp = (function() {
                 if (_panelHighlightIdx >= 0) {
                     e.preventDefault();
                     _activatePanelHighlight(container);
+                } else if (inputId === 'performers-search' && newInput.value.trim()) {
+                    // API search for performers not in the cached list
+                    e.preventDefault();
+                    _searchPerformersApi(newInput.value.trim(), container);
                 } else {
                     e.preventDefault();
                     newInput.blur();
@@ -2716,6 +2733,22 @@ const PlexdApp = (function() {
                 return;
             }
         });
+    }
+
+    async function _searchPerformersApi(query, container) {
+        showMessage('Searching for "' + query + '"...', 'info');
+        try {
+            var resp = await plexdFetch('/api/demo/performers/search?q=' + encodeURIComponent(query) + '&limit=20');
+            var data = await resp.json();
+            if (!data.performers || data.performers.length === 0) {
+                showMessage('No performers found for "' + query + '"', 'info');
+                return;
+            }
+            _showPerformerSearchResults(data.performers, container);
+            showMessage(data.performers.length + ' performers found', 'info');
+        } catch (err) {
+            showMessage('Performer search failed: ' + err.message, 'error');
+        }
     }
 
     function _getVisibleChips(container) {
@@ -2849,7 +2882,7 @@ const PlexdApp = (function() {
             var activeActorIds = Array.from(_selectedPerformerIds);
             if (activeTagIds.length > 0) queryStr += '&tagIds=' + activeTagIds.join(',');
             if (activeActorIds.length > 0) queryStr += '&actorIds=' + activeActorIds.join(',');
-            var resp = await fetch(queryStr);
+            var resp = await plexdFetch(queryStr);
             var data = await resp.json();
 
             if (!data.streams || data.streams.length === 0) {
@@ -3027,15 +3060,16 @@ const PlexdApp = (function() {
         }
     }
 
-    // Select a performer by name: find ID in cache, select it, open panel
+    // Select a performer by name: find ID in cache, or API search if not found
     async function _selectPerformerByName(name) {
         var performers = await fetchPerformers();
-        if (!performers) return;
         var lowerName = name.toLowerCase();
         var match = null;
-        for (var i = 0; i < performers.length; i++) {
-            if (performers[i].name.toLowerCase() === lowerName) {
-                match = performers[i]; break;
+        if (performers) {
+            for (var i = 0; i < performers.length; i++) {
+                if (performers[i].name.toLowerCase() === lowerName) {
+                    match = performers[i]; break;
+                }
             }
         }
         if (match) {
@@ -3043,8 +3077,61 @@ const PlexdApp = (function() {
             togglePerformer(match.id);
             togglePanel('performers-panel');
         } else {
-            showMessage('Performer "' + name + '" not found in browser', 'warn');
+            // Not in cache — search the API
+            showMessage('Searching for "' + name + '"...', 'info');
+            try {
+                var resp = await plexdFetch('/api/demo/performers/search?q=' + encodeURIComponent(name) + '&limit=20');
+                var data = await resp.json();
+                if (data.performers && data.performers.length > 0) {
+                    // Exact match? Select it directly
+                    var exact = null;
+                    for (var j = 0; j < data.performers.length; j++) {
+                        if (data.performers[j].name.toLowerCase() === lowerName) {
+                            exact = data.performers[j]; break;
+                        }
+                    }
+                    if (exact) {
+                        clearPerformerSelection();
+                        togglePerformer(exact.id);
+                        _loadFilteredStreams();
+                    } else {
+                        // Show search results in performers panel
+                        togglePanel('performers-panel');
+                        var container = document.getElementById('performers-list');
+                        if (container) _showPerformerSearchResults(data.performers, container);
+                        showMessage(data.performers.length + ' performers found for "' + name + '"', 'info');
+                    }
+                } else {
+                    showMessage('No performers found for "' + name + '"', 'warn');
+                }
+            } catch (err) {
+                showMessage('Performer search failed: ' + err.message, 'error');
+            }
         }
+    }
+
+    function _showPerformerSearchResults(performers, container) {
+        var existing = container.querySelector('.plexd-search-results');
+        if (existing) existing.remove();
+        var resultsDiv = document.createElement('div');
+        resultsDiv.className = 'plexd-tag-category plexd-search-results';
+        var label = document.createElement('div');
+        label.className = 'plexd-tag-category-label';
+        label.textContent = 'Search Results (' + performers.length + ')';
+        resultsDiv.appendChild(label);
+        var chipsDiv = document.createElement('div');
+        chipsDiv.className = 'plexd-tag-chips';
+        for (var i = 0; i < performers.length; i++) {
+            var p = performers[i];
+            var chip = document.createElement('span');
+            chip.className = 'plexd-tag-chip' + (_selectedPerformerIds.has(p.id) ? ' selected' : '');
+            chip.setAttribute('data-performer-id', p.id);
+            chip.textContent = p.name + (p.scenes ? ' (' + p.scenes + ')' : '');
+            chip.onclick = (function(id) { return function() { togglePerformer(id); }; })(p.id);
+            chipsDiv.appendChild(chip);
+        }
+        resultsDiv.appendChild(chipsDiv);
+        container.insertBefore(resultsDiv, container.firstChild);
     }
 
     // Select a tag by name: find ID in cache, select it, open panel
@@ -10434,9 +10521,13 @@ const PlexdApp = (function() {
             if (fileId && seenFileIds.has(fileId.toLowerCase())) return;
             seen.add(key);
             if (fileId) seenFileIds.add(fileId.toLowerCase());
-            // Ephemeral sources: save metadata for re-fetching fresh URLs
-            if (s.site && (s.site === 'Reptyle' || s.site === 'Brazzers' || s.site === 'Aylo')) {
-                entries.push({ url: url, title: s.title || '', site: s.site, category: s.category || '' });
+            // Save metadata so info overlays restore on reload
+            var hasInfo = s.title || s.site || (s.aiTags && s.aiTags.length) || (s.actors && s.actors.length) || s.category;
+            if (hasInfo) {
+                var entry = { url: url, title: s.title || '', site: s.site || '', category: s.category || '' };
+                if (s.aiTags && s.aiTags.length) entry.aiTags = s.aiTags;
+                if (s.actors && s.actors.length) entry.actors = s.actors;
+                entries.push(entry);
             } else {
                 entries.push(url);
             }

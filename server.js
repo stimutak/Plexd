@@ -5238,7 +5238,7 @@ const server = http.createServer(async (req, res) => {
                     hasAnyAuth = true;
                 } catch (e) { /* no stash */ }
             }
-            if (!hasAnyAuth && (actorIds.length > 0 || tagIds.length > 0)) {
+            if (!hasAnyAuth && (actorIdList.length > 0 || tagIdList.length > 0)) {
                 jsonOk(res, {
                     streams: [], source: 'none', fetched: 0, failed: 0,
                     error: 'Performer/tag filtering requires login. No authenticated source available — check Chrome is running with the Plexd profile.'

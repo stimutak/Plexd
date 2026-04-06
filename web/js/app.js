@@ -2745,7 +2745,10 @@ const PlexdApp = (function() {
                 return;
             }
             _showPerformerSearchResults(data.performers, container);
-            showMessage(data.performers.length + ' performers found', 'info');
+            // Auto-select top result and load their scenes
+            clearPerformerSelection();
+            togglePerformer(data.performers[0].id);
+            _loadFilteredStreams();
         } catch (err) {
             showMessage('Performer search failed: ' + err.message, 'error');
         }
@@ -3095,11 +3098,13 @@ const PlexdApp = (function() {
                         togglePerformer(exact.id);
                         _loadFilteredStreams();
                     } else {
-                        // Show search results in performers panel
-                        togglePanel('performers-panel');
+                        // No exact match — select the top result and load their scenes
+                        clearPerformerSelection();
+                        togglePerformer(data.performers[0].id);
+                        _loadFilteredStreams();
+                        // Also show search results in performers panel for alternatives
                         var container = document.getElementById('performers-list');
                         if (container) _showPerformerSearchResults(data.performers, container);
-                        showMessage(data.performers.length + ' performers found for "' + name + '"', 'info');
                     }
                 } else {
                     showMessage('No performers found for "' + name + '"', 'warn');
@@ -3127,7 +3132,11 @@ const PlexdApp = (function() {
             chip.className = 'plexd-tag-chip' + (_selectedPerformerIds.has(p.id) ? ' selected' : '');
             chip.setAttribute('data-performer-id', p.id);
             chip.textContent = p.name + (p.scenes ? ' (' + p.scenes + ')' : '');
-            chip.onclick = (function(id) { return function() { togglePerformer(id); }; })(p.id);
+            chip.onclick = (function(id) { return function() {
+                clearPerformerSelection();
+                togglePerformer(id);
+                _loadFilteredStreams();
+            }; })(p.id);
             chipsDiv.appendChild(chip);
         }
         resultsDiv.appendChild(chipsDiv);

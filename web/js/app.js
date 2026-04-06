@@ -4810,20 +4810,12 @@ const PlexdApp = (function() {
             var sUrl = all[i].serverUrl || all[i].url;
             if (sUrl === mom.sourceUrl && isVideoUsable(all[i].video)) return all[i];
         }
-        // 3. Try local clip — but respect the video element limit
-        var clipUrl = '/api/moments/' + mom.id + '/clip.mp4';
-        var tempMom = { id: mom.id, extractedPath: clipUrl };
-        var source = _makeExtractedVideoSource(tempMom);
-        if (!source) return null; // Limit reached — caller shows thumbnail
-        // If clip 404s, queue extraction (download once from Stash, save locally)
-        source.video.addEventListener('error', function() {
-            if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
-                mom._extractionQueued = true;
-                console.log('[Moments] Clip missing for', mom.id, '— queuing extraction');
-                queueMomentExtraction(mom, null);
-            }
-        }, { once: true });
-        return source;
+        // 3. No video source available — queue extraction for next time, show thumbnail
+        if (mom.sourceUrl && !mom.sourceUrl.startsWith('blob:') && !mom._extractionQueued) {
+            mom._extractionQueued = true;
+            queueMomentExtraction(mom, null);
+        }
+        return null;
     }
 
     // Repair missing thumbnails: scan moments without thumbnails, try to capture from loaded streams
@@ -5951,41 +5943,36 @@ const PlexdApp = (function() {
             var mom = cell._moment;
             if (!mom) return;
 
-            // Create canvas behind poster — poster stays visible until video has a frame
             var poster = cell.querySelector('img.wall-cell-poster, .moment-card-placeholder');
-            var canvas = document.createElement('canvas');
-            canvas.width = 320;
-            canvas.height = 180;
-            canvas.className = 'wall-cell-poster'; // Same sizing as poster
-            var ctx = canvas.getContext('2d');
-            // Insert canvas before poster (behind it visually)
-            if (poster) {
-                poster.parentNode.insertBefore(canvas, poster);
-                // Draw poster onto canvas as immediate fallback
-                if (poster.tagName === 'IMG' && poster.naturalWidth > 0) {
-                    ctx.drawImage(poster, 0, 0, 320, 180);
-                }
-            } else {
-                cell.insertBefore(canvas, cell.firstChild);
-            }
             var loadedStream = resolveMomentStream(mom);
-            // Remove poster once video is drawing (poster is on top, canvas behind)
-            cell._removePoster = function() {
-                if (poster && poster.parentNode) poster.parentNode.removeChild(poster);
-                cell._removePoster = null;
-            };
 
             if (loadedStream && loadedStream.video) {
+                // Create canvas behind poster — poster stays visible until video has a frame
+                var canvas = document.createElement('canvas');
+                canvas.width = 320;
+                canvas.height = 180;
+                canvas.className = 'wall-cell-poster';
+                var ctx = canvas.getContext('2d');
+                if (poster) {
+                    poster.parentNode.insertBefore(canvas, poster);
+                    if (poster.tagName === 'IMG' && poster.naturalWidth > 0) {
+                        ctx.drawImage(poster, 0, 0, 320, 180);
+                    }
+                } else {
+                    cell.insertBefore(canvas, cell.firstChild);
+                }
+                cell._removePoster = function() {
+                    if (poster && poster.parentNode) poster.parentNode.removeChild(poster);
+                    cell._removePoster = null;
+                };
                 var sourceVid = loadedStream.video;
                 var isExtracted = !!loadedStream._isExtracted;
                 if (isExtracted) wallMirrorState._extractedMomId = mom.id;
                 canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom });
 
-                // Save play state before forcing play
                 if (wallMirrorState.prevPlayStates[loadedStream.id] === undefined) {
                     wallMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
                 }
-                // If video has no data yet (fallback videos load async), wait for canplay
                 if (sourceVid.readyState >= 2) {
                     if (sourceVid.paused) sourceVid.play().catch(function() {});
                 } else {
@@ -5995,7 +5982,6 @@ const PlexdApp = (function() {
                     }, { once: true });
                 }
 
-                // Only add one timeupdate handler per source video to prevent seek-fighting
                 var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
                 if (!wallSourceHandled[sourceKey]) {
                     var loopHandler = (function(vid, m, extracted) {
@@ -6014,22 +6000,16 @@ const PlexdApp = (function() {
                     sourceVid.addEventListener('timeupdate', loopHandler);
                     wallMirrorState.handlers.push({ video: sourceVid, handler: loopHandler });
                     wallSourceHandled[sourceKey] = true;
-                    // Start at peak (where K was pressed) — the interesting part
                     sourceVid.currentTime = mom.peak || mom.start;
                 } else {
                     sourceVid.currentTime = mom.peak || mom.start;
                 }
 
-                // Start rAF loop if this is the first canvasRef
                 if (canvasRefs.length === 1 && !wallMirrorState.rafId) {
                     wallMirrorState.rafId = requestAnimationFrame(wallMirrorLoop);
                 }
-            } else {
-                // Draw thumbnail on canvas as static fallback
-                var thumbImg = new Image();
-                thumbImg.onload = function() { ctx.drawImage(thumbImg, 0, 0, 320, 180); };
-                thumbImg.src = momentThumbUrl(mom);
             }
+            // No video source — poster <img> stays visible (scales cleanly via CSS)
         }
 
         // Expose initWallCell for edit mode (updateWallSelection / toggleWallEditMode)
@@ -6417,16 +6397,7 @@ const PlexdApp = (function() {
             clearTimeout(_reelLoadTimer);
             if (reelMirror.generation !== gen) return;
             console.warn('[Player] Moment load failed:', mom.id, reason);
-            mom._unplayable = true;
-            // Draw "unavailable" text on canvas
-            if (canvas) {
-                var failCtx = canvas.getContext('2d');
-                failCtx.fillStyle = '#666';
-                failCtx.font = '16px Outfit, sans-serif';
-                failCtx.textAlign = 'center';
-                failCtx.fillText('Clip unavailable', canvas.width / 2, canvas.height / 2);
-            }
-            // Auto-advance after brief pause
+            // Thumbnail is already drawn on canvas (lines above) — just auto-advance
             setTimeout(function() {
                 if (reelMirror.generation === gen && momentBrowserState.open && momentBrowserState.mode === 2) {
                     _reelAutoAdvance();
@@ -6637,26 +6608,23 @@ const PlexdApp = (function() {
                 + 'z-index:' + (isSelected ? 100 : i + 1);
             cell.dataset.index = i;
 
-            var canvas = document.createElement('canvas');
-            canvas.width = 320;
-            canvas.height = 180;
-            cell.appendChild(canvas);
-
             var loadedStream = resolveMomentStream(mom);
-            var ctx = canvas.getContext('2d');
 
             if (loadedStream && loadedStream.video) {
+                var canvas = document.createElement('canvas');
+                canvas.width = 320;
+                canvas.height = 180;
+                cell.appendChild(canvas);
+                var ctx = canvas.getContext('2d');
                 var sourceVid = loadedStream.video;
                 var isExtracted = !!loadedStream._isExtracted;
                 canvasRefs.push({ canvas: canvas, ctx: ctx, sourceVid: sourceVid, mom: mom, cellEl: cell, streamId: loadedStream.id });
 
-                // Save play state before forcing play
                 if (collageMirrorState.prevPlayStates[loadedStream.id] === undefined) {
                     collageMirrorState.prevPlayStates[loadedStream.id] = sourceVid.paused;
                 }
                 if (sourceVid.paused) sourceVid.play().catch(function() {});
 
-                // Only add one timeupdate handler per source video to prevent seek-fighting
                 var sourceKey = loadedStream.id + (isExtracted ? '_ext' : '');
                 if (!collageSourceHandled[sourceKey]) {
                     var loopHandler = (function(vid, m, extracted) {
@@ -6673,15 +6641,13 @@ const PlexdApp = (function() {
                     collageSourceHandled[sourceKey] = true;
                 }
 
-                // Solo audio: mute all except selected
                 sourceVid.muted = !isSelected;
             } else {
-                // Static thumbnail fallback (server-side or cached)
-                var thumbImg = new Image();
-                (function(c, cx) {
-                    thumbImg.onload = function() { cx.drawImage(c, 0, 0, 320, 180); };
-                })(thumbImg, ctx);
+                // No video — use <img> which scales cleanly via CSS (no pixelation)
+                var thumbImg = document.createElement('img');
                 thumbImg.src = momentThumbUrl(mom);
+                thumbImg.style.cssText = 'width:100%;height:100%;object-fit:cover';
+                cell.appendChild(thumbImg);
             }
 
             var info = document.createElement('div');

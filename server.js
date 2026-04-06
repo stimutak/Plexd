@@ -145,7 +145,7 @@ const extractJobs = {};           // { jobId: { momentId, status, progress, outp
 const extractQueue = [];          // FIFO queue of jobIds
 const activeExtracts = new Set();
 const MAX_CONCURRENT_EXTRACTS = 2;
-let extractsPaused = true; // Start paused — extractions only run when explicitly started
+let extractsPaused = false; // Extractions run immediately — lightweight ffmpeg clips, not full HLS transcodes
 
 // Moments persistence
 const MOMENTS_JSON = path.join(MOMENTS_DIR, 'moments.json');

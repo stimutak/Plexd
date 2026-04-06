@@ -3167,7 +3167,7 @@ const server = http.createServer(async (req, res) => {
     // and HLS.js XHR loaders cannot send custom headers — only fetch() can,
     // and native browser media loading bypasses the patched window.fetch.
     // POST/DELETE endpoints still require the token for mutation protection.
-    const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download', '/api/remote/state', '/api/remote/command']);
+    const TOKEN_EXEMPT = new Set(['/api/server-info', '/api/proxy/hls', '/api/proxy/video', '/api/proxy/hls/download', '/api/remote/state', '/api/remote/command', '/api/aylo/resolve']);
     const isMediaGet = req.method === 'GET' && (
         pathname.startsWith('/api/proxy/') ||
         pathname.startsWith('/api/files/') ||
@@ -5103,16 +5103,48 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // GET /api/demo/performers/search?q=name - Search performers by name (all Aylo sites)
+    // GET /api/demo/performers/search?q=name - Search performers by name
+    // Searches the local cache first (full Aylo network), falls back to API
     if (pathname === '/api/demo/performers/search' && req.method === 'GET') {
         const query = url.searchParams.get('q') || '';
         const limit = parseInt(url.searchParams.get('limit')) || 20;
         if (!query) { jsonOk(res, { performers: [] }); return; }
+
+        // Search local cache first (2000+ performers, fast, reliable)
+        const lowerQ = query.toLowerCase();
+        const words = lowerQ.split(/\s+/).filter(w => w.length > 0);
+        if (_actorCache && _actorCache.length > 0) {
+            const scored = [];
+            for (const a of _actorCache) {
+                const lname = a.name.toLowerCase();
+                // Exact match
+                if (lname === lowerQ) {
+                    scored.push({ ...a, _score: 1000 });
+                    continue;
+                }
+                // All query words appear in name
+                if (words.every(w => lname.includes(w))) {
+                    scored.push({ ...a, _score: 100 + (a.scenes || 0) });
+                    continue;
+                }
+                // Partial match (any word starts with a query word, or name starts with query)
+                if (lname.startsWith(lowerQ) || words.some(w => lname.split(/\s+/).some(nw => nw.startsWith(w)))) {
+                    scored.push({ ...a, _score: 10 + (a.scenes || 0) });
+                }
+            }
+            if (scored.length > 0) {
+                scored.sort((a, b) => b._score - a._score);
+                const performers = scored.slice(0, limit).map(({ _score, ...rest }) => rest);
+                jsonOk(res, { performers });
+                return;
+            }
+        }
+
+        // Fallback: API search (less reliable on SpiceVids but may find aliases)
         const auths = await getAllAyloAuths();
         if (auths.length === 0) { jsonOk(res, { performers: [], error: 'Login required' }); return; }
         try {
             const externalIp = await getExternalIp();
-            // Search all sites in parallel, merge by performer ID
             const queries = auths.map(auth => {
                 auth.externalIp = externalIp;
                 return fetchAyloApi(`/v1/actors?limit=${limit}&search=${encodeURIComponent(query)}`, auth);
@@ -5129,7 +5161,7 @@ const server = http.createServer(async (req, res) => {
                     }
                     const profile = a.images?.profile?.['0'] || a.images?.profile?.[0];
                     const thumb = profile?.xs?.url || profile?.sm?.url || profile?.md?.url || null;
-                    perfMap[a.id] = { id: a.id, name: a.name, thumbnail: thumb, scenes };
+                    perfMap[a.id] = { id: a.id, name: a.name, thumbnail: thumb, scenes, aliases: (a.aliases || []).map(al => al.name || al) };
                 }
             }
             const performers = Object.values(perfMap).sort((a, b) => b.scenes - a.scenes).slice(0, limit);
@@ -5178,6 +5210,54 @@ const server = http.createServer(async (req, res) => {
         } catch (err) {
             console.error('[Server] Performer scenes failed:', err.message);
             jsonError(res, 500, 'Performer scenes failed');
+        }
+        return;
+    }
+
+    // GET /api/aylo/resolve?sceneId=123&site=spicevids — Resolve Aylo scene to playable HLS URL
+    // Used by Chrome extension to send SpiceVids scenes to Plexd
+    if (pathname === '/api/aylo/resolve' && req.method === 'GET') {
+        const sceneId = url.searchParams.get('sceneId');
+        const site = url.searchParams.get('site') || 'spicevids';
+        if (!sceneId) { jsonError(res, 400, 'Missing sceneId'); return; }
+        try {
+            const auth = await getAyloAuth(site);
+            if (auth.error) { jsonError(res, 401, 'Aylo auth failed: ' + auth.error); return; }
+            auth.externalIp = await getExternalIp();
+            // SpiceVids scene IDs = Aylo release IDs
+            let scene = null;
+            try {
+                const r = await fetchAyloApi(`/v2/releases?type=scene&id=${sceneId}&limit=1`, auth);
+                if (r.status === 200 && r.data?.result?.length > 0) scene = r.data.result[0];
+            } catch (e) { /* API path may not work, continue */ }
+            if (!scene) {
+                try {
+                    const r = await fetchAyloApi('/v2/releases/' + sceneId, auth);
+                    if (r.status === 200 && r.data?.title) scene = r.data;
+                    else if (r.status === 200 && r.data?.result?.title) scene = r.data.result;
+                } catch (e) { /* continue */ }
+            }
+            if (!scene) {
+                jsonError(res, 404, 'Scene not found — play the video on SpiceVids first so the extension can capture the stream URL');
+                return;
+            }
+            const videoUrl = extractBestVideoUrl(scene.videos?.full?.files || scene.videos?.mediabook?.files || []);
+            if (!videoUrl) { jsonError(res, 404, 'No video URL in scene'); return; }
+            const proxiedUrl = `/api/proxy/hls?url=${encodeURIComponent(videoUrl)}`;
+            const actors = (scene.actors || []).map(a => a.name);
+            const tags = (scene.tags || []).map(t => t.name);
+            const brand = scene.brand || site;
+            if (brand && !tags.includes(brand)) tags.unshift(brand);
+            jsonOk(res, {
+                url: proxiedUrl,
+                title: scene.title || 'Scene ' + sceneId,
+                actors, tags,
+                site: brand,
+                category: scene.collections?.[0]?.name || ''
+            });
+        } catch (err) {
+            console.error('[Server] Aylo scene resolve failed:', err.message, err.stack?.split('\n')[1]);
+            jsonError(res, 500, 'Scene resolve failed: ' + err.message);
         }
         return;
     }

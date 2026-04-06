@@ -221,9 +221,9 @@
 
             if (allFound.length > 0) {
                 videos = allFound;
-                // Auto-select all streams (the ones users usually want)
+                // Auto-select scenes and streams (the ones users usually want)
                 for (var s = 0; s < videos.length; s++) {
-                    if (videos[s].intercepted) selectedSet.add(s);
+                    if (videos[s].intercepted || videos[s].type === 'aylo-scene') selectedSet.add(s);
                 }
                 renderVideoList();
             } else {
@@ -239,13 +239,26 @@
     function renderVideoList() {
         contentEl.innerHTML = '';
 
+        var scenes = [];
         var streams = [];
         var other = [];
         for (var i = 0; i < videos.length; i++) {
-            if (videos[i].intercepted || videos[i].type === 'stream') {
+            if (videos[i].type === 'aylo-scene') {
+                scenes.push(i);
+            } else if (videos[i].intercepted || videos[i].type === 'stream') {
                 streams.push(i);
             } else {
                 other.push(i);
+            }
+        }
+
+        if (scenes.length > 0) {
+            var label0 = document.createElement('div');
+            label0.className = 'section-label streams';
+            label0.textContent = 'Scenes (' + scenes.length + ')';
+            contentEl.appendChild(label0);
+            for (var sc = 0; sc < scenes.length; sc++) {
+                contentEl.appendChild(createItem(scenes[sc]));
             }
         }
 
@@ -253,6 +266,7 @@
             var label = document.createElement('div');
             label.className = 'section-label streams';
             label.textContent = 'Streams (' + streams.length + ')';
+            if (scenes.length > 0) label.style.marginTop = '8px';
             contentEl.appendChild(label);
             for (var s = 0; s < streams.length; s++) {
                 contentEl.appendChild(createItem(streams[s]));
@@ -263,7 +277,7 @@
             var label2 = document.createElement('div');
             label2.className = 'section-label';
             label2.textContent = 'Videos (' + other.length + ')';
-            if (streams.length > 0) label2.style.marginTop = '8px';
+            if (streams.length > 0 || scenes.length > 0) label2.style.marginTop = '8px';
             contentEl.appendChild(label2);
             for (var o = 0; o < other.length; o++) {
                 contentEl.appendChild(createItem(other[o]));
@@ -303,7 +317,8 @@
         meta.appendChild(urlSpan);
 
         // Warn about mux.project1content.com URLs (IP-bound + CORS-blocked, only work via xfill)
-        var isMuxUrl = v.url.includes('mux.project1content.com');
+        // Skip warning for aylo-scene type (resolved via server API, not raw URL)
+        var isMuxUrl = v.type !== 'aylo-scene' && v.url.includes('mux.project1content.com');
         if (isMuxUrl) {
             var warn = document.createElement('div');
             warn.className = 'mux-warning';
@@ -373,26 +388,56 @@
             return;
         }
 
-        var urls = [];
-        selectedSet.forEach(function(idx) {
-            if (videos[idx]) urls.push(videos[idx].url);
-        });
-
         sendBtn.disabled = true;
         sendBtn.textContent = 'Sending...';
 
         try {
-            // Send all in parallel (server queues them)
-            var promises = urls.map(function(url) {
+            var items = [];
+            selectedSet.forEach(function(idx) { if (videos[idx]) items.push(videos[idx]); });
+
+            // Separate scene metadata from intercepted stream URLs
+            var sceneInfo = items.find(function(v) { return v.type === 'aylo-scene'; });
+            var hlsStreams = items.filter(function(v) { return v.type === 'stream' && v.intercepted; });
+
+            var sendUrls = [];
+            if (sceneInfo && hlsStreams.length > 0) {
+                // Best case: scene metadata + intercepted HLS URL → proxy with metadata
+                for (var h = 0; h < hlsStreams.length; h++) {
+                    var proxied = plexdUrl + '/api/proxy/hls?url=' + encodeURIComponent(hlsStreams[h].url);
+                    sendUrls.push({ url: proxied, title: sceneInfo.title, site: sceneInfo.site || '' });
+                }
+            } else if (sceneInfo) {
+                // Scene detected but no HLS captured — try API resolve
+                try {
+                    var resp = await fetch(plexdUrl + '/api/aylo/resolve?sceneId=' + sceneInfo.sceneId + '&site=' + (sceneInfo.site || 'spicevids'));
+                    var data = await resp.json();
+                    if (data.url) {
+                        var fullUrl = data.url.startsWith('/') ? plexdUrl + data.url : data.url;
+                        sendUrls.push({ url: fullUrl, title: data.title, actors: data.actors, tags: data.tags, site: data.site });
+                    } else {
+                        showStatusBar('Play the video on the page first, then try again', true);
+                    }
+                } catch (e) {
+                    showStatusBar('Play the video on the page first, then try again', true);
+                }
+            } else {
+                // No scene — send raw URLs (non-Aylo sites)
+                for (var j = 0; j < items.length; j++) {
+                    sendUrls.push({ url: items[j].url, title: items[j].title });
+                }
+            }
+
+            // Send all resolved URLs in parallel
+            var promises = sendUrls.map(function(s) {
                 return fetch(plexdUrl + '/api/remote/command', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'addStream', payload: { url: url }, timestamp: Date.now() })
+                    body: JSON.stringify({ action: 'addStream', payload: s, timestamp: Date.now() })
                 });
             });
             await Promise.all(promises);
 
-            showStatusBar('Sent ' + urls.length + ' video' + (urls.length > 1 ? 's' : '') + ' to Plexd');
+            showStatusBar('Sent ' + sendUrls.length + ' video' + (sendUrls.length > 1 ? 's' : '') + ' to Plexd');
             selectedSet.clear();
             renderVideoList();
         } catch (err) {
@@ -447,6 +492,7 @@
     }
 
     function getTypeLabel(v) {
+        if (v.type === 'aylo-scene') return v.site ? v.site.toUpperCase() : 'AYLO';
         if (v.url.includes('.m3u8')) return 'HLS';
         if (v.url.includes('.mpd')) return 'DASH';
         if (v.url.match(/\.(mp4|webm|m4v|mov)(\?|$)/i)) return 'MP4';
@@ -454,6 +500,7 @@
     }
 
     function getBadgeClass(v) {
+        if (v.type === 'aylo-scene') return 'badge-hls';
         if (v.url.includes('.m3u8')) return 'badge-hls';
         if (v.url.includes('.mpd')) return 'badge-dash';
         return 'badge-mp4';

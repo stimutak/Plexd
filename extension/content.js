@@ -51,6 +51,32 @@
         }, 500);
     }
 
+    // Detect Aylo scene pages (SpiceVids, SpiceVidsGay, Brazzers, Mofos, etc.)
+    var AYLO_SCENE_HOSTS = {
+        'www.spicevids.com': 'spicevids',
+        'spicevids.com': 'spicevids',
+        'www.spicevidsgay.com': 'spicevidsgay',
+        'spicevidsgay.com': 'spicevidsgay',
+        'www.brazzers.com': 'brazzers',
+        'brazzers.com': 'brazzers',
+        'www.mofos.com': 'mofos',
+        'mofos.com': 'mofos'
+    };
+
+    function detectAyloScene() {
+        var host = window.location.hostname;
+        var site = AYLO_SCENE_HOSTS[host];
+        if (!site) return null;
+        var match = window.location.pathname.match(/^\/scene\/(\d+)/);
+        if (!match) return null;
+        var sceneId = match[1];
+        var title = document.querySelector('h1')?.textContent?.trim()
+            || document.querySelector('[data-test-id="scene-title"]')?.textContent?.trim()
+            || document.title.replace(/ \|.*$/, '').trim()
+            || 'Scene ' + sceneId;
+        return { type: 'aylo-scene', sceneId: sceneId, site: site, title: title, url: window.location.href };
+    }
+
     /**
      * Find all video sources on the current page
      */
@@ -58,7 +84,14 @@
         var sources = [];
         var seen = new Set();
 
-        // Intercepted streams first (highest priority)
+        // Aylo scene detection (SpiceVids, etc.) — highest priority
+        var ayloScene = detectAyloScene();
+        if (ayloScene) {
+            sources.push(ayloScene);
+            seen.add(ayloScene.url);
+        }
+
+        // Intercepted streams
         interceptedStreams.forEach(function(url) {
             if (!seen.has(url)) {
                 seen.add(url);

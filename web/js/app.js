@@ -3131,7 +3131,9 @@ const PlexdApp = (function() {
             var chip = document.createElement('span');
             chip.className = 'plexd-tag-chip' + (_selectedPerformerIds.has(p.id) ? ' selected' : '');
             chip.setAttribute('data-performer-id', p.id);
-            chip.textContent = p.name + (p.scenes ? ' (' + p.scenes + ')' : '');
+            var chipText = p.name + (p.scenes ? ' (' + p.scenes + ')' : '');
+            if (p.aliases && p.aliases.length > 0) chipText += ' aka ' + p.aliases.slice(0, 2).join(', ');
+            chip.textContent = chipText;
             chip.onclick = (function(id) { return function() {
                 clearPerformerSelection();
                 togglePerformer(id);
@@ -14627,6 +14629,18 @@ const PlexdRemote = (function() {
             case 'addStream':
                 if (payload.url) {
                     PlexdApp.addStream(payload.url);
+                    // Apply metadata from extension (Aylo scene resolution)
+                    if (payload.title || payload.actors || payload.tags || payload.site) {
+                        var added = PlexdStream.getAllStreams().find(function(s) { return s.url === payload.url || s.sourceUrl === payload.url; });
+                        if (added) {
+                            if (payload.title) { added.title = payload.title; addToHistory(payload.url, payload.title); }
+                            if (payload.actors) added.actors = payload.actors;
+                            if (payload.tags) added.aiTags = payload.tags;
+                            if (payload.site) added.site = payload.site;
+                            if (payload.category) added.category = payload.category;
+                            updateStreamInfoOverlay(added);
+                        }
+                    }
                 }
                 sendState();
                 break;

@@ -3276,6 +3276,8 @@ const PlexdApp = (function() {
         // F key for true fullscreen - toggles true fullscreen (hides browser chrome)
         document.addEventListener('keydown', (e) => {
             if (isTypingTarget(e.target)) return;
+            // Moment browser handles its own F/Shift+F
+            if (momentBrowserState.open) return;
 
             if (e.key === 'f' || e.key === 'F') {
                 // Shift+F: Toggle projector viewer (external display pop-out)
@@ -7547,6 +7549,11 @@ const PlexdApp = (function() {
                 } else if (momentBrowserState.popupOpen) {
                     var panel = document.querySelector('.moment-popup-panel');
                     if (panel) panel.classList.toggle('fullscreen');
+                } else if (moments[idx]) {
+                    // Open popup in fullscreen for selected moment
+                    showMomentPopupPlayer(moments[idx]);
+                    var panel = document.querySelector('.moment-popup-panel');
+                    if (panel) panel.classList.add('fullscreen');
                 }
                 return true;
 

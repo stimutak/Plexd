@@ -7678,6 +7678,16 @@ const PlexdApp = (function() {
             }
             return true;
         }
+        case 'm':
+        case 'M': {
+            e.preventDefault();
+            var muteVid = momentBrowserState.popupOpen ? popupMirror.sourceVid : (mode === 2 ? reelMirror.sourceVid : null);
+            if (muteVid) {
+                muteVid.muted = !muteVid.muted;
+                showMessage(muteVid.muted ? 'Muted' : 'Unmuted', 'info');
+            }
+            return true;
+        }
         }
 
         // Consume all other keys when browser is open

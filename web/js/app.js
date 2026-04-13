@@ -4760,6 +4760,12 @@ const PlexdApp = (function() {
             if (video.currentTime >= crescendoState.currentEnd) {
                 crescendoState.loopCount++;
                 var hasPeakRange = crescendoState.targetStart !== moment.start || crescendoState.targetEnd !== moment.end;
+                var maxLoops = crescendoState.maxLoopsBeforeTighten + crescendoState.tightenSteps + 1;
+                if (crescendoState.loopCount >= maxLoops) {
+                    // Crescendo complete — advance to random next moment
+                    _reelAutoAdvance();
+                    return;
+                }
                 if (hasPeakRange && crescendoState.loopCount > crescendoState.maxLoopsBeforeTighten) {
                     var progress = Math.min((crescendoState.loopCount - crescendoState.maxLoopsBeforeTighten) / crescendoState.tightenSteps, 1);
                     crescendoState.currentStart = moment.start + (crescendoState.targetStart - moment.start) * progress;
@@ -6320,17 +6326,15 @@ const PlexdApp = (function() {
 
     function _reelAutoAdvance() {
         var moments = momentBrowserState.filteredMoments;
-        if (moments.length === 0) return;
-        // Find next playable moment (skip _unplayable ones, max full-circle check)
-        var startIdx = momentBrowserState.selectedIndex;
-        for (var tries = 0; tries < moments.length; tries++) {
-            var next = (startIdx + 1 + tries) % moments.length;
-            if (!moments[next]._unplayable) {
-                momentBrowserState.selectedIndex = next;
-                loadReelMoment();
-                return;
-            }
-        }
+        if (moments.length <= 1) return;
+        // Pick a random moment (different from current)
+        var current = momentBrowserState.selectedIndex;
+        var next;
+        do {
+            next = Math.floor(Math.random() * moments.length);
+        } while (next === current && moments.length > 1);
+        momentBrowserState.selectedIndex = next;
+        loadReelMoment();
     }
 
     function loadReelMoment(skipHistory) {
@@ -6436,9 +6440,13 @@ const PlexdApp = (function() {
                 var clipUrl = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
                 sourceVid.src = clipUrl;
                 sourceVid.currentTime = 0;
-                sourceVid.loop = true;
+                sourceVid.loop = false;
                 sourceVid.volume = 0;
                 sourceVid.muted = false;
+                // Auto-advance to random moment when clip ends
+                sourceVid.addEventListener('ended', function() {
+                    if (reelMirror.generation === gen) _reelAutoAdvance();
+                }, { once: true });
                 sourceVid.play().then(function() {
                     if (reelMirror.generation === gen) sourceVid.volume = 1;
                 }).catch(function() {});
@@ -6920,9 +6928,19 @@ const PlexdApp = (function() {
         var video = document.createElement('video');
         video.className = 'moment-popup-video';
         video.playsInline = true;
-        video.loop = true; // Extracted clips loop natively
+        video.loop = false;
         video.muted = true; // Mute initially to satisfy autoplay policy
         video.poster = momentThumbUrl(mom);
+        // Auto-advance to random moment when clip ends
+        video.addEventListener('ended', function() {
+            var moments = momentBrowserState.filteredMoments;
+            if (moments.length <= 1) return;
+            var current = momentBrowserState.selectedIndex;
+            var next;
+            do { next = Math.floor(Math.random() * moments.length); } while (next === current);
+            momentBrowserState.selectedIndex = next;
+            showMomentPopupPlayer(moments[next]);
+        }, { once: true });
         panel.appendChild(video);
 
         console.log('[PopupPlayer] Playing clip:', clipUrl);
@@ -6940,12 +6958,21 @@ const PlexdApp = (function() {
                 video.src = srcUrl;
                 video.currentTime = mom.start || 0;
                 video.play().catch(function() {});
-                video.loop = false; // Source video — use boundary enforcement instead of loop
-                // Enforce moment boundaries on source video
+                video.loop = false;
+                // Enforce moment boundaries — advance to random when reaching end
                 video.addEventListener('timeupdate', function() {
                     var end = mom.end || video.duration;
                     if (video.currentTime >= end) {
-                        video.currentTime = mom.start || 0;
+                        var moments = momentBrowserState.filteredMoments;
+                        if (moments.length > 1) {
+                            var current = momentBrowserState.selectedIndex;
+                            var next;
+                            do { next = Math.floor(Math.random() * moments.length); } while (next === current);
+                            momentBrowserState.selectedIndex = next;
+                            showMomentPopupPlayer(moments[next]);
+                        } else {
+                            video.currentTime = mom.start || 0;
+                        }
                     }
                 });
                 // Queue extraction so clip is ready next time

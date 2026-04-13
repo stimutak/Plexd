@@ -39,6 +39,7 @@
         function loadVideo(url, time, title) {
             console.log('[Projector] loadVideo:', url, 'time:', time, 'title:', title);
             if (hls) { hls.destroy(); hls = null; }
+            video.muted = true;
             if (title) document.title = 'Plexd Projector \u2014 ' + title;
             showTitle(title || '');
 

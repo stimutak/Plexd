@@ -83,52 +83,58 @@
             }
         });
 
-        // Keyboard/remote controls — send commands back to main app
+        // Keyboard/remote controls — handle locally where possible, forward rest to main app
         document.addEventListener('keydown', function(e) {
-            if (!window.opener) return;
             var origin = window.location.origin;
+
+            // Local-only controls (instant, no round-trip)
             switch (e.key) {
-                case ' ':
-                    e.preventDefault();
-                    window.opener.postMessage({ cmd: 'projector-random' }, origin);
-                    break;
                 case 'ArrowRight':
+                case '.':
                     e.preventDefault();
                     video.currentTime = Math.min(video.duration || 0, video.currentTime + 10);
-                    break;
+                    return;
                 case 'ArrowLeft':
+                case ',':
                     e.preventDefault();
                     video.currentTime = Math.max(0, video.currentTime - 10);
-                    break;
-                case 'ArrowUp':
+                    return;
+                case '>':
                     e.preventDefault();
-                    window.opener.postMessage({ cmd: 'projector-next' }, origin);
-                    break;
-                case 'ArrowDown':
+                    video.currentTime = Math.min(video.duration || 0, video.currentTime + 60);
+                    return;
+                case '<':
                     e.preventDefault();
-                    window.opener.postMessage({ cmd: 'projector-prev' }, origin);
-                    break;
+                    video.currentTime = Math.max(0, video.currentTime - 60);
+                    return;
                 case 'm':
                 case 'M':
                     e.preventDefault();
                     video.muted = !video.muted;
                     showTitle(video.muted ? 'Muted' : 'Unmuted');
-                    break;
+                    return;
                 case 'f':
                 case 'F':
                     e.preventDefault();
                     if (document.fullscreenElement) document.exitFullscreen();
                     else document.documentElement.requestFullscreen();
-                    break;
-                case 'p':
-                case 'P':
-                    e.preventDefault();
-                    if (video.paused) video.play();
-                    else video.pause();
-                    break;
+                    return;
                 case 'Escape':
                     if (document.fullscreenElement) document.exitFullscreen();
-                    break;
+                    return;
+            }
+
+            // Forward all other keys to main app (ratings, navigation, etc.)
+            if (window.opener) {
+                e.preventDefault();
+                window.opener.postMessage({
+                    cmd: 'projector-key',
+                    key: e.key,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey
+                }, origin);
             }
         });
 

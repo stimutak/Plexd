@@ -6381,6 +6381,17 @@ const PlexdApp = (function() {
             case 'projector-prev':
                 navigateMoment(-1);
                 break;
+            case 'projector-key':
+                // Forward key from projector window as synthetic event
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: e.data.key,
+                    shiftKey: e.data.shiftKey || false,
+                    altKey: e.data.altKey || false,
+                    ctrlKey: e.data.ctrlKey || false,
+                    metaKey: e.data.metaKey || false,
+                    bubbles: true
+                }));
+                break;
         }
     });
 

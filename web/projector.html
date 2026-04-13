@@ -81,6 +81,55 @@
             }
         });
 
+        // Keyboard/remote controls — send commands back to main app
+        document.addEventListener('keydown', function(e) {
+            if (!window.opener) return;
+            var origin = window.location.origin;
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    window.opener.postMessage({ cmd: 'projector-random' }, origin);
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    video.currentTime = Math.min(video.duration || 0, video.currentTime + 10);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    video.currentTime = Math.max(0, video.currentTime - 10);
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    window.opener.postMessage({ cmd: 'projector-next' }, origin);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    window.opener.postMessage({ cmd: 'projector-prev' }, origin);
+                    break;
+                case 'm':
+                case 'M':
+                    e.preventDefault();
+                    video.muted = !video.muted;
+                    showTitle(video.muted ? 'Muted' : 'Unmuted');
+                    break;
+                case 'f':
+                case 'F':
+                    e.preventDefault();
+                    if (document.fullscreenElement) document.exitFullscreen();
+                    else document.documentElement.requestFullscreen();
+                    break;
+                case 'p':
+                case 'P':
+                    e.preventDefault();
+                    if (video.paused) video.play();
+                    else video.pause();
+                    break;
+                case 'Escape':
+                    if (document.fullscreenElement) document.exitFullscreen();
+                    break;
+            }
+        });
+
         // Auto-hide cursor after 3s idle
         document.addEventListener('mousemove', function() {
             document.body.classList.remove('idle');

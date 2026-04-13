@@ -6347,20 +6347,40 @@ const PlexdApp = (function() {
         PlexdStream.openProjectorWithUrl(url, 0, title);
     }
 
-    // Auto-advance when projector clip ends
+    // Handle projector postMessage commands (auto-advance, remote controls)
     window.addEventListener('message', function(e) {
         if (e.origin !== window.location.origin) return;
-        if (e.data && e.data.cmd === 'projector-ended' && momentBrowserState.open) {
-            var moments = momentBrowserState.filteredMoments;
-            if (moments.length <= 1) return;
-            var current = momentBrowserState.selectedIndex;
-            var next;
-            do { next = Math.floor(Math.random() * moments.length); } while (next === current);
+        if (!e.data || !e.data.cmd || !momentBrowserState.open) return;
+        var moments = momentBrowserState.filteredMoments;
+        if (moments.length === 0) return;
+
+        function navigateMoment(dir) {
+            var next = (momentBrowserState.selectedIndex + dir + moments.length) % moments.length;
             momentBrowserState.selectedIndex = next;
-            // Update both the in-app player and the projector
             if (momentBrowserState.popupOpen) showMomentPopupPlayer(moments[next]);
             else if (momentBrowserState.mode === 2) loadReelMoment();
             _updateProjectorWithMoment(moments[next]);
+        }
+
+        switch (e.data.cmd) {
+            case 'projector-ended':
+            case 'projector-random':
+                if (moments.length > 1) {
+                    var current = momentBrowserState.selectedIndex;
+                    var next;
+                    do { next = Math.floor(Math.random() * moments.length); } while (next === current);
+                    momentBrowserState.selectedIndex = next;
+                    if (momentBrowserState.popupOpen) showMomentPopupPlayer(moments[next]);
+                    else if (momentBrowserState.mode === 2) loadReelMoment();
+                    _updateProjectorWithMoment(moments[next]);
+                }
+                break;
+            case 'projector-next':
+                navigateMoment(1);
+                break;
+            case 'projector-prev':
+                navigateMoment(-1);
+                break;
         }
     });
 

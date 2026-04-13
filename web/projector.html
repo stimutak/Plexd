@@ -88,6 +88,13 @@
             idleTimer = setTimeout(function() { document.body.classList.add('idle'); }, 3000);
         });
 
+        // Signal when video ends so main app can auto-advance
+        video.addEventListener('ended', function() {
+            if (window.opener) {
+                window.opener.postMessage({ cmd: 'projector-ended' }, window.location.origin);
+            }
+        });
+
         // Signal ready to opener
         if (window.opener) {
             window.opener.postMessage({ cmd: 'projector-ready' }, window.location.origin);

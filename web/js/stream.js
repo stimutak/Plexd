@@ -1694,9 +1694,13 @@ const PlexdStream = (function() {
             return;
         }
         projectorPendingLoad = { url: url, time: time || 0, title: title || '' };
+        // Pass URL as query param too (fallback if postMessage/opener fails)
+        var projUrl = '/projector.html?url=' + encodeURIComponent(url)
+            + (time ? '&t=' + time : '')
+            + (title ? '&title=' + encodeURIComponent(title) : '');
         var screenW = window.screen.availWidth;
         var screenH = window.screen.availHeight;
-        projectorWindow = window.open('/projector.html', 'plexd-projector',
+        projectorWindow = window.open(projUrl, 'plexd-projector',
             'width=' + screenW + ',height=' + screenH + ',left=0,top=0,resizable=yes');
         if (!projectorWindow) projectorPendingLoad = null;
         projectorStreamId = null;

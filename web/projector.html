@@ -37,7 +37,7 @@
         }
 
         function loadVideo(url, time, title) {
-            console.log('[Projector] loadVideo:', url);
+            console.log('[Projector] loadVideo:', url, 'time:', time, 'title:', title);
             if (hls) { hls.destroy(); hls = null; }
             if (title) document.title = 'Plexd Projector \u2014 ' + title;
             showTitle(title || '');
@@ -56,10 +56,11 @@
                 });
             } else if (url) {
                 video.src = url;
+                video.play().catch(function() {});
                 video.addEventListener('loadedmetadata', function onMeta() {
                     video.removeEventListener('loadedmetadata', onMeta);
                     if (time) video.currentTime = time;
-                    video.play();
+                    video.play().catch(function() {});
                 });
             }
         }
@@ -144,9 +145,20 @@
             }
         });
 
-        // Signal ready to opener
-        if (window.opener) {
-            window.opener.postMessage({ cmd: 'projector-ready' }, window.location.origin);
+        // Signal ready to opener (retry a few times in case of race)
+        function signalReady() {
+            if (window.opener) {
+                window.opener.postMessage({ cmd: 'projector-ready' }, window.location.origin);
+            }
+        }
+        signalReady();
+        setTimeout(signalReady, 500);
+        setTimeout(signalReady, 1500);
+
+        // Also check URL params for initial load (fallback if postMessage fails)
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('url')) {
+            loadVideo(params.get('url'), parseFloat(params.get('t')) || 0, params.get('title') || '');
         }
     </script>
 </body>

@@ -6442,7 +6442,7 @@ const PlexdApp = (function() {
                 sourceVid.currentTime = 0;
                 sourceVid.loop = false;
                 sourceVid.volume = 0;
-                sourceVid.muted = false;
+                sourceVid.muted = !momentBrowserState._reelUnmuted;
                 // Auto-advance to random moment when clip ends
                 sourceVid.addEventListener('ended', function() {
                     if (reelMirror.generation === gen) _reelAutoAdvance();
@@ -6476,7 +6476,7 @@ const PlexdApp = (function() {
                     reelMirror.prevMuteStates[s.id] = s.video.muted;
                     s.video.muted = (s.id !== loadedStream.id);
                 });
-                sourceVid.muted = false;
+                sourceVid.muted = !momentBrowserState._reelUnmuted;
                 startCanvasMirror(sourceVid);
                 setupCrescendo(sourceVid, mom);
             }
@@ -6884,6 +6884,8 @@ const PlexdApp = (function() {
     }
 
     function showMomentPopupPlayer(mom) {
+        // Preserve fullscreen state across moment transitions
+        var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
         closeMomentPopupPlayer();
         momentBrowserState.popupOpen = true;
 
@@ -7003,6 +7005,10 @@ const PlexdApp = (function() {
         else document.querySelector('.plexd-app').appendChild(popup);
 
         popupMirror.sourceVid = video;
+
+        // Restore fullscreen and mute state from previous moment
+        if (wasFullscreen) panel.classList.add('fullscreen');
+        if (momentBrowserState._popupUnmuted) video.muted = false;
 
         PlexdMoments.recordPlay(mom.id);
 
@@ -7156,12 +7162,7 @@ const PlexdApp = (function() {
         // Helper: if popup is open, reload it with the new selection
         function syncPopupToSelection() {
             if (momentBrowserState.popupOpen && moments[momentBrowserState.selectedIndex]) {
-                var wasFullscreen = !!document.querySelector('.moment-popup-panel.fullscreen');
                 showMomentPopupPlayer(moments[momentBrowserState.selectedIndex]);
-                if (wasFullscreen) {
-                    var panel = document.querySelector('.moment-popup-panel');
-                    if (panel) panel.classList.add('fullscreen');
-                }
                 updatePopupInfoOverlay();
             }
         }
@@ -7497,10 +7498,6 @@ const PlexdApp = (function() {
                             showMessage('Moment deleted', 'info');
                             if (wasPopupOpen && momentBrowserState.filteredMoments.length > 0) {
                                 showMomentPopupPlayer(momentBrowserState.filteredMoments[momentBrowserState.selectedIndex]);
-                                if (wasFullscreen) {
-                                    var panel = document.querySelector('.moment-popup-panel');
-                                    if (panel) panel.classList.add('fullscreen');
-                                }
                             }
                         } else {
                             showMessage('Delete cancelled', 'info');
@@ -7563,7 +7560,6 @@ const PlexdApp = (function() {
                 e.preventDefault();
                 // Popup open: Space = random next, Shift+Space = go back
                 if (momentBrowserState.popupOpen) {
-                    var wasFs = !!document.querySelector('.moment-popup-panel.fullscreen');
                     if (e.shiftKey) {
                         // Pop previous index from history stack
                         var prevIdx = momentBrowserState.popupHistory.pop();
@@ -7572,10 +7568,6 @@ const PlexdApp = (function() {
                             if (mode === 0) updateMomentGridSelection();
                             else if (mode === 1) updateWallSelection();
                             showMomentPopupPlayer(moments[prevIdx]);
-                            if (wasFs) {
-                                var p = document.querySelector('.moment-popup-panel');
-                                if (p) p.classList.add('fullscreen');
-                            }
                         }
                     } else if (moments.length > 1) {
                         // Push current index, jump to random
@@ -7588,10 +7580,6 @@ const PlexdApp = (function() {
                         if (mode === 0) updateMomentGridSelection();
                         else if (mode === 1) updateWallSelection();
                         showMomentPopupPlayer(moments[randIdx]);
-                        if (wasFs) {
-                            var panel = document.querySelector('.moment-popup-panel');
-                            if (panel) panel.classList.add('fullscreen');
-                        }
                     }
                     return true;
                 }
@@ -7684,6 +7672,9 @@ const PlexdApp = (function() {
             var muteVid = momentBrowserState.popupOpen ? popupMirror.sourceVid : (mode === 2 ? reelMirror.sourceVid : null);
             if (muteVid) {
                 muteVid.muted = !muteVid.muted;
+                // Track mute state so auto-advance preserves it
+                if (momentBrowserState.popupOpen) momentBrowserState._popupUnmuted = !muteVid.muted;
+                else momentBrowserState._reelUnmuted = !muteVid.muted;
                 showMessage(muteVid.muted ? 'Muted' : 'Unmuted', 'info');
             }
             return true;

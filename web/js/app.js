@@ -14539,6 +14539,62 @@ const PlexdRemote = (function() {
      */
     function handleRemoteCommand(action, payload = {}) {
         console.log('[Remote] Command received:', action, payload);
+
+        // When moment browser is open, redirect relevant commands to moment actions
+        if (momentBrowserState.open) {
+            var moments = momentBrowserState.filteredMoments;
+            var muteVid = momentBrowserState.popupOpen ? popupMirror.sourceVid : (momentBrowserState.mode === 2 ? reelMirror.sourceVid : null);
+            switch (action) {
+                case 'randomSeek':
+                case 'randomSeekAll':
+                    // Random = next random moment
+                    if (moments.length > 1) {
+                        var current = momentBrowserState.selectedIndex;
+                        var next;
+                        do { next = Math.floor(Math.random() * moments.length); } while (next === current);
+                        momentBrowserState.selectedIndex = next;
+                        if (momentBrowserState.popupOpen) showMomentPopupPlayer(moments[next]);
+                        else if (momentBrowserState.mode === 2) loadReelMoment();
+                        _updateProjectorWithMoment(moments[next]);
+                    }
+                    sendState();
+                    return;
+                case 'togglePause':
+                case 'togglePauseAll':
+                    if (muteVid) {
+                        if (muteVid.paused) muteVid.play().catch(function() {});
+                        else muteVid.pause();
+                    }
+                    sendState();
+                    return;
+                case 'toggleMuteAll':
+                    if (muteVid) {
+                        muteVid.muted = !muteVid.muted;
+                        if (momentBrowserState.popupOpen) momentBrowserState._popupUnmuted = !muteVid.muted;
+                        else momentBrowserState._reelUnmuted = !muteVid.muted;
+                    }
+                    sendState();
+                    return;
+                case 'seekRelative':
+                    if (muteVid && typeof payload.offset === 'number') {
+                        muteVid.currentTime = Math.max(0, muteVid.currentTime + payload.offset);
+                    }
+                    sendState();
+                    return;
+                case 'selectNext':
+                    // Navigate moments like arrows
+                    if (moments.length > 0) {
+                        var dir = (payload.direction === 'left' || payload.direction === 'prev') ? -1 : 1;
+                        momentBrowserState.selectedIndex = (momentBrowserState.selectedIndex + dir + moments.length) % moments.length;
+                        if (momentBrowserState.popupOpen) showMomentPopupPlayer(moments[momentBrowserState.selectedIndex]);
+                        else if (momentBrowserState.mode === 2) loadReelMoment();
+                        _updateProjectorWithMoment(moments[momentBrowserState.selectedIndex]);
+                    }
+                    sendState();
+                    return;
+            }
+        }
+
         switch (action) {
             // Connection
             case 'ping':

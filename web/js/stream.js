@@ -1684,6 +1684,25 @@ const PlexdStream = (function() {
     }
 
     /**
+     * Open or update projector with a direct URL (for moments, etc.)
+     */
+    function openProjectorWithUrl(url, time, title) {
+        if (projectorWindow && !projectorWindow.closed) {
+            projectorWindow.postMessage({
+                cmd: 'load', url: url, time: time || 0, title: title || ''
+            }, window.location.origin);
+            return;
+        }
+        projectorPendingLoad = { url: url, time: time || 0, title: title || '' };
+        var screenW = window.screen.availWidth;
+        var screenH = window.screen.availHeight;
+        projectorWindow = window.open('/projector.html', 'plexd-projector',
+            'width=' + screenW + ',height=' + screenH + ',left=0,top=0,resizable=yes');
+        if (!projectorWindow) projectorPendingLoad = null;
+        projectorStreamId = null;
+    }
+
+    /**
      * Check if the projector viewer is currently open.
      */
     function isProjectorOpen() {
@@ -5334,6 +5353,7 @@ const PlexdStream = (function() {
         getProxiedHlsUrl,
         // Projector viewer (external display)
         openProjectorViewer,
+        openProjectorWithUrl,
         updateProjectorStream,
         closeProjectorViewer,
         isProjectorOpen

@@ -6327,7 +6327,6 @@ const PlexdApp = (function() {
     function _reelAutoAdvance() {
         var moments = momentBrowserState.filteredMoments;
         if (moments.length <= 1) return;
-        // Pick a random moment (different from current)
         var current = momentBrowserState.selectedIndex;
         var next;
         do {
@@ -6335,6 +6334,15 @@ const PlexdApp = (function() {
         } while (next === current && moments.length > 1);
         momentBrowserState.selectedIndex = next;
         loadReelMoment();
+        // Update projector if open
+        _updateProjectorWithMoment(moments[next]);
+    }
+
+    function _updateProjectorWithMoment(mom) {
+        if (!mom || !PlexdStream.isProjectorOpen()) return;
+        var url = mom.extractedPath || ('/api/moments/' + mom.id + '/clip.mp4');
+        var title = (mom.performers || []).join(', ') || mom.sourceTitle || '';
+        PlexdStream.openProjectorWithUrl(url, 0, title);
     }
 
     function loadReelMoment(skipHistory) {
@@ -6942,6 +6950,7 @@ const PlexdApp = (function() {
             do { next = Math.floor(Math.random() * moments.length); } while (next === current);
             momentBrowserState.selectedIndex = next;
             showMomentPopupPlayer(moments[next]);
+            _updateProjectorWithMoment(moments[next]);
         }, { once: true });
         panel.appendChild(video);
 
@@ -6972,6 +6981,7 @@ const PlexdApp = (function() {
                             do { next = Math.floor(Math.random() * moments.length); } while (next === current);
                             momentBrowserState.selectedIndex = next;
                             showMomentPopupPlayer(moments[next]);
+                            _updateProjectorWithMoment(moments[next]);
                         } else {
                             video.currentTime = mom.start || 0;
                         }
@@ -7520,7 +7530,21 @@ const PlexdApp = (function() {
             case 'f':
             case 'F':
                 e.preventDefault();
-                if (momentBrowserState.popupOpen) {
+                if (e.shiftKey) {
+                    // Shift+F: Send current moment to projector (external display)
+                    if (PlexdStream.isProjectorOpen()) {
+                        PlexdStream.closeProjectorViewer();
+                        showMessage('Projector closed', 'info');
+                    } else {
+                        var projMom = moments[idx];
+                        if (projMom) {
+                            var projUrl = projMom.extractedPath || ('/api/moments/' + projMom.id + '/clip.mp4');
+                            var projTitle = (projMom.performers || []).join(', ') || projMom.sourceTitle || '';
+                            PlexdStream.openProjectorWithUrl(projUrl, 0, projTitle);
+                            showMessage('Projector opened with moment — drag to external display', 'info');
+                        }
+                    }
+                } else if (momentBrowserState.popupOpen) {
                     var panel = document.querySelector('.moment-popup-panel');
                     if (panel) panel.classList.toggle('fullscreen');
                 }
